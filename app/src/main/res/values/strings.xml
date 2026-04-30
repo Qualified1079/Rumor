@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Rumor</string>
+    <string name="notification_channel_name">Rumor Mesh</string>
+    <string name="notification_channel_desc">Keeps the mesh connection alive in the background</string>
+</resources>
