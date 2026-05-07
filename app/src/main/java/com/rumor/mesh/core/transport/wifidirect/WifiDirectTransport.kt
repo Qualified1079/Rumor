@@ -290,7 +290,11 @@ class WifiDirectTransport @Inject constructor(
         wifiP2pManager?.requestConnectionInfo(channel) { info ->
             val isGo = info?.isGroupOwner == true
             _isGroupOwner.value = isGo
-            RumorLog.i(TAG, "Connected — Group Owner: $isGo")
+            // Read the actual GO address from WifiP2pInfo. The well-known constant
+            // (192.168.49.1) is the typical value but is not guaranteed by spec —
+            // vendor builds vary. Fall back to the constant if the API returns null.
+            val goAddress = info?.groupOwnerAddress?.hostAddress ?: DeviceQuirks.WIFI_DIRECT_GO_IP
+            RumorLog.i(TAG, "Connected — Group Owner: $isGo, GO address: $goAddress")
             if (isGo) {
                 startServerSocket()
             } else {
@@ -298,7 +302,7 @@ class WifiDirectTransport @Inject constructor(
                 // Run both a server socket and a client connect attempt; whichever
                 // TCP connection succeeds first wins.
                 if (DeviceQuirks.wifiDirectDualRoleRequired) startServerSocket()
-                connectAsClient()
+                connectAsClient(goAddress)
             }
         }
     }

@@ -80,7 +80,7 @@ class GossipEngine @Inject constructor(
                 topologyTracker.recordSession(result.peerUserId, result.durationMs, hopCount = 1)
                 onlineStatusTracker.recordDirectContact(result.peerUserId)
             }
-            onlineStatusTracker.mergeRemoteStatus(result.peerOnlineUsers)
+            onlineStatusTracker.mergeRemoteStatus(result.peerOnlineUsers, result.durationMs)
 
             val autoRelayIds = contactDao.getAutoRelayContacts().map { it.userId }.toSet()
 

@@ -67,13 +67,17 @@ class OnlineStatusTracker @Inject constructor() {
 
     /**
      * Merge the online-status map received from a remote peer.
-     * Remote entries carry elapsed-ms (not epoch), so they are converted to
-     * local epoch before storing. Existing fresher entries are never overwritten.
+     *
+     * Remote entries carry elapsed-ms (not epoch) computed at the peer's send time,
+     * so they are converted to local epoch before storing. [sessionDurationMs] is
+     * added to each elapsed value to compensate for the time the exchange itself
+     * took — without this, every entry would be underaged by up to ~30 seconds.
+     * Existing fresher entries are never overwritten.
      */
-    fun mergeRemoteStatus(remoteUsers: Map<String, Long>) {
+    fun mergeRemoteStatus(remoteUsers: Map<String, Long>, sessionDurationMs: Long = 0) {
         val now = System.currentTimeMillis()
         for ((userId, elapsedMs) in remoteUsers) {
-            val estimated = now - elapsedMs
+            val estimated = now - elapsedMs - sessionDurationMs
             lastSeen.merge(userId, estimated) { existing, new -> maxOf(existing, new) }
         }
         if (remoteUsers.isNotEmpty()) refresh()
