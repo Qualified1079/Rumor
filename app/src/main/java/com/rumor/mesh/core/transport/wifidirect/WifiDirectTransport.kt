@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -73,6 +74,8 @@ class WifiDirectTransport @Inject constructor(
         val localUserId: String,
         /** Base64-encoded Ed25519 public key. */
         val localPublicKey: String,
+        /** Signs arbitrary bytes with the local Ed25519 private key. Used for HELLO challenge-response. */
+        val signer: (ByteArray) -> ByteArray?,
         /** Returns messages to offer during the next gossip exchange. */
         val messageProvider: () -> List<RumorMessage>,
         /** Returns the set of message IDs this node already knows. */
@@ -99,6 +102,13 @@ class WifiDirectTransport @Inject constructor(
 
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
+
+    /**
+     * Tracks which session won the dual-role tiebreak per peer. Value is the
+     * direction kept (true = inbound, false = outbound). Cleared after the
+     * exchange completes so the next encounter is fresh.
+     */
+    private val activePeerSessions = ConcurrentHashMap<String, Boolean>()
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -182,7 +192,7 @@ class WifiDirectTransport @Inject constructor(
                 RumorLog.i(TAG, "Listening on port ${DeviceQuirks.WIFI_DIRECT_GOSSIP_PORT}")
                 while (isActive) {
                     val client = ss.accept()
-                    launch { runSession(client) }
+                    launch { runSession(client, isInbound = true) }
                 }
             } catch (e: Exception) {
                 if (isActive) RumorLog.w(TAG, "Server socket closed", e)
@@ -192,16 +202,16 @@ class WifiDirectTransport @Inject constructor(
 
     // ── Client connect to GO ──────────────────────────────────────────────────
 
-    private fun connectAsClient() {
+    private fun connectAsClient(groupOwnerAddress: String = DeviceQuirks.WIFI_DIRECT_GO_IP) {
         scope.launch {
             // Quirk: DHCP after Wi-Fi Direct connection takes time — retry with backoff
             for (delayMs in DeviceQuirks.tcpConnectRetryDelaysMs) {
                 delay(delayMs)
                 try {
-                    val socket = Socket(DeviceQuirks.WIFI_DIRECT_GO_IP, DeviceQuirks.WIFI_DIRECT_GOSSIP_PORT)
+                    val socket = Socket(groupOwnerAddress, DeviceQuirks.WIFI_DIRECT_GOSSIP_PORT)
                     socket.soTimeout = 30_000
-                    RumorLog.d(TAG, "Connected as client to GO")
-                    runSession(socket)
+                    RumorLog.d(TAG, "Connected as client to GO at $groupOwnerAddress")
+                    runSession(socket, isInbound = false)
                     return@launch
                 } catch (e: Exception) {
                     RumorLog.d(TAG, "Client connect attempt failed (${e.message}) — retrying")
@@ -213,17 +223,27 @@ class WifiDirectTransport @Inject constructor(
 
     // ── Session runner ────────────────────────────────────────────────────────
 
-    private suspend fun runSession(socket: Socket) {
+    private suspend fun runSession(socket: Socket, isInbound: Boolean) {
         val cfg = config ?: return
+        var claimedPeer: String? = null
         val session = GossipSession(
             socket          = socket,
             localUserId     = cfg.localUserId,
             localPublicKey  = cfg.localPublicKey,
+            signer          = cfg.signer,
             knownMessageIds = cfg.knownIdsProvider(),
             messagesToOffer = cfg.messageProvider(),
             recentOnlineUsers = cfg.onlineUsersProvider(),
+            isInbound       = isInbound,
+            sessionGate     = { peerUserId, inbound ->
+                val winner = claimSession(cfg.localUserId, peerUserId, inbound)
+                if (winner) claimedPeer = peerUserId
+                winner
+            },
         )
-        val result = session.run() ?: return
+        val result = try { session.run() }
+        finally { claimedPeer?.let { activePeerSessions.remove(it) } }
+        if (result == null) return
 
         // Map from transport-internal SessionResult to the protocol-layer boundary type
         _exchangeResults.emit(
@@ -245,6 +265,21 @@ class WifiDirectTransport @Inject constructor(
                 override fun onFailure(r: Int) {}
             })
         }
+    }
+
+    /**
+     * Dual-role tiebreak. When both server-accept and client-connect succeed for
+     * the same peer pair, both sides apply this rule and exactly one direction
+     * survives — no central coordination needed.
+     *
+     * Convention: the side with the lexicographically lower userId keeps its
+     * outbound (client) session; the higher keeps inbound. Both sides agree.
+     */
+    private fun claimSession(localUserId: String, peerUserId: String, isInbound: Boolean): Boolean {
+        val keepInbound = localUserId > peerUserId
+        if (isInbound != keepInbound) return false
+        // Reserve the slot; if a duplicate of the preferred direction races in, drop it.
+        return activePeerSessions.putIfAbsent(peerUserId, isInbound) == null
     }
 
     // ── Wi-Fi Direct event handlers ───────────────────────────────────────────

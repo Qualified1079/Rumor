@@ -25,6 +25,8 @@ import javax.inject.Singleton
 
 private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_TTL = 7
+/** DMs get a higher initial TTL since they may need more hops to reach a specific recipient. */
+private const val DEFAULT_DIRECT_TTL = 15
 
 /**
  * Core protocol logic. No radio code. No transport types.
@@ -125,7 +127,7 @@ class GossipEngine @Inject constructor(
         val msg = buildMessage(
             identity = identity,
             type = MessageType.DIRECT,
-            ttl = 0,
+            ttl = DEFAULT_DIRECT_TTL,
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
@@ -133,9 +135,9 @@ class GossipEngine @Inject constructor(
         return msg
     }
 
-    /** User manually relays a message — resets TTL so it spreads further. */
+    /** User manually relays a message. TTL is bumped (capped at default) so it spreads a little further. */
     fun manualRelay(msg: RumorMessage) {
-        enqueueRelay(messageStore.resetTtl(msg))
+        enqueueRelay(messageStore.boostTtlForManualRelay(msg))
         scope.launch { messageStore.markRelayed(msg.id) }
     }
 
@@ -164,12 +166,16 @@ class GossipEngine @Inject constructor(
         when (msg.type) {
             MessageType.BROADCAST -> {
                 val forwarded = messageStore.decrementTtl(msg) ?: return
-                val shouldBoostTtl = msg.senderId in autoRelayIds
-                enqueueRelay(if (shouldBoostTtl) messageStore.resetTtl(forwarded) else forwarded)
+                val boosted = if (msg.senderId in autoRelayIds) {
+                    messageStore.boostTtlForManualRelay(forwarded)
+                } else forwarded
+                enqueueRelay(boosted)
             }
             MessageType.DIRECT -> {
                 val localId = identityManager.identity.value?.userId
-                if (msg.recipientId != localId) enqueueRelay(msg)
+                if (msg.recipientId == localId) return
+                val forwarded = messageStore.decrementTtl(msg) ?: return
+                enqueueRelay(forwarded)
             }
             MessageType.PING -> enqueueRelay(msg.copy(ttl = (msg.ttl - 1).coerceAtLeast(0))
                 .takeIf { it.ttl > 0 } ?: return)

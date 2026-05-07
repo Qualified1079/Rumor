@@ -15,7 +15,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "MessageStore"
-private const val DEFAULT_TTL = 7
+private const val DEFAULT_BROADCAST_TTL = 7
+private const val MANUAL_RELAY_BOOST = 2
 private const val MAX_MESSAGES = 50_000
 private const val EVICT_BATCH = 500
 
@@ -57,15 +58,22 @@ class MessageStore @Inject constructor(
         return true
     }
 
-    /** Decrement TTL for a broadcast message in transit. Returns null if TTL exhausted. */
+    /** Decrement TTL for a message in transit. Returns null if exhausted. */
     fun decrementTtl(msg: RumorMessage): RumorMessage? {
-        if (msg.type != MessageType.BROADCAST) return msg  // DMs have no TTL
         if (msg.ttl <= 0) return null
         return msg.copy(ttl = msg.ttl - 1)
     }
 
-    /** Reset TTL on manual relay — user decided this message is worth spreading further. */
-    fun resetTtl(msg: RumorMessage): RumorMessage = msg.copy(ttl = DEFAULT_TTL, wasRelayed = true)
+    /**
+     * Boost TTL on manual relay. Capped at [DEFAULT_BROADCAST_TTL] so chained relays
+     * across multiple users can't multiply hop count — a message that arrives near
+     * exhaustion gets a small revival; one that's still fresh isn't amplified at all.
+     */
+    fun boostTtlForManualRelay(msg: RumorMessage): RumorMessage =
+        msg.copy(
+            ttl = minOf(DEFAULT_BROADCAST_TTL, msg.ttl + MANUAL_RELAY_BOOST),
+            wasRelayed = true,
+        )
 
     fun observeBroadcasts(): Flow<List<RumorMessage>> =
         messageDao.observeBroadcasts().map { list -> list.map { it.toMessage() } }

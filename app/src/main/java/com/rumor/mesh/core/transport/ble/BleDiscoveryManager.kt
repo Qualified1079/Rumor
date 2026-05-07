@@ -28,8 +28,7 @@ import javax.inject.Singleton
  * Output: [peerNearbySignal] — a boolean that flips true when at least one other
  * Rumor node is visible. Wi-Fi Direct discovery is triggered from this signal.
  *
- * No identity is derived from BLE. MAC addresses are randomized on Android and change
- * constantly on GrapheneOS. Identity is established later via the gossip handshake.
+ * Identity is established later via the gossip session HELLO handshake.
  */
 @Singleton
 class BleDiscoveryManager @Inject constructor(

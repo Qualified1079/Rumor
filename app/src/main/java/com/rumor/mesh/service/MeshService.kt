@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -77,7 +78,14 @@ class MeshService : Service(), MeshController {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Starting…"))
+        val notification = buildNotification("Starting…")
+        // The connectedDevice service type was added in API 29. On older versions,
+        // start without a type — the manifest attribute is harmlessly ignored.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         RumorLog.i(TAG, "MeshService created")
     }
 
@@ -109,6 +117,7 @@ class MeshService : Service(), MeshController {
         val transportConfig = WifiDirectTransport.TransportConfig(
             localUserId        = identity.userId,
             localPublicKey     = Base64.getEncoder().encodeToString(identity.publicKeyBytes),
+            signer             = identityManager::sign,
             messageProvider    = gossipEngine::messagesForExchange,
             knownIdsProvider   = gossipEngine::knownMessageIds,
             onlineUsersProvider = onlineStatusTracker::currentAsElapsed,

@@ -6,15 +6,24 @@ import javax.inject.Singleton
 
 /**
  * In-memory size-bounded LRU cache of seen message IDs.
- * Size-based eviction (not time-based): self-adjusts to device storage capacity.
- * Thread-safe.
+ *
+ * Capacity is sized from the JVM heap at construction so devices with more memory
+ * keep more history without manual tuning. Each entry costs roughly 200 bytes
+ * (32-char hex key + LinkedHashMap node), so we budget ~0.5% of max heap.
+ * Bounded to a sane range to avoid extremes on tiny or very large heaps.
  */
 @Singleton
 class DuplicateFilter @Inject constructor() {
 
-    private val DEFAULT_CAPACITY = 10_000
+    private val MIN_CAPACITY = 2_000
+    private val MAX_CAPACITY = 200_000
+    private val BYTES_PER_ENTRY = 200
+    private val HEAP_FRACTION_DENOM = 200  // 1/200 of max heap = 0.5%
 
-    @Volatile private var capacity = DEFAULT_CAPACITY
+    @Volatile private var capacity = run {
+        val budgetBytes = Runtime.getRuntime().maxMemory() / HEAP_FRACTION_DENOM
+        (budgetBytes / BYTES_PER_ENTRY).toInt().coerceIn(MIN_CAPACITY, MAX_CAPACITY)
+    }
 
     private val cache: LinkedHashMap<String, Unit> = object : LinkedHashMap<String, Unit>(
         capacity, 0.75f, true  // accessOrder = true → LRU

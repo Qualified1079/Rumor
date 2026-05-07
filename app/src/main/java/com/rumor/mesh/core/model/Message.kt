@@ -12,15 +12,12 @@ data class RumorMessage(
     val senderId: String,
     /** Sender's raw Ed25519 public key (Base64). Included so recipients can verify without a prior key exchange. */
     val senderPublicKey: String,
-    /** Per-sender monotonic counter. Recipients use this to detect gaps. */
+    /** Per-sender monotonic counter. Used for ordering messages from the same sender. */
     val sequenceNumber: Long,
     /** Milliseconds since message was first created. Each relay adds its hold time. */
     val elapsedMs: Long,
     val type: MessageType,
-    /**
-     * Remaining hops for BROADCAST messages.
-     * 0 = no TTL (used for DIRECT messages — they travel until delivered).
-     */
+    /** Remaining hops. Decremented at each relay; message dies at zero. Applies to BROADCAST and DIRECT. */
     val ttl: Int,
     /** Plaintext for BROADCAST; absent for DIRECT (use [encryptedPayload]). */
     val payload: MessagePayload? = null,

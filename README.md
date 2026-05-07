@@ -8,13 +8,13 @@ Messages spread like rumors — carried further by people who think they're wort
 
 ## How it works
 
-**Discovery:** BLE advertising announces presence. No identity is in the advertisement — just a service UUID that says "I'm a Rumor node." BLE MAC addresses are randomized on Android and change constantly on privacy ROMs (GrapheneOS, CalyxOS), so they carry no meaning here.
+**Discovery:** BLE advertising announces presence — a service UUID that says "I'm a Rumor node." Identity is established later in the gossip handshake.
 
-**Transport:** When BLE detects nearby nodes, Wi-Fi Direct takes over. Two phones connect, exchange everything they each lack, then disconnect. One rich exchange replaces the need for a persistent connection.
+**Transport:** When BLE detects nearby nodes, Wi-Fi Direct takes over. Two phones connect, authenticate via a signed challenge-response, exchange everything they each lack, then disconnect. One rich exchange replaces the need for a persistent connection.
 
-**Flooding:** Every broadcast gets a hop count (TTL, default 7). Each node that receives a new message rebroadcasts it once with TTL decremented. Message dies at zero. Manual relay by a user resets TTL — good information travels as far as the community decides.
+**Flooding:** Every broadcast gets a hop count (TTL, default 7). Each node that receives a new message rebroadcasts it once with TTL decremented. Message dies at zero. Manual relay bumps TTL by a small amount, capped at the default — a near-dead message can be revived, but chained relays can't multiply hop count.
 
-**Direct messages:** No TTL. Travel until delivered or every path is exhausted.
+**Direct messages:** Bounded TTL (default 15) so a DM can't ghost-circle the network forever when the recipient is unreachable. Recipients drop the message; everyone else relays once with TTL decremented.
 
 **LoRa bridges:** Meshtastic and MeshCore bridge plugins extend range to kilometers. A phone with a LoRa dongle on solar is complete infrastructure in one device.
 
@@ -39,10 +39,10 @@ The codebase is split into 14 modules with strict dependency rules. Each module 
 │   BLE   │  │  Wi-Fi   │  │   Plugin Registry   │
 │discovery│  │  Direct  │  │                     │
 │         │  │transport │  │  ┌───────────────┐  │
-│  MAC-   │  │          │  │  │ Meshtastic    │  │
-│ agnostic│  │device-   │  │  │ Bridge        │  │
-│ signal  │  │ quirk    │  │  ├───────────────┤  │
-│  only   │  │ aware    │  │  │ MeshCore      │  │
+│ presence│  │          │  │  │ Meshtastic    │  │
+│  signal │  │device-   │  │  │ Bridge        │  │
+│         │  │ quirk    │  │  ├───────────────┤  │
+│         │  │ aware    │  │  │ MeshCore      │  │
 └─────────┘  └────┬─────┘  │  │ Bridge        │  │
                   │         │  └───────────────┘  │
                   │  PeerExchangeResult            │
@@ -50,9 +50,9 @@ The codebase is split into 14 modules with strict dependency rules. Each module 
                   │                              │
 ┌─────────────────▼──────────────────────────────▼─┐
 │  Gossip Engine                                   │  Pure protocol logic, no radio code
-│  - Duplicate suppression (size-based LRU)        │
-│  - TTL flood / DM relay                          │
-│  - Manual relay with TTL reset                   │
+│  - Duplicate suppression (heap-sized LRU)        │
+│  - TTL flood for both broadcasts and DMs         │
+│  - Bounded manual relay boost                    │
 └───────────────────┬──────────────────────────────┘
                     │
         ┌───────────┼───────────┐
@@ -250,11 +250,12 @@ RumorMessage {
     senderId        String    SHA-256 fingerprint of sender's Ed25519 public key.
     senderPublicKey String    Base64 Ed25519 public key. Carried with the message
                               so recipients can verify without prior key exchange.
-    sequenceNumber  Long      Per-sender monotonic counter. Recipients detect gaps.
+    sequenceNumber  Long      Per-sender monotonic counter. Used for ordering.
     elapsedMs       Long      Milliseconds since creation. Each relay adds hold time.
                               Clock-agnostic — no NTP dependency.
     type            Enum      BROADCAST | DIRECT | PING | PONG
-    ttl             Int       Remaining hops (BROADCAST only). 0 = no TTL (DIRECT).
+    ttl             Int       Remaining hops. Decremented at each relay; dies at 0.
+                              Default 7 for broadcasts, 15 for DMs.
     payload         Object?   TEXT | IMAGE | VOICE | FILE (BROADCAST only)
     encryptedPayload String?  AES-256-GCM ciphertext (DIRECT only)
     recipientId     String?   Target User ID (DIRECT only)
