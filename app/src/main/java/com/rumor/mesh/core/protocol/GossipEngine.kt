@@ -27,6 +27,13 @@ private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_TTL = 7
 /** DMs get a higher initial TTL since they may need more hops to reach a specific recipient. */
 private const val DEFAULT_DIRECT_TTL = 15
+/**
+ * Protocol-wide ceilings enforced on ingress. TTL is unsigned (not covered by the message
+ * signature) so a malicious sender can claim any value. One honest hop normalizes it for
+ * the rest of the network — every honest node would have to be compromised to amplify.
+ */
+private const val MAX_BROADCAST_TTL = DEFAULT_BROADCAST_TTL
+private const val MAX_DIRECT_TTL = DEFAULT_DIRECT_TTL
 
 /**
  * Core protocol logic. No radio code. No transport types.
@@ -135,7 +142,10 @@ class GossipEngine @Inject constructor(
         return msg
     }
 
-    /** User manually relays a message. TTL is bumped (capped at default) so it spreads a little further. */
+    /**
+     * User manually relays a message. Bypasses the dedup cache (the whole point is to
+     * re-introduce a known message with fresh TTL) and bumps TTL up to the protocol ceiling.
+     */
     fun manualRelay(msg: RumorMessage) {
         enqueueRelay(messageStore.boostTtlForManualRelay(msg))
         scope.launch { messageStore.markRelayed(msg.id) }
@@ -152,7 +162,8 @@ class GossipEngine @Inject constructor(
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
-    private suspend fun processIncoming(msg: RumorMessage, autoRelayIds: Set<String>) {
+    private suspend fun processIncoming(rawMsg: RumorMessage, autoRelayIds: Set<String>) {
+        val msg = clampTtl(rawMsg)
         val isBridgeMessage = msg.signature == com.rumor.mesh.plugin.PluginContext.BRIDGE_UNSIGNED
         val isNew = if (isBridgeMessage) {
             duplicateFilter.recordAndCheck(msg.id)
@@ -181,6 +192,15 @@ class GossipEngine @Inject constructor(
                 .takeIf { it.ttl > 0 } ?: return)
             MessageType.PONG -> { /* handled by routing */ }
         }
+    }
+
+    /** Clamp TTL to the protocol ceiling. Senders can claim anything; receivers refuse to honor more. */
+    private fun clampTtl(msg: RumorMessage): RumorMessage {
+        val ceiling = when (msg.type) {
+            MessageType.BROADCAST, MessageType.PING, MessageType.PONG -> MAX_BROADCAST_TTL
+            MessageType.DIRECT -> MAX_DIRECT_TTL
+        }
+        return if (msg.ttl > ceiling) msg.copy(ttl = ceiling) else msg
     }
 
     private fun enqueueRelay(msg: RumorMessage) = synchronized(pendingRelay) {
