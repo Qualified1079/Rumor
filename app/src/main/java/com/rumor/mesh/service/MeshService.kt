@@ -28,16 +28,26 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.util.Base64
 import javax.inject.Inject
 
 /**
  * Foreground service that orchestrates all mesh modules.
- * Keeps the gossip engine alive in the background.
  *
- * Wiring:
- *   BLE peerNearbySignal → trigger Wi-Fi Direct peer discovery
- *   Wi-Fi Direct sessionResults → GossipEngine.onSessionResult
- *   GossipEngine incomingMessages → PluginRegistry
+ * This is the only class that imports from multiple modules simultaneously.
+ * Its sole job is lifecycle management and wiring — no protocol logic lives here.
+ *
+ * Wiring summary
+ * --------------
+ * 1. [BleDiscoveryManager] advertises and scans (no identity, just a signal)
+ * 2. [WifiDirectTransport] handles peer connections and produces [PeerExchangeResult]s
+ * 3. [GossipEngine] consumes [PeerExchangeResult]s, produces outbound messages
+ * 4. [PluginRegistry] receives incoming messages and forwards them to bridge plugins
+ *
+ * Plugin registration
+ * -------------------
+ * To add a new bridge plugin, instantiate it and call [PluginRegistry.register]
+ * inside [startMesh]. That's the only place you need to touch.
  */
 @AndroidEntryPoint
 class MeshService : Service(), MeshController {
@@ -62,6 +72,8 @@ class MeshService : Service(), MeshController {
         fun getController(): MeshController = this@MeshService
     }
 
+    // ── Service lifecycle ─────────────────────────────────────────────────────
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -71,7 +83,7 @@ class MeshService : Service(), MeshController {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startMesh()
-        return START_STICKY  // restart automatically if killed
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent): IBinder = binder
@@ -87,68 +99,65 @@ class MeshService : Service(), MeshController {
 
     private fun startMesh() {
         val identity = identityManager.identity.value ?: run {
-            RumorLog.w(TAG, "No unlocked identity — mesh not started")
+            RumorLog.w(TAG, "Identity not unlocked — start the app and unlock first")
             updateNotification("Locked — unlock the app to connect")
             return
         }
 
-        // Wire transport providers
-        wifiDirectTransport.localUserId = identity.userId
-        wifiDirectTransport.localPublicKey = identity.publicKeyBytes
-            .let { java.util.Base64.getEncoder().encodeToString(it) }
-        wifiDirectTransport.messageProvider = { gossipEngine.messagesForExchange() }
-        wifiDirectTransport.knownIdsProvider = { gossipEngine.knownMessageIds() }
-        wifiDirectTransport.onlineUsersProvider = { onlineStatusTracker.currentAsElapsed() }
+        // ── Wire transport → gossip engine ───────────────────────────────────
+        // TransportConfig is immutable — no mutable vars on WifiDirectTransport.
+        val transportConfig = WifiDirectTransport.TransportConfig(
+            localUserId        = identity.userId,
+            localPublicKey     = Base64.getEncoder().encodeToString(identity.publicKeyBytes),
+            messageProvider    = gossipEngine::messagesForExchange,
+            knownIdsProvider   = gossipEngine::knownMessageIds,
+            onlineUsersProvider = onlineStatusTracker::currentAsElapsed,
+        )
 
-        // BLE → Wi-Fi Direct handoff
-        scope.launch {
-            bleDiscovery.peerNearbySignal.collect { nearby ->
-                if (nearby) {
-                    RumorLog.d(TAG, "BLE signal: peers nearby — Wi-Fi Direct already discovering")
-                    // WifiDirectTransport continuously discovers peers once started;
-                    // the BLE signal is informational here (logged for diagnostics)
-                }
-            }
-        }
-
-        // Session results → gossip engine
-        scope.launch {
-            wifiDirectTransport.sessionResults.collect { result ->
-                RumorLog.d(TAG, "Session result from ${result.peerUserId.take(16)}…")
-                gossipEngine.onSessionResult(result)
-            }
-        }
-
-        // Gossip engine output → plugin registry
+        // ── Wire gossip engine output → plugins ──────────────────────────────
         scope.launch {
             gossipEngine.incomingMessages.collect { msg ->
                 pluginRegistry.onMessageReceived(msg)
             }
         }
 
-        // Peer count → notification
+        // ── Wire transport output → gossip engine ────────────────────────────
         scope.launch {
-            wifiDirectTransport.peerCount.collect { count ->
-                val text = if (count > 0) "$count peer${if (count == 1) "" else "s"} nearby"
-                else "Scanning for peers…"
-                updateNotification(text)
+            wifiDirectTransport.exchangeResults.collect { result ->
+                gossipEngine.onExchange(result)
             }
         }
 
-        // Start radios
-        bleDiscovery.start()
-        wifiDirectTransport.start()
+        // ── Peer count → notification ────────────────────────────────────────
+        scope.launch {
+            wifiDirectTransport.peerCount.collect { count ->
+                updateNotification(
+                    if (count > 0) "$count peer${if (count == 1) "" else "s"} nearby"
+                    else "Scanning for peers…"
+                )
+            }
+        }
 
-        updateNotification("Connected to mesh")
+        // ── Register bridge plugins ──────────────────────────────────────────
+        // Add new plugins here. Order doesn't matter.
+        // pluginRegistry.register(MeshtasticBridge())
+        // pluginRegistry.register(MeshCoreBridge())
+
+        // ── Start radios ─────────────────────────────────────────────────────
+        bleDiscovery.start()
+        wifiDirectTransport.start(transportConfig)
+
+        updateNotification("Mesh active")
         RumorLog.i(TAG, "Mesh started for ${identity.userId.take(16)}…")
     }
 
     private fun stopMesh() {
+        pluginRegistry.unregisterAll()
         bleDiscovery.stop()
         wifiDirectTransport.stop()
     }
 
-    // ── MeshController ────────────────────────────────────────────────────────
+    // ── MeshController (exposed to UI via binder) ─────────────────────────────
 
     override fun sendBroadcast(text: String) {
         gossipEngine.composeBroadcast(text)
@@ -156,9 +165,8 @@ class MeshService : Service(), MeshController {
 
     override fun sendDirect(recipientId: String, text: String) {
         scope.launch {
-            // Look up recipient's public key from contacts
-            // (omitted for brevity — ContactDao lookup would go here)
-            RumorLog.d(TAG, "sendDirect to ${recipientId.take(16)}…")
+            // TODO: look up recipientId's public key from ContactDao, then call composeDirect
+            RumorLog.d(TAG, "sendDirect → ${recipientId.take(16)}…")
         }
     }
 
@@ -167,7 +175,6 @@ class MeshService : Service(), MeshController {
     }
 
     override fun triggerActiveScan() {
-        // Switch BLE to high-power scan mode temporarily
         bleDiscovery.stop()
         bleDiscovery.start()
     }
@@ -186,8 +193,7 @@ class MeshService : Service(), MeshController {
                 description = "Keeps the mesh connection alive in the background"
                 setShowBadge(false)
             }
-            getSystemService(NotificationManager::class.java)
-                .createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
@@ -208,7 +214,7 @@ class MeshService : Service(), MeshController {
     }
 
     private fun updateNotification(statusText: String) {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIFICATION_ID, buildNotification(statusText))
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, buildNotification(statusText))
     }
 }

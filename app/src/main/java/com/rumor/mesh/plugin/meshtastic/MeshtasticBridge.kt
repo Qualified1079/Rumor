@@ -1,106 +1,151 @@
 package com.rumor.mesh.plugin.meshtastic
 
-import com.rumor.mesh.core.logging.RumorLog
+import com.rumor.mesh.core.logging.LogLevel
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
-import com.rumor.mesh.plugin.RumorPlugin
+import com.rumor.mesh.plugin.BasePlugin
+import com.rumor.mesh.plugin.PluginContext
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 
 /**
  * Meshtastic bridge plugin.
  *
- * Translates between Rumor messages and the Meshtastic serial/BT API.
- * Connects to a Meshtastic device via:
- *   - Bluetooth (most common: node on roof, phone indoors)
- *   - USB serial via OTG adapter
+ * Translates between Rumor messages and the Meshtastic device API.
+ * Connects to a Meshtastic node via Bluetooth serial (most common — node on
+ * roof, phone indoors) or USB serial via OTG adapter.
  *
- * Protocol translation hooks are clearly marked TODO — the Meshtastic
- * protobuf schema lives at https://github.com/meshtastic/protobufs
- * and a Kotlin serial library is available.
+ * Protocol reference
+ * ------------------
+ * Meshtastic protobufs: https://github.com/meshtastic/protobufs
+ * Serial framing: https://meshtastic.org/docs/development/device/serial-api
  *
- * This stub establishes the architecture; device I/O is implemented separately.
+ * Implementing the TODOs
+ * ----------------------
+ * 1. Add a Meshtastic protobuf library dependency (e.g., via Maven or local AAR).
+ * 2. Implement [openBluetoothConnection] / [openUsbConnection] to open the
+ *    serial stream and start [readLoop].
+ * 3. Implement [decodeMeshtasticPacket] to parse the raw bytes into a
+ *    [MeshPacket] protobuf and extract the fields used in [onPacketReceived].
+ * 4. Implement [encodeMeshtasticPacket] to serialise a [RumorMessage] into
+ *    the Meshtastic wire format and write it to [outputStream].
+ *
+ * Everything else — lifecycle, logging, message routing — is handled by
+ * [BasePlugin] and [PluginContext]. You only need to touch hardware I/O.
  */
-class MeshtasticBridge : RumorPlugin {
+class MeshtasticBridge : BasePlugin() {
 
-    override val pluginId = "meshtastic"
-    private val TAG = "MeshtasticBridge"
+    override val pluginId    = "meshtastic"
+    override val displayName = "Meshtastic Bridge"
+    override val version     = "0.1.0"
 
-    override var injectMessage: ((RumorMessage) -> Unit) = {}
+    private var connectionType = ConnectionType.NONE
 
-    // Connection state
-    private var connectionType: ConnectionType = ConnectionType.NONE
-    private var isConnected = false
+    // Replace with a real stream once hardware I/O is implemented
+    private var outputStream: java.io.OutputStream? = null
 
     enum class ConnectionType { NONE, BLUETOOTH, USB_SERIAL }
 
-    override fun onAttach() {
-        RumorLog.i(TAG, "Meshtastic bridge attached")
-        // TODO: scan for paired Meshtastic devices via BluetoothAdapter
-        // TODO: check for USB serial device via UsbManager
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    override fun onAttach(ctx: PluginContext) {
+        super.onAttach(ctx)
+        // Subscribe to incoming mesh broadcasts and forward them over LoRa
+        pluginScope.launch {
+            observeIncoming()
+                .filter { it.type == MessageType.BROADCAST }
+                .collect { msg -> forwardToMeshtastic(msg) }
+        }
     }
 
     override fun onDetach() {
-        disconnect()
-        RumorLog.i(TAG, "Meshtastic bridge detached")
+        closeConnection()
+        super.onDetach()
     }
 
-    override fun onMessageReceived(message: RumorMessage) {
-        if (!isConnected) return
-        if (message.type != MessageType.BROADCAST) return  // only forward broadcasts over LoRa
+    // ── Hardware connection ───────────────────────────────────────────────────
 
-        // TODO: convert RumorMessage → Meshtastic MeshPacket protobuf
-        // TODO: write to serial/BT stream
-        RumorLog.d(TAG, "Forwarding to Meshtastic: ${message.id.take(8)}…")
-    }
-
+    /**
+     * Connect to a Meshtastic device over Bluetooth serial.
+     * Call this from MeshService (or a connection manager) when a paired device is found.
+     */
     fun connectBluetooth(deviceAddress: String) {
-        RumorLog.i(TAG, "Connecting to Meshtastic via BT: $deviceAddress")
+        log(LogLevel.INFO, "Connecting via Bluetooth: $deviceAddress")
         connectionType = ConnectionType.BLUETOOTH
-        // TODO: open BT serial connection to Meshtastic device
-        // TODO: start read loop — on packet received, call onMeshtasticPacketReceived()
-        isConnected = true
-    }
-
-    fun connectUsb(devicePath: String) {
-        RumorLog.i(TAG, "Connecting to Meshtastic via USB: $devicePath")
-        connectionType = ConnectionType.USB_SERIAL
-        // TODO: open USB serial connection (115200 baud, 8N1)
-        // TODO: start read loop
-        isConnected = true
-    }
-
-    private fun disconnect() {
-        // TODO: close connection
-        isConnected = false
-        connectionType = ConnectionType.NONE
+        // TODO: open BT RFCOMM socket to deviceAddress
+        // TODO: outputStream = socket.outputStream
+        // TODO: pluginScope.launch { readLoop(socket.inputStream) }
     }
 
     /**
-     * Called when a packet arrives from the Meshtastic device.
-     * Translates to a Rumor message and injects into the local gossip engine.
+     * Connect to a Meshtastic device over USB serial (OTG adapter or USB-C dongle).
+     * [devicePath] is typically "/dev/ttyUSB0" or obtained from UsbManager.
      */
-    private fun onMeshtasticPacketReceived(rawBytes: ByteArray) {
-        // TODO: decode Meshtastic MeshPacket protobuf from rawBytes
-        // TODO: extract sender, payload, channel, hop limit
-        // TODO: construct RumorMessage with:
-        //   - senderId derived from Meshtastic node ID
-        //   - type = BROADCAST
-        //   - ttl mapped from Meshtastic hop_limit
-        //   - payload from decoded message text/data
-        //   - signature = placeholder (Meshtastic doesn't use Ed25519)
+    fun connectUsb(devicePath: String) {
+        log(LogLevel.INFO, "Connecting via USB serial: $devicePath")
+        connectionType = ConnectionType.USB_SERIAL
+        // TODO: open USB serial connection (115200 baud, 8N1, no flow control)
+        // TODO: outputStream = usbStream
+        // TODO: pluginScope.launch { readLoop(usbStream) }
+    }
 
-        val placeholderMessage = RumorMessage(
-            id = java.util.UUID.randomUUID().toString().replace("-", ""),
-            senderId = "meshtastic_node",  // TODO: real node ID
-            senderPublicKey = "",           // TODO: derive or skip verification for bridge traffic
-            sequenceNumber = System.currentTimeMillis(),
-            elapsedMs = 0,
-            type = MessageType.BROADCAST,
-            ttl = 3,
-            payload = MessagePayload(ContentType.TEXT, "TODO: decoded Meshtastic payload"),
-            signature = "bridge_unsigned",
+    private fun closeConnection() {
+        runCatching { outputStream?.close() }
+        outputStream = null
+        connectionType = ConnectionType.NONE
+        log(LogLevel.INFO, "Connection closed")
+    }
+
+    // ── Inbound: Meshtastic → Rumor mesh ─────────────────────────────────────
+
+    /**
+     * Read loop running on [pluginScope].
+     * Call this after opening a hardware stream.
+     */
+    private suspend fun readLoop(inputStream: java.io.InputStream) {
+        log(LogLevel.INFO, "Read loop started")
+        try {
+            // TODO: read Meshtastic framing (varint-length-prefixed protobufs)
+            // TODO: for each frame: call onPacketReceived(bytes)
+        } catch (e: Exception) {
+            log(LogLevel.WARN, "Read loop ended: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Called for each complete Meshtastic packet received from the device.
+     * Decodes the packet and injects the message into the local mesh.
+     */
+    private fun onPacketReceived(rawBytes: ByteArray) {
+        // TODO: decode rawBytes into a Meshtastic MeshPacket protobuf
+        // TODO: extract:
+        //   from      → String (Meshtastic node ID, e.g. "!a1b2c3d4")
+        //   text      → String (decoded payload)
+        //   hopLimit  → Int (becomes RumorMessage.ttl)
+        //   channel   → Int (use for routing decisions if needed)
+
+        val message = RumorMessage(
+            id               = java.util.UUID.randomUUID().toString().replace("-", ""),
+            senderId         = "meshtastic_PLACEHOLDER",  // TODO: real node ID
+            senderPublicKey  = "",                        // Meshtastic nodes don't use Ed25519
+            sequenceNumber   = System.currentTimeMillis(),
+            elapsedMs        = 0,
+            type             = MessageType.BROADCAST,
+            ttl              = 3,                         // TODO: map from Meshtastic hop_limit
+            payload          = MessagePayload(ContentType.TEXT, "TODO: decoded payload"),
+            signature        = PluginContext.BRIDGE_UNSIGNED,
         )
-        injectMessage(placeholderMessage)
+        sendMessage(message, sourceDescription = "meshtastic node")
+    }
+
+    // ── Outbound: Rumor mesh → Meshtastic ────────────────────────────────────
+
+    private fun forwardToMeshtastic(message: RumorMessage) {
+        val stream = outputStream ?: return
+        log(LogLevel.DEBUG, "Forwarding to Meshtastic: ${message.id.take(8)}…")
+        // TODO: encode message into a Meshtastic MeshPacket protobuf
+        // TODO: write length-prefixed bytes to stream
     }
 }

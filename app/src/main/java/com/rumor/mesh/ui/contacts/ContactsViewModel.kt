@@ -2,9 +2,8 @@ package com.rumor.mesh.ui.contacts
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.rumor.mesh.core.routing.OnlineStatus
+import com.rumor.mesh.core.model.PeerPresence
 import com.rumor.mesh.core.routing.OnlineStatusTracker
-import com.rumor.mesh.core.routing.PeerPresence
 import com.rumor.mesh.data.ContactDao
 import com.rumor.mesh.data.ContactEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -17,6 +16,7 @@ import javax.inject.Inject
 
 data class ContactWithStatus(
     val contact: ContactEntity,
+    /** Null if this contact has never been seen on the mesh. */
     val presence: PeerPresence?,
 )
 

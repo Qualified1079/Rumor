@@ -13,6 +13,8 @@ import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.protocol.ExchangeSource
+import com.rumor.mesh.core.protocol.PeerExchangeResult
 import com.rumor.mesh.core.transport.DeviceQuirks
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
@@ -30,20 +32,31 @@ import javax.inject.Singleton
 /**
  * Wi-Fi Direct transport layer.
  *
- * Responsibilities:
- *  - Manage Wi-Fi Direct group lifecycle
- *  - Accept incoming gossip connections (server role)
- *  - Initiate outgoing gossip connections (client role)
- *  - Run [GossipSession] over each established TCP socket
- *  - Emit [SessionResult]s to the gossip engine
+ * Responsibilities
+ * ----------------
+ * - Manage Wi-Fi Direct group lifecycle (peer discovery, connection, teardown)
+ * - Accept incoming TCP gossip connections (server role)
+ * - Initiate outgoing TCP gossip connections (client role)
+ * - Run [GossipSession] over each TCP socket
+ * - Emit [PeerExchangeResult]s to whoever is listening (MeshService → GossipEngine)
  *
- * Device quirk handling baked in — see [DeviceQuirks] for rationale.
+ * Device-quirk handling
+ * ----------------------
+ * All OEM-specific workarounds are documented in [DeviceQuirks] and applied here.
+ * When fixing a new device-specific bug, add the detection to [DeviceQuirks] first,
+ * then apply the workaround in this file — keeps fixes centralized and findable.
+ *
+ * Starting the transport
+ * ----------------------
+ * Call [start] with a [TransportConfig] containing the local identity and
+ * providers for messages and known IDs. These are provided at start-time
+ * (not as mutable fields) so there are no race conditions with the identity lock.
  */
 @Singleton
 class WifiDirectTransport @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
-    private val TAG = "WifiDirectTransport"
+    private val TAG = "WifiDirect"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val wifiP2pManager: WifiP2pManager? =
@@ -51,15 +64,28 @@ class WifiDirectTransport @Inject constructor(
     private var channel: WifiP2pManager.Channel? = null
     private var broadcastReceiver: WifiDirectBroadcastReceiver? = null
 
-    // Session providers — injected by MeshService after construction
-    var localUserId: String = ""
-    var localPublicKey: String = ""
-    var messageProvider: (() -> List<RumorMessage>) = { emptyList() }
-    var knownIdsProvider: (() -> Set<String>) = { emptySet() }
-    var onlineUsersProvider: (() -> Map<String, Long>) = { emptyMap() }
+    /**
+     * Configuration provided at [start] time. Immutable for the lifetime of this session.
+     * Replace by calling [stop] then [start] again after an identity change.
+     */
+    data class TransportConfig(
+        /** Local User ID (hex SHA-256 of public key). */
+        val localUserId: String,
+        /** Base64-encoded Ed25519 public key. */
+        val localPublicKey: String,
+        /** Returns messages to offer during the next gossip exchange. */
+        val messageProvider: () -> List<RumorMessage>,
+        /** Returns the set of message IDs this node already knows. */
+        val knownIdsProvider: () -> Set<String>,
+        /** Returns online-status elapsed-ms map to share with peers. */
+        val onlineUsersProvider: () -> Map<String, Long>,
+    )
 
-    private val _sessionResults = MutableSharedFlow<GossipSession.SessionResult>(extraBufferCapacity = 64)
-    val sessionResults: SharedFlow<GossipSession.SessionResult> = _sessionResults
+    private var config: TransportConfig? = null
+
+    /** Completed exchanges — consumed by MeshService and forwarded to GossipEngine. */
+    private val _exchangeResults = MutableSharedFlow<PeerExchangeResult>(extraBufferCapacity = 64)
+    val exchangeResults: SharedFlow<PeerExchangeResult> = _exchangeResults
 
     private val _isGroupOwner = MutableStateFlow(false)
     val isGroupOwner: StateFlow<Boolean> = _isGroupOwner.asStateFlow()
@@ -67,18 +93,19 @@ class WifiDirectTransport @Inject constructor(
     private val _peerCount = MutableStateFlow(0)
     val peerCount: StateFlow<Int> = _peerCount.asStateFlow()
 
-    // Serialise Wi-Fi Direct API calls — BUSY errors occur if commands overlap
-    private val operationQueue = Semaphore(1)
+    // Serialise WifiP2pManager calls — BUSY errors occur if commands overlap
+    private val commandQueue = Semaphore(1)
     private val handler = Handler(Looper.getMainLooper())
 
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    // ── Public API ────────────────────────────────────────────────────────────
 
-    fun start() {
+    fun start(cfg: TransportConfig) {
+        config = cfg
         val mgr = wifiP2pManager ?: run {
-            RumorLog.w(TAG, "WifiP2pManager unavailable")
+            RumorLog.w(TAG, "WifiP2pManager unavailable — Wi-Fi Direct not starting")
             return
         }
 
@@ -87,10 +114,8 @@ class WifiDirectTransport @Inject constructor(
         broadcastReceiver = WifiDirectBroadcastReceiver(
             mgr, channel!!,
             object : WifiDirectBroadcastReceiver.Listener {
-                override fun onWifiP2pEnabled(enabled: Boolean) {
-                    if (enabled) onP2pEnabled()
-                }
-                override fun onPeersChanged() = requestPeers()
+                override fun onWifiP2pEnabled(enabled: Boolean) { if (enabled) onP2pEnabled() }
+                override fun onPeersChanged()                   = requestPeers()
                 override fun onConnectionChanged(connected: Boolean) {
                     if (connected) onConnected() else onDisconnected()
                 }
@@ -106,8 +131,9 @@ class WifiDirectTransport @Inject constructor(
         }
         context.registerReceiver(broadcastReceiver, filter)
 
-        // Quirk: stale groups block new connections — always clean up first
+        // Quirk: stale groups from previous sessions block new connections
         removeGroupThenDiscover()
+        RumorLog.i(TAG, "Transport started for ${cfg.localUserId.take(16)}…")
     }
 
     fun stop() {
@@ -115,45 +141,37 @@ class WifiDirectTransport @Inject constructor(
         runCatching { serverSocket?.close() }
         runCatching { context.unregisterReceiver(broadcastReceiver) }
         removeGroup()
+        config = null
         scope.cancel()
-        RumorLog.i(TAG, "Wi-Fi Direct transport stopped")
+        RumorLog.i(TAG, "Transport stopped")
     }
 
     // ── Connection management ─────────────────────────────────────────────────
 
-    fun connectToPeer(device: WifiP2pDevice) {
+    private fun connectToPeer(device: WifiP2pDevice) {
         if (!hasLocationPermission()) return
-
-        val config = WifiP2pConfig().apply {
+        val cfg = WifiP2pConfig().apply {
             deviceAddress = device.deviceAddress
-            // GO intent 0-15: 0 = prefer client, 15 = prefer GO.
-            // Set to 7 (neutral) — but Samsung devices will ignore this and demand GO.
-            // Dual-role handling (run server + attempt client) covers this case.
-            if (DeviceQuirks.wifiDirectDualRoleRequired) {
-                groupOwnerIntent = 0
-            } else {
-                groupOwnerIntent = 7
-            }
+            // Neutral GO intent. Samsung/MediaTek ignore this and always demand GO —
+            // dual-role (server + client) below handles that case transparently.
+            groupOwnerIntent = if (DeviceQuirks.wifiDirectDualRoleRequired) 0 else 7
         }
-
-        withOperationLock {
-            wifiP2pManager?.connect(channel, config, object : WifiP2pManager.ActionListener {
+        enqueueCommand {
+            wifiP2pManager?.connect(channel, cfg, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
-                    RumorLog.d(TAG, "Connect initiated to ${device.deviceAddress}")
+                    RumorLog.d(TAG, "Connect initiated: ${device.deviceAddress}")
                 }
                 override fun onFailure(reason: Int) {
-                    val msg = p2pError(reason)
-                    RumorLog.w(TAG, "Connect failed: $msg")
+                    RumorLog.w(TAG, "Connect failed: ${p2pError(reason)}")
                     if (reason == WifiP2pManager.BUSY) {
-                        // Back off and retry
-                        handler.postDelayed({ connectToPeer(device) }, 1000)
+                        handler.postDelayed({ connectToPeer(device) }, 1_000)
                     }
                 }
             })
         }
     }
 
-    // ── Server socket ─────────────────────────────────────────────────────────
+    // ── Server socket (Group Owner role) ──────────────────────────────────────
 
     private fun startServerSocket() {
         serverJob?.cancel()
@@ -164,27 +182,21 @@ class WifiDirectTransport @Inject constructor(
                 RumorLog.i(TAG, "Listening on port ${DeviceQuirks.WIFI_DIRECT_GOSSIP_PORT}")
                 while (isActive) {
                     val client = ss.accept()
-                    launch { handleIncomingSocket(client) }
+                    launch { runSession(client) }
                 }
             } catch (e: Exception) {
-                if (isActive) RumorLog.w(TAG, "Server socket error", e)
+                if (isActive) RumorLog.w(TAG, "Server socket closed", e)
             }
         }
     }
 
-    private suspend fun handleIncomingSocket(socket: Socket) {
-        RumorLog.d(TAG, "Incoming connection from ${socket.inetAddress}")
-        runSession(socket)
-    }
-
-    // ── Client connect to Group Owner ─────────────────────────────────────────
+    // ── Client connect to GO ──────────────────────────────────────────────────
 
     private fun connectAsClient() {
         scope.launch {
-            // Quirk: DHCP may take a few seconds after Wi-Fi Direct connection.
-            // Retry TCP with exponential backoff.
-            for (delay in DeviceQuirks.tcpConnectRetryDelaysMs) {
-                delay(delay)
+            // Quirk: DHCP after Wi-Fi Direct connection takes time — retry with backoff
+            for (delayMs in DeviceQuirks.tcpConnectRetryDelaysMs) {
+                delay(delayMs)
                 try {
                     val socket = Socket(DeviceQuirks.WIFI_DIRECT_GO_IP, DeviceQuirks.WIFI_DIRECT_GOSSIP_PORT)
                     socket.soTimeout = 30_000
@@ -192,7 +204,7 @@ class WifiDirectTransport @Inject constructor(
                     runSession(socket)
                     return@launch
                 } catch (e: Exception) {
-                    RumorLog.d(TAG, "Client connect attempt failed (will retry): ${e.message}")
+                    RumorLog.d(TAG, "Client connect attempt failed (${e.message}) — retrying")
                 }
             }
             RumorLog.w(TAG, "All client connect attempts exhausted")
@@ -202,20 +214,32 @@ class WifiDirectTransport @Inject constructor(
     // ── Session runner ────────────────────────────────────────────────────────
 
     private suspend fun runSession(socket: Socket) {
+        val cfg = config ?: return
         val session = GossipSession(
-            socket = socket,
-            localUserId = localUserId,
-            localPublicKey = localPublicKey,
-            knownMessageIds = knownIdsProvider(),
-            messagesToOffer = messageProvider(),
-            recentOnlineUsers = onlineUsersProvider(),
+            socket          = socket,
+            localUserId     = cfg.localUserId,
+            localPublicKey  = cfg.localPublicKey,
+            knownMessageIds = cfg.knownIdsProvider(),
+            messagesToOffer = cfg.messageProvider(),
+            recentOnlineUsers = cfg.onlineUsersProvider(),
         )
-        val result = session.run()
-        if (result != null) {
-            _sessionResults.emit(result)
-        }
-        // Disconnect after exchange — nodes don't hold persistent connections
-        withOperationLock {
+        val result = session.run() ?: return
+
+        // Map from transport-internal SessionResult to the protocol-layer boundary type
+        _exchangeResults.emit(
+            PeerExchangeResult(
+                peerUserId      = result.peerUserId,
+                peerPublicKey   = result.peerPublicKey,
+                messagesReceived = result.messagesReceived,
+                messagesSent    = result.messagesSent,
+                peerOnlineUsers = result.peerOnlineUsers,
+                durationMs      = result.durationMs,
+                source          = ExchangeSource.WIFI_DIRECT,
+            )
+        )
+
+        // Disconnect after exchange — Rumor does not hold persistent connections
+        enqueueCommand {
             wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() { RumorLog.d(TAG, "Group removed after session") }
                 override fun onFailure(r: Int) {}
@@ -223,23 +247,21 @@ class WifiDirectTransport @Inject constructor(
         }
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
+    // ── Wi-Fi Direct event handlers ───────────────────────────────────────────
 
-    private fun onP2pEnabled() {
-        removeGroupThenDiscover()
-    }
+    private fun onP2pEnabled() = removeGroupThenDiscover()
 
     private fun onConnected() {
-        // Request connection info to know if we're GO or client
         wifiP2pManager?.requestConnectionInfo(channel) { info ->
             val isGo = info?.isGroupOwner == true
             _isGroupOwner.value = isGo
-            RumorLog.i(TAG, "Connected. Group owner: $isGo")
+            RumorLog.i(TAG, "Connected — Group Owner: $isGo")
             if (isGo) {
                 startServerSocket()
             } else {
-                // Dual-role: also start server in case the "GO" is another client
-                // that ignored the GO intent (Samsung quirk)
+                // Quirk: Samsung/MediaTek may ignore our GO intent and become GO anyway.
+                // Run both a server socket and a client connect attempt; whichever
+                // TCP connection succeeds first wins.
                 if (DeviceQuirks.wifiDirectDualRoleRequired) startServerSocket()
                 connectAsClient()
             }
@@ -251,51 +273,42 @@ class WifiDirectTransport @Inject constructor(
         serverJob?.cancel()
         runCatching { serverSocket?.close() }
         serverSocket = null
-        RumorLog.d(TAG, "Wi-Fi Direct disconnected")
+        RumorLog.d(TAG, "Disconnected")
     }
 
     private fun requestPeers() {
         if (!hasLocationPermission()) return
         wifiP2pManager?.requestPeers(channel) { peers ->
             _peerCount.value = peers.deviceList.size
-            RumorLog.d(TAG, "Peers visible: ${peers.deviceList.size}")
+            RumorLog.d(TAG, "${peers.deviceList.size} Wi-Fi Direct peer(s) visible")
             peers.deviceList.forEach { connectToPeer(it) }
         }
     }
 
     private fun removeGroupThenDiscover() {
-        withOperationLock {
+        enqueueCommand {
             wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    RumorLog.d(TAG, "Stale group removed")
-                    discoverPeers()
-                }
-                override fun onFailure(r: Int) {
-                    // No group to remove — proceed directly
-                    discoverPeers()
-                }
+                override fun onSuccess()        = discoverPeers()
+                override fun onFailure(r: Int)  = discoverPeers()  // no group — proceed anyway
             })
         }
     }
 
     private fun discoverPeers() {
         if (!hasLocationPermission()) return
-        withOperationLock {
+        enqueueCommand {
             wifiP2pManager?.discoverPeers(channel, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() { RumorLog.d(TAG, "Peer discovery started") }
                 override fun onFailure(r: Int) {
-                    val msg = p2pError(r)
-                    RumorLog.w(TAG, "Peer discovery failed: $msg")
-                    if (r == WifiP2pManager.BUSY) {
-                        handler.postDelayed({ discoverPeers() }, 2000)
-                    }
+                    RumorLog.w(TAG, "Peer discovery failed: ${p2pError(r)}")
+                    if (r == WifiP2pManager.BUSY) handler.postDelayed({ discoverPeers() }, 2_000)
                 }
             })
         }
     }
 
     private fun removeGroup() {
-        withOperationLock {
+        enqueueCommand {
             wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {}
                 override fun onFailure(r: Int) {}
@@ -303,32 +316,30 @@ class WifiDirectTransport @Inject constructor(
         }
     }
 
-    private fun withOperationLock(block: () -> Unit) {
-        if (operationQueue.tryAcquire()) {
+    /**
+     * Serialises WifiP2pManager calls to avoid BUSY errors.
+     * Releases the permit 300ms after the call returns to give the framework
+     * time to settle before the next command.
+     */
+    private fun enqueueCommand(block: () -> Unit) {
+        if (commandQueue.tryAcquire()) {
             try { block() }
-            finally {
-                // Release after a short delay to avoid BUSY errors on rapid successive calls
-                handler.postDelayed({ operationQueue.release() }, 300)
-            }
+            finally { handler.postDelayed({ commandQueue.release() }, 300) }
         } else {
-            RumorLog.d(TAG, "Operation skipped — queue busy")
+            RumorLog.d(TAG, "Command skipped — queue busy")
         }
     }
 
-    private fun hasLocationPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) ==
-                    PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
-                    PackageManager.PERMISSION_GRANTED
-        }
+    private fun hasLocationPermission(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
+    } else {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun p2pError(reason: Int) = when (reason) {
-        WifiP2pManager.P2P_UNSUPPORTED -> "P2P unsupported"
+        WifiP2pManager.P2P_UNSUPPORTED -> "P2P_UNSUPPORTED"
         WifiP2pManager.BUSY            -> "BUSY"
         WifiP2pManager.ERROR           -> "ERROR"
-        else                           -> "reason $reason"
+        else                           -> "reason=$reason"
     }
 }

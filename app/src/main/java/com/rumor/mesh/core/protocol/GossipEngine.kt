@@ -10,8 +10,8 @@ import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
-import com.rumor.mesh.core.transport.wifidirect.GossipSession
 import com.rumor.mesh.data.ContactDao
+import com.rumor.mesh.plugin.PluginContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,8 +27,19 @@ private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_TTL = 7
 
 /**
- * Core protocol logic. No radio code — operates entirely on [GossipSession.SessionResult]s
- * delivered by the transport layer.
+ * Core protocol logic. No radio code. No transport types.
+ *
+ * Inputs
+ * ------
+ * - [onExchange] — called by the transport layer after each peer exchange
+ * - [injectFromPlugin] — called by [PluginRegistry] when a bridge plugin
+ *   receives a message from an external network
+ *
+ * Outputs
+ * -------
+ * - [incomingMessages] — every new message, consumed by UI and [PluginRegistry]
+ * - [messagesForExchange] / [knownMessageIds] — polled by the transport layer
+ *   before each gossip session
  */
 @Singleton
 class GossipEngine @Inject constructor(
@@ -42,24 +53,26 @@ class GossipEngine @Inject constructor(
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val sequenceCounter = AtomicLong(System.currentTimeMillis())
 
-    /** Messages ready to be relayed out on the next gossip exchange. */
     private val pendingRelay = ArrayDeque<RumorMessage>(200)
 
-    /** Emits every newly ingested message (for UI updates and plugin callbacks). */
+    /** Every new message ingested from any source. UI and plugins subscribe here. */
     private val _incomingMessages = MutableSharedFlow<RumorMessage>(extraBufferCapacity = 256)
     val incomingMessages: SharedFlow<RumorMessage> = _incomingMessages
 
-    // ── Session intake ────────────────────────────────────────────────────────
+    // ── Transport intake ──────────────────────────────────────────────────────
 
-    /** Called by MeshService when a [GossipSession] completes. */
-    fun onSessionResult(result: GossipSession.SessionResult) {
+    /**
+     * Called by [WifiDirectTransport] after each completed peer exchange.
+     * The transport layer has no further involvement — processing is pure logic.
+     */
+    fun onExchange(result: PeerExchangeResult) {
         scope.launch {
-            // Update topology and online status
-            topologyTracker.recordSession(result.peerUserId, result.durationMs, hopCount = 1)
-            onlineStatusTracker.recordDirectContact(result.peerUserId)
+            if (result.peerUserId.isNotEmpty()) {
+                topologyTracker.recordSession(result.peerUserId, result.durationMs, hopCount = 1)
+                onlineStatusTracker.recordDirectContact(result.peerUserId)
+            }
             onlineStatusTracker.mergeRemoteStatus(result.peerOnlineUsers)
 
-            // Auto-relay check: if peer's user is in our auto-relay contacts, extend their reach
             val autoRelayIds = contactDao.getAutoRelayContacts().map { it.userId }.toSet()
 
             for (msg in result.messagesReceived) {
@@ -67,118 +80,130 @@ class GossipEngine @Inject constructor(
                     elapsedMs = msg.elapsedMs + result.durationMs,
                     receivedAtMs = System.currentTimeMillis(),
                 )
-                val isNew = messageStore.ingest(adjusted)
-                if (!isNew) continue
-
-                _incomingMessages.emit(adjusted)
-
-                when (adjusted.type) {
-                    MessageType.BROADCAST -> {
-                        val forwarded = messageStore.decrementTtl(adjusted)
-                        if (forwarded != null) {
-                            val shouldAutoRelay = adjusted.senderId in autoRelayIds
-                            if (shouldAutoRelay) {
-                                enqueueRelay(messageStore.resetTtl(forwarded))
-                            } else {
-                                enqueueRelay(forwarded)
-                            }
-                        }
-                    }
-                    MessageType.DIRECT -> {
-                        // DMs have no TTL — keep relaying until delivered
-                        val localUserId = identityManager.identity.value?.userId
-                        if (adjusted.recipientId != localUserId) {
-                            enqueueRelay(adjusted)
-                        }
-                    }
-                    MessageType.PING -> handlePing(adjusted)
-                    MessageType.PONG -> { /* handled by routing */ }
-                }
+                processIncoming(adjusted, autoRelayIds)
             }
         }
     }
 
-    // ── Compose and send ──────────────────────────────────────────────────────
+    // ── Plugin intake ─────────────────────────────────────────────────────────
 
+    /**
+     * Called by [PluginRegistry] when a bridge plugin injects a message from
+     * an external network. Messages marked [PluginContext.BRIDGE_UNSIGNED] skip
+     * signature verification.
+     */
+    fun injectFromPlugin(message: RumorMessage, sourcePluginId: String) {
+        scope.launch {
+            RumorLog.d(TAG, "Injecting from plugin $sourcePluginId: ${message.id.take(8)}…")
+            val adjusted = message.copy(receivedAtMs = System.currentTimeMillis())
+            processIncoming(adjusted, emptySet())
+        }
+    }
+
+    // ── Compose ───────────────────────────────────────────────────────────────
+
+    /** Build and enqueue a broadcast message composed by the local user. */
     fun composeBroadcast(text: String): RumorMessage? {
         val identity = identityManager.identity.value ?: return null
-        val msg = RumorMessage(
-            id = UUID.randomUUID().toString().replace("-", ""),
-            senderId = identity.userId,
-            senderPublicKey = identity.publicKeyBytes.toBase64(),
-            sequenceNumber = sequenceCounter.getAndIncrement(),
-            elapsedMs = 0,
+        val msg = buildMessage(
+            identity = identity,
             type = MessageType.BROADCAST,
             ttl = DEFAULT_BROADCAST_TTL,
             payload = MessagePayload(ContentType.TEXT, text),
-            signature = "",  // filled below
-        ).let { it.copy(signature = sign(it, identity.privateKeyBytes)) }
-
+        )
         enqueueRelay(msg)
         return msg
     }
 
+    /** Build and enqueue a direct (end-to-end encrypted) message. */
     fun composeDirect(recipientId: String, recipientPublicKey: ByteArray, text: String): RumorMessage? {
         val identity = identityManager.identity.value ?: return null
-
-        // AES key from X25519 DH
-        val ephemeralPair = CryptoManager.generateX25519KeyPair()
-        val sharedKey = CryptoManager.x25519Agreement(ephemeralPair.privateKeyBytes, recipientPublicKey)
+        val ephemeral = CryptoManager.generateX25519KeyPair()
+        val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientPublicKey)
         val ct = CryptoManager.aesGcmEncrypt(text.toByteArray(Charsets.UTF_8), sharedKey)
-
-        // Payload = ephemeral public key + ciphertext (recipient needs ephemeral pub to recompute DH)
-        val encryptedPayload = (ephemeralPair.publicKeyBytes.toBase64() + "." + ct.toBase64())
-
-        val msg = RumorMessage(
-            id = UUID.randomUUID().toString().replace("-", ""),
-            senderId = identity.userId,
-            senderPublicKey = identity.publicKeyBytes.toBase64(),
-            sequenceNumber = sequenceCounter.getAndIncrement(),
-            elapsedMs = 0,
+        val encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
+        val msg = buildMessage(
+            identity = identity,
             type = MessageType.DIRECT,
-            ttl = 0,  // DMs have no TTL
+            ttl = 0,
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
-            signature = "",
-        ).let { it.copy(signature = sign(it, identity.privateKeyBytes)) }
-
+        )
         enqueueRelay(msg)
         return msg
     }
 
-    /** User manually relays a message — reset TTL so it spreads further. */
+    /** User manually relays a message — resets TTL so it spreads further. */
     fun manualRelay(msg: RumorMessage) {
         enqueueRelay(messageStore.resetTtl(msg))
         scope.launch { messageStore.markRelayed(msg.id) }
     }
 
-    // ── Message supply for transport ──────────────────────────────────────────
+    // ── Transport supply ──────────────────────────────────────────────────────
 
-    /** Returns messages to offer during the next gossip exchange. */
-    fun messagesForExchange(): List<RumorMessage> {
-        return synchronized(pendingRelay) {
-            pendingRelay.toList().also { pendingRelay.clear() }
-        }
+    /** Returns pending messages to offer during the next gossip exchange. */
+    fun messagesForExchange(): List<RumorMessage> = synchronized(pendingRelay) {
+        pendingRelay.toList().also { pendingRelay.clear() }
     }
 
     fun knownMessageIds(): Set<String> = duplicateFilter.knownIds()
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
-    private fun enqueueRelay(msg: RumorMessage) {
-        synchronized(pendingRelay) {
-            if (pendingRelay.size >= 200) pendingRelay.removeFirst()
-            pendingRelay.addLast(msg)
+    private suspend fun processIncoming(msg: RumorMessage, autoRelayIds: Set<String>) {
+        val isBridgeMessage = msg.signature == com.rumor.mesh.plugin.PluginContext.BRIDGE_UNSIGNED
+        val isNew = if (isBridgeMessage) {
+            duplicateFilter.recordAndCheck(msg.id)
+        } else {
+            messageStore.ingest(msg)
+        }
+        if (!isNew) return
+
+        _incomingMessages.emit(msg)
+
+        when (msg.type) {
+            MessageType.BROADCAST -> {
+                val forwarded = messageStore.decrementTtl(msg) ?: return
+                val shouldBoostTtl = msg.senderId in autoRelayIds
+                enqueueRelay(if (shouldBoostTtl) messageStore.resetTtl(forwarded) else forwarded)
+            }
+            MessageType.DIRECT -> {
+                val localId = identityManager.identity.value?.userId
+                if (msg.recipientId != localId) enqueueRelay(msg)
+            }
+            MessageType.PING -> enqueueRelay(msg.copy(ttl = (msg.ttl - 1).coerceAtLeast(0))
+                .takeIf { it.ttl > 0 } ?: return)
+            MessageType.PONG -> { /* handled by routing */ }
         }
     }
 
-    private fun handlePing(ping: RumorMessage) {
-        // PONG routing handled by routing engine; gossip engine just relays
-        enqueueRelay(ping.copy(ttl = ping.ttl - 1).takeIf { it.ttl > 0 } ?: return)
+    private fun enqueueRelay(msg: RumorMessage) = synchronized(pendingRelay) {
+        if (pendingRelay.size >= 200) pendingRelay.removeFirst()
+        pendingRelay.addLast(msg)
     }
 
-    private fun sign(msg: RumorMessage, privateKeyBytes: ByteArray): String {
-        val bytes = messageStore.signableBytes(msg)
-        return CryptoManager.sign(bytes, privateKeyBytes).toBase64()
+    private fun buildMessage(
+        identity: com.rumor.mesh.core.identity.LocalIdentity,
+        type: MessageType,
+        ttl: Int,
+        payload: MessagePayload? = null,
+        encryptedPayload: String? = null,
+        recipientId: String? = null,
+    ): RumorMessage {
+        val unsigned = RumorMessage(
+            id = UUID.randomUUID().toString().replace("-", ""),
+            senderId = identity.userId,
+            senderPublicKey = identity.publicKeyBytes.toBase64(),
+            sequenceNumber = sequenceCounter.getAndIncrement(),
+            elapsedMs = 0,
+            type = type,
+            ttl = ttl,
+            payload = payload,
+            encryptedPayload = encryptedPayload,
+            recipientId = recipientId,
+            signature = "",
+        )
+        val sig = CryptoManager.sign(messageStore.signableBytes(unsigned), identity.privateKeyBytes).toBase64()
+        return unsigned.copy(signature = sig)
     }
 }
