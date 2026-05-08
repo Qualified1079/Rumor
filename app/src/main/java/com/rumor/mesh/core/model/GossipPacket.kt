@@ -37,6 +37,16 @@ sealed class GossipPacket {
         val expectedItems: Int,
     ) : GossipPacket()
 
+    /**
+     * Raw list of known message IDs. Used in place of [Bloom] when the set is small
+     * enough that exact membership beats bloom on size and gives zero false positives.
+     * Sender chooses based on a size threshold; receiver handles either form.
+     */
+    @Serializable @SerialName("id_list")
+    data class IdList(
+        val ids: List<String>,
+    ) : GossipPacket()
+
     /** Request specific messages by ID. */
     @Serializable @SerialName("request")
     data class Request(

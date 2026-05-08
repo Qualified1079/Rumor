@@ -1,11 +1,14 @@
 package com.rumor.mesh.di
 
 import android.content.Context
-import com.rumor.mesh.data.RumorDatabase
+import com.rumor.mesh.data.BlockEntryDao
+import com.rumor.mesh.data.BlocklistEntryDao
 import com.rumor.mesh.data.BreadcrumbDao
 import com.rumor.mesh.data.ContactDao
 import com.rumor.mesh.data.MessageDao
 import com.rumor.mesh.data.RouteDao
+import com.rumor.mesh.data.RumorDatabase
+import com.rumor.mesh.data.SubscribedBlocklistDao
 import com.rumor.mesh.service.MeshController
 import com.rumor.mesh.service.MeshService
 import dagger.Module
@@ -34,4 +37,13 @@ object AppModule {
 
     @Provides @Singleton
     fun provideRouteDao(db: RumorDatabase): RouteDao = db.routeDao()
+
+    @Provides @Singleton
+    fun provideBlockEntryDao(db: RumorDatabase): BlockEntryDao = db.blockEntryDao()
+
+    @Provides @Singleton
+    fun provideSubscribedBlocklistDao(db: RumorDatabase): SubscribedBlocklistDao = db.subscribedBlocklistDao()
+
+    @Provides @Singleton
+    fun provideBlocklistEntryDao(db: RumorDatabase): BlocklistEntryDao = db.blocklistEntryDao()
 }

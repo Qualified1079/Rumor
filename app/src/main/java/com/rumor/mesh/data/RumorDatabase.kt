@@ -12,8 +12,11 @@ import androidx.room.TypeConverters
         ContactEntity::class,
         BreadcrumbEntity::class,
         RouteEntity::class,
+        BlockEntryEntity::class,
+        SubscribedBlocklistEntity::class,
+        BlocklistEntryEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -22,6 +25,9 @@ abstract class RumorDatabase : RoomDatabase() {
     abstract fun contactDao(): ContactDao
     abstract fun breadcrumbDao(): BreadcrumbDao
     abstract fun routeDao(): RouteDao
+    abstract fun blockEntryDao(): BlockEntryDao
+    abstract fun subscribedBlocklistDao(): SubscribedBlocklistDao
+    abstract fun blocklistEntryDao(): BlocklistEntryDao
 
     companion object {
         private const val DB_NAME = "rumor.db"

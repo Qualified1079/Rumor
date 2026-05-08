@@ -1,6 +1,7 @@
 package com.rumor.mesh.data
 
 import androidx.room.TypeConverter
+import com.rumor.mesh.core.model.BlocklistMode
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessageType
 
@@ -10,4 +11,7 @@ class Converters {
 
     @TypeConverter fun fromContentType(v: ContentType?): String? = v?.name
     @TypeConverter fun toContentType(v: String?): ContentType? = v?.let { ContentType.valueOf(it) }
+
+    @TypeConverter fun fromBlocklistMode(v: BlocklistMode): String = v.name
+    @TypeConverter fun toBlocklistMode(v: String): BlocklistMode = BlocklistMode.valueOf(v)
 }

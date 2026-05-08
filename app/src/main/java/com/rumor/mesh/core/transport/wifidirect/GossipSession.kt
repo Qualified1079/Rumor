@@ -48,6 +48,13 @@ class GossipSession(
     private val TAG = "GossipSession"
     private val SESSION_TIMEOUT_MS = 30_000L
 
+    /**
+     * Below this many known IDs, send a raw list during the summary phase.
+     * At ~32 chars per ID, 500 IDs is roughly the crossover where a bloom filter
+     * with 1% false-positive rate becomes more compact than the JSON-encoded list.
+     */
+    private val BLOOM_THRESHOLD = 500
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -109,17 +116,27 @@ class GossipSession(
                 return@withTimeout null
             }
 
-            // Phase 2: BLOOM — exchange knowledge sets
-            val bloom = buildBloom()
-            send(out, GossipPacket.Bloom(bloom.serialized, bloom.expectedItems))
-            val peerBloom = receive(inp) as? GossipPacket.Bloom
-                ?: return@withTimeout null
+            // Phase 2: SUMMARY — exchange knowledge sets.
+            // Below the bloom threshold, send a raw ID list (zero false positives, more
+            // compact at small sizes). Above it, send a bloom filter. Either form is
+            // accepted on receive.
+            send(out, buildSummary())
+            val peerKnows = when (val peerSummary = receive(inp)) {
+                is GossipPacket.IdList -> peerSummary.ids.toHashSet().let { set ->
+                    { id: String -> id in set }
+                }
+                is GossipPacket.Bloom -> BloomFilterData.deserialize(
+                    peerSummary.filter, peerSummary.expectedItems,
+                ).let { f -> { id: String -> f.mightContain(id) } }
+                else -> return@withTimeout null
+            }
 
-            // Phase 3: REQUEST — ask for what we're missing
-            val peerFilter = BloomFilterData.deserialize(peerBloom.filter, peerBloom.expectedItems)
-            val theyNeed = messagesToOffer.filter { msg -> !peerFilter.mightContain(msg.id) }
-            val weNeedIds = knownMessageIds.filter { id -> !bloom.filter.mightContain(id) }
-                .let { emptyList<String>() } // We don't have a reverse map here; peer will send REQUEST
+            // Phase 3: REQUEST — ask for what we're missing.
+            // We can't enumerate "what we're missing" without knowing what they have
+            // beyond their summary, so send empty here; peer will reply with what they
+            // think we're missing based on our own summary.
+            val theyNeed = messagesToOffer.filter { msg -> !peerKnows(msg.id) }
+            val weNeedIds = emptyList<String>()
 
             send(out, GossipPacket.Request(weNeedIds))
             val theirRequest = receive(inp) as? GossipPacket.Request
@@ -189,15 +206,18 @@ class GossipSession(
         return json.decodeFromString(String(bytes, Charsets.UTF_8))
     }
 
-    private fun buildBloom(): BloomData {
-        val filter = BloomFilterData(expectedItems = maxOf(knownMessageIds.size, 100))
+    /**
+     * Choose the most compact representation of [knownMessageIds]. Below the threshold
+     * a raw list is smaller and exact; above it a bloom filter wins on size at the
+     * cost of a small false-positive rate (acceptable because the mesh's redundant
+     * paths reach skipped nodes through other routes anyway).
+     */
+    private fun buildSummary(): GossipPacket {
+        if (knownMessageIds.size < BLOOM_THRESHOLD) {
+            return GossipPacket.IdList(knownMessageIds.toList())
+        }
+        val filter = BloomFilterData(expectedItems = knownMessageIds.size)
         knownMessageIds.forEach { filter.add(it) }
-        return BloomData(filter, filter.serialize(), knownMessageIds.size)
+        return GossipPacket.Bloom(filter.serialize(), knownMessageIds.size)
     }
-
-    private data class BloomData(
-        val filter: BloomFilterData,
-        val serialized: String,
-        val expectedItems: Int,
-    )
 }
