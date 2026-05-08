@@ -55,6 +55,12 @@ class GossipEngine(
     private val onlineStatusTracker: OnlineStatusTracker,
     private val topologyTracker: TopologyTracker,
     private val contactDao: ContactDao,
+    /**
+     * Consulted only on the inbox emit path, never on the relay path. Encoded
+     * structurally: [BlockManager.isBlocked] is called from a single site below
+     * and never from [enqueueRelay]. See architecture invariants.
+     */
+    private val blockManager: com.rumor.mesh.core.block.BlockManager,
 ) {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val sequenceCounter = AtomicLong(System.currentTimeMillis())
@@ -175,8 +181,26 @@ class GossipEngine(
         }
         if (!isNew) return
 
-        _incomingMessages.emit(msg)
+        emitToInbox(msg)
+        relay(msg, autoRelayIds)
+    }
 
+    /**
+     * Inbox emission — consults [blockManager] to suppress what the user sees from
+     * blocked senders. This is the ONLY call site that touches blocklist state.
+     * The relay path below is structurally unable to reach it.
+     */
+    private suspend fun emitToInbox(msg: RumorMessage) {
+        if (blockManager.isBlocked(msg.senderId)) return
+        _incomingMessages.emit(msg)
+    }
+
+    /**
+     * Relay path. Never consults blocklist — relay is shared mesh infrastructure;
+     * blocking only suppresses what the local user sees. This is the load-bearing
+     * architectural rule.
+     */
+    private fun relay(msg: RumorMessage, autoRelayIds: Set<String>) {
         when (msg.type) {
             MessageType.BROADCAST -> {
                 val forwarded = messageStore.decrementTtl(msg) ?: return
@@ -191,8 +215,10 @@ class GossipEngine(
                 val forwarded = messageStore.decrementTtl(msg) ?: return
                 enqueueRelay(forwarded)
             }
-            MessageType.PING -> enqueueRelay(msg.copy(ttl = (msg.ttl - 1).coerceAtLeast(0))
-                .takeIf { it.ttl > 0 } ?: return)
+            MessageType.PING -> {
+                val forwarded = msg.copy(ttl = (msg.ttl - 1).coerceAtLeast(0))
+                if (forwarded.ttl > 0) enqueueRelay(forwarded)
+            }
             MessageType.PONG -> { /* handled by routing */ }
         }
     }

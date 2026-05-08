@@ -1,5 +1,8 @@
 package com.rumor.mesh.di
 
+import com.rumor.mesh.core.block.BlockManager
+import com.rumor.mesh.core.block.BlocklistPublisher
+import com.rumor.mesh.core.block.BlocklistSubscriber
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.protocol.DuplicateFilter
 import com.rumor.mesh.core.protocol.GossipEngine
@@ -41,13 +44,19 @@ val appModule = module {
     // ── Identity ──────────────────────────────────────────────────────────────
     single { IdentityManager(androidContext()) }
 
+    // ── Block module ──────────────────────────────────────────────────────────
+    // BlockManager is consulted only by the inbox filter, never the relay path.
+    single { BlockManager(get(), get(), get()) }
+    single { BlocklistPublisher(get(), get()) }
+    single { BlocklistSubscriber(get(), get()) }
+
     // ── Protocol layer ────────────────────────────────────────────────────────
     single { DuplicateFilter() }
     single { MessageStore(get(), get(), get()) }
     single { OnlineStatusTracker() }
     single { TopologyTracker(get()) }
     single { BreadcrumbCache(get()) }
-    single { GossipEngine(get(), get(), get(), get(), get(), get()) }
+    single { GossipEngine(get(), get(), get(), get(), get(), get(), get()) }
 
     // ── Transport ─────────────────────────────────────────────────────────────
     single { BleDiscoveryManager(androidContext()) }
