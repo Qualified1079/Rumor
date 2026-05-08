@@ -85,7 +85,7 @@ private fun BroadcastCard(
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = formatElapsed(message.elapsedMs),
+                        text = formatElapsed(System.currentTimeMillis() - message.sentAtMs),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     )

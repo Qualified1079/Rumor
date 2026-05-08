@@ -20,7 +20,7 @@ import java.security.SecureRandom
  *
  * Wire format: each frame is [4-byte big-endian length][UTF-8 JSON payload].
  *
- * Sequence: HELLO → HELLO_PROOF → BLOOM → REQUEST → MESSAGE* → ONLINE_STATUS → BYE
+ * Sequence: HELLO → HELLO_PROOF → BLOOM → REQUEST → MESSAGE* → ACK → ONLINE_STATUS → BYE
  *
  * Authentication: each side sends a random nonce in HELLO and signs the peer's
  * nonce with their Ed25519 private key. A peer that can't produce a valid signature
@@ -60,6 +60,8 @@ class GossipSession(
         val messagesReceived: List<RumorMessage>,
         val messagesSent: Int,
         val peerOnlineUsers: Map<String, Long>,
+        /** Message IDs we sent that the peer confirmed accepting. */
+        val ackedByPeer: List<String>,
         val durationMs: Long,
     )
 
@@ -138,13 +140,16 @@ class GossipSession(
                 packet = receive(inp)
             }
 
+            // Phase 4b: ACK — confirm which messages we accepted in this session.
+            // Reaching this point means signature checks (done by the engine on ingest)
+            // haven't run yet, so we acknowledge what we received at the wire layer.
+            send(out, GossipPacket.Ack(received.map { it.id }))
+            val ackedByPeer = (packet as? GossipPacket.Ack)?.acceptedIds ?: emptyList()
+            if (packet is GossipPacket.Ack) packet = receive(inp)
+
             // Phase 5: ONLINE_STATUS
             send(out, GossipPacket.OnlineStatus(recentOnlineUsers))
-            val theirOnline = (packet as? GossipPacket.OnlineStatus)?.recentUsers
-                ?: run {
-                    if (packet !is GossipPacket.OnlineStatus) receive(inp) as? GossipPacket.OnlineStatus
-                    else packet
-                }?.recentUsers ?: emptyMap()
+            val theirOnline = (packet as? GossipPacket.OnlineStatus)?.recentUsers ?: emptyMap()
 
             // Phase 6: BYE
             send(out, GossipPacket.Bye())
@@ -158,6 +163,7 @@ class GossipSession(
                 messagesReceived = received,
                 messagesSent = toSend.size,
                 peerOnlineUsers = theirOnline,
+                ackedByPeer = ackedByPeer,
                 durationMs = duration,
             )
         } catch (e: Exception) {

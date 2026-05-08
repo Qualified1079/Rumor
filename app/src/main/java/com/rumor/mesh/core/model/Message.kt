@@ -14,8 +14,8 @@ data class RumorMessage(
     val senderPublicKey: String,
     /** Per-sender monotonic counter. Used for ordering messages from the same sender. */
     val sequenceNumber: Long,
-    /** Milliseconds since message was first created. Each relay adds its hold time. */
-    val elapsedMs: Long,
+    /** Wall-clock epoch ms when the originating device composed the message. Set once; relays do not modify. */
+    val sentAtMs: Long,
     val type: MessageType,
     /** Remaining hops. Decremented at each relay; message dies at zero. Applies to BROADCAST and DIRECT. */
     val ttl: Int,
@@ -65,4 +65,24 @@ enum class ContentType {
     @SerialName("image") IMAGE,
     @SerialName("voice") VOICE,
     @SerialName("file")  FILE,
+}
+
+/**
+ * Priority tier used by the outbound scheduler. Higher tiers preempt lower ones;
+ * within a tier, deficit round robin across sources keeps any single peer from
+ * starving the rest.
+ *
+ * Reserved here so the wire protocol can carry it before the scheduler exists.
+ * Until the scheduler is wired in, every frame is treated as REALTIME.
+ */
+@Serializable
+enum class TrafficClass {
+    /** Routing info, handshakes, blocklist updates. */
+    @SerialName("infrastructure") INFRASTRUCTURE,
+    /** Text and direct messages. */
+    @SerialName("realtime")       REALTIME,
+    /** Transfer metadata, thumbnails, contact sync, bloom filters. */
+    @SerialName("transfer_setup") TRANSFER_SETUP,
+    /** Image, voice, video, file chunks. */
+    @SerialName("bulk")           BULK,
 }

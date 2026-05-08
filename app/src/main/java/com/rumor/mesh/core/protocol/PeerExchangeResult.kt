@@ -23,9 +23,11 @@ data class PeerExchangeResult(
     val messagesSent: Int,
     /**
      * Online-status snapshot shared by the peer during the exchange.
-     * Key = User ID, Value = elapsed ms since that user was last seen by the peer.
+     * Key = User ID, Value = wall-clock epoch ms when that user was last seen by the peer.
      */
     val peerOnlineUsers: Map<String, Long>,
+    /** Message IDs the peer confirmed accepting in this session — peer-hop delivery confirmation. */
+    val ackedByPeer: List<String> = emptyList(),
     /** Wall-clock duration of the entire exchange. Used for topology learning. */
     val durationMs: Long,
     /** Where this exchange originated. */

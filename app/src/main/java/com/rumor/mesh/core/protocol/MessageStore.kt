@@ -116,7 +116,7 @@ class MessageStore @Inject constructor(
         append(msg.senderId)
         append(msg.senderPublicKey)
         append(msg.sequenceNumber)
-        append(msg.elapsedMs)
+        append(msg.sentAtMs)
         append(msg.type.name)
         append(msg.ttl)
         append(msg.payload?.content ?: "")
@@ -130,7 +130,7 @@ private fun RumorMessage.toEntity() = MessageEntity(
     senderId = senderId,
     senderPublicKey = senderPublicKey,
     sequenceNumber = sequenceNumber,
-    elapsedMs = elapsedMs,
+    sentAtMs = sentAtMs,
     type = type,
     ttl = ttl,
     contentType = payload?.contentType,
@@ -151,7 +151,7 @@ private fun MessageEntity.toMessage() = RumorMessage(
     senderId = senderId,
     senderPublicKey = senderPublicKey,
     sequenceNumber = sequenceNumber,
-    elapsedMs = elapsedMs,
+    sentAtMs = sentAtMs,
     type = type,
     ttl = ttl,
     payload = if (content != null && contentType != null) {

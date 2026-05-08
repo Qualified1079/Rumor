@@ -68,6 +68,13 @@ class GossipEngine @Inject constructor(
     private val _incomingMessages = MutableSharedFlow<RumorMessage>(extraBufferCapacity = 256)
     val incomingMessages: SharedFlow<RumorMessage> = _incomingMessages
 
+    /**
+     * Per-message delivery confirmations from peer ACKs. Emits a message ID the moment a
+     * direct peer confirms accepting it. Confirms peer-hop delivery only — not end-to-end.
+     */
+    private val _deliveryEvents = MutableSharedFlow<String>(extraBufferCapacity = 256)
+    val deliveryEvents: SharedFlow<String> = _deliveryEvents
+
     // ── Transport intake ──────────────────────────────────────────────────────
 
     /**
@@ -80,15 +87,14 @@ class GossipEngine @Inject constructor(
                 topologyTracker.recordSession(result.peerUserId, result.durationMs, hopCount = 1)
                 onlineStatusTracker.recordDirectContact(result.peerUserId)
             }
-            onlineStatusTracker.mergeRemoteStatus(result.peerOnlineUsers, result.durationMs)
+            onlineStatusTracker.mergeRemoteStatus(result.peerOnlineUsers)
+
+            for (id in result.ackedByPeer) _deliveryEvents.emit(id)
 
             val autoRelayIds = contactDao.getAutoRelayContacts().map { it.userId }.toSet()
 
             for (msg in result.messagesReceived) {
-                val adjusted = msg.copy(
-                    elapsedMs = msg.elapsedMs + result.durationMs,
-                    receivedAtMs = System.currentTimeMillis(),
-                )
+                val adjusted = msg.copy(receivedAtMs = System.currentTimeMillis())
                 processIncoming(adjusted, autoRelayIds)
             }
         }
@@ -221,7 +227,7 @@ class GossipEngine @Inject constructor(
             senderId = identity.userId,
             senderPublicKey = identity.publicKeyBytes.toBase64(),
             sequenceNumber = sequenceCounter.getAndIncrement(),
-            elapsedMs = 0,
+            sentAtMs = System.currentTimeMillis(),
             type = type,
             ttl = ttl,
             payload = payload,

@@ -68,31 +68,27 @@ class OnlineStatusTracker @Inject constructor() {
     /**
      * Merge the online-status map received from a remote peer.
      *
-     * Remote entries carry elapsed-ms (not epoch) computed at the peer's send time,
-     * so they are converted to local epoch before storing. [sessionDurationMs] is
-     * added to each elapsed value to compensate for the time the exchange itself
-     * took — without this, every entry would be underaged by up to ~30 seconds.
-     * Existing fresher entries are never overwritten.
+     * Wire values are wall-clock epoch ms — every Android device has a hardware RTC,
+     * so we can store and forward absolute timestamps directly without per-hop drift
+     * accumulation. The fresher epoch wins. Tolerates small clock skew between
+     * devices (worst case: a peer's slightly-fast clock makes a contact look
+     * marginally more recent than reality).
      */
-    fun mergeRemoteStatus(remoteUsers: Map<String, Long>, sessionDurationMs: Long = 0) {
-        val now = System.currentTimeMillis()
-        for ((userId, elapsedMs) in remoteUsers) {
-            val estimated = now - elapsedMs - sessionDurationMs
-            lastSeen.merge(userId, estimated) { existing, new -> maxOf(existing, new) }
+    fun mergeRemoteStatus(remoteUsers: Map<String, Long>) {
+        for ((userId, sentAtMs) in remoteUsers) {
+            lastSeen.merge(userId, sentAtMs) { existing, new -> maxOf(existing, new) }
         }
         if (remoteUsers.isNotEmpty()) refresh()
     }
 
     /**
-     * Returns a snapshot of recently-seen users as elapsed-ms values,
+     * Returns a snapshot of recently-seen users as wall-clock epoch timestamps,
      * suitable for inclusion in a [GossipPacket.OnlineStatus] message.
      * Only includes entries within [RECENTLY_MS] to keep the payload small.
      */
-    fun currentAsElapsed(): Map<String, Long> {
-        val now = System.currentTimeMillis()
-        return lastSeen
-            .filter { (_, ts) -> now - ts < RECENTLY_MS }
-            .mapValues { (_, ts) -> now - ts }
+    fun currentSnapshot(): Map<String, Long> {
+        val cutoff = System.currentTimeMillis() - RECENTLY_MS
+        return lastSeen.filter { (_, ts) -> ts > cutoff }
     }
 
     fun statusFor(userId: String): OnlineStatus = classify(

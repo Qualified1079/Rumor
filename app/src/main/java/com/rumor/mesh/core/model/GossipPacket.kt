@@ -50,8 +50,21 @@ sealed class GossipPacket {
     ) : GossipPacket()
 
     /**
+     * Lightweight delivery acknowledgement sent after the MESSAGE phase.
+     * Lists the message IDs the receiver actually accepted and ingested in this
+     * session. Only confirms peer-hop delivery (the message left this device and
+     * was accepted by a direct peer), not end-to-end delivery to the final recipient.
+     */
+    @Serializable @SerialName("ack")
+    data class Ack(
+        val acceptedIds: List<String>,
+    ) : GossipPacket()
+
+    /**
      * Recently-seen user IDs shared during gossip exchange.
-     * Key = User ID, Value = elapsed ms since last seen (not an epoch — stays clock-agnostic).
+     * Key = User ID, Value = wall-clock epoch ms when that user was last seen.
+     * Devices use their hardware RTC; small clock skew is acceptable for the
+     * "online within the last N minutes" granularity this map drives.
      */
     @Serializable @SerialName("online_status")
     data class OnlineStatus(

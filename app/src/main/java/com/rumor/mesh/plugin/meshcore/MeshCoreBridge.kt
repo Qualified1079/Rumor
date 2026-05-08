@@ -96,7 +96,7 @@ class MeshCoreBridge : BasePlugin() {
             senderId         = "meshcore_PLACEHOLDER",
             senderPublicKey  = "",
             sequenceNumber   = System.currentTimeMillis(),
-            elapsedMs        = 0,
+            sentAtMs         = System.currentTimeMillis(),
             type             = MessageType.BROADCAST,
             ttl              = 3,
             payload          = MessagePayload(ContentType.TEXT, "TODO: decoded payload"),

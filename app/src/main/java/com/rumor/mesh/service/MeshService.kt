@@ -120,7 +120,7 @@ class MeshService : Service(), MeshController {
             signer             = identityManager::sign,
             messageProvider    = gossipEngine::messagesForExchange,
             knownIdsProvider   = gossipEngine::knownMessageIds,
-            onlineUsersProvider = onlineStatusTracker::currentAsElapsed,
+            onlineUsersProvider = onlineStatusTracker::currentSnapshot,
         )
 
         // ── Wire gossip engine output → plugins ──────────────────────────────

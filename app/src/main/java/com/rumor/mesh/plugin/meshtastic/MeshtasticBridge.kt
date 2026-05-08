@@ -131,7 +131,7 @@ class MeshtasticBridge : BasePlugin() {
             senderId         = "meshtastic_PLACEHOLDER",  // TODO: real node ID
             senderPublicKey  = "",                        // Meshtastic nodes don't use Ed25519
             sequenceNumber   = System.currentTimeMillis(),
-            elapsedMs        = 0,
+            sentAtMs         = System.currentTimeMillis(),
             type             = MessageType.BROADCAST,
             ttl              = 3,                         // TODO: map from Meshtastic hop_limit
             payload          = MessagePayload(ContentType.TEXT, "TODO: decoded payload"),

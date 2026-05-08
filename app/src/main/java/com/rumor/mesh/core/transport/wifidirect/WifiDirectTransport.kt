@@ -253,6 +253,7 @@ class WifiDirectTransport @Inject constructor(
                 messagesReceived = result.messagesReceived,
                 messagesSent    = result.messagesSent,
                 peerOnlineUsers = result.peerOnlineUsers,
+                ackedByPeer     = result.ackedByPeer,
                 durationMs      = result.durationMs,
                 source          = ExchangeSource.WIFI_DIRECT,
             )

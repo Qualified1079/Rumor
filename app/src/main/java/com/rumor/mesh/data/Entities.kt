@@ -20,7 +20,7 @@ data class MessageEntity(
     val senderId: String,
     val senderPublicKey: String,
     val sequenceNumber: Long,
-    val elapsedMs: Long,
+    val sentAtMs: Long,
     val type: MessageType,
     val ttl: Int,
     val contentType: ContentType?,
