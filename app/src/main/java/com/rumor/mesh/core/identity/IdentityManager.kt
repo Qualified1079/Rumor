@@ -8,14 +8,11 @@ import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
 import com.rumor.mesh.core.logging.RumorLog
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.security.MessageDigest
 import java.util.UUID
-import javax.inject.Inject
-import javax.inject.Singleton
 
 data class LocalIdentity(
     val userId: String,
@@ -23,10 +20,8 @@ data class LocalIdentity(
     val publicKeyBytes: ByteArray,
     val privateKeyBytes: ByteArray,
 )
-
-@Singleton
-class IdentityManager @Inject constructor(
-    @ApplicationContext private val context: Context,
+class IdentityManager(
+    private val context: Context,
 ) {
     private val TAG = "IdentityManager"
     private val PREFS_NAME = "rumor_identity"

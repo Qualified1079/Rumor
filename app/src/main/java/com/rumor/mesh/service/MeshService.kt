@@ -23,14 +23,13 @@ import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.transport.ble.BleDiscoveryManager
 import com.rumor.mesh.core.transport.wifidirect.WifiDirectTransport
 import com.rumor.mesh.plugin.PluginRegistry
-import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import org.koin.android.ext.android.inject
 import java.util.Base64
-import javax.inject.Inject
 
 /**
  * Foreground service that orchestrates all mesh modules.
@@ -50,21 +49,20 @@ import javax.inject.Inject
  * To add a new bridge plugin, instantiate it and call [PluginRegistry.register]
  * inside [startMesh]. That's the only place you need to touch.
  */
-@AndroidEntryPoint
 class MeshService : Service(), MeshController {
 
     private val TAG = "MeshService"
     private val CHANNEL_ID = "rumor_mesh"
     private val NOTIFICATION_ID = 1
 
-    @Inject lateinit var bleDiscovery: BleDiscoveryManager
-    @Inject lateinit var wifiDirectTransport: WifiDirectTransport
-    @Inject lateinit var gossipEngine: GossipEngine
-    @Inject lateinit var identityManager: IdentityManager
-    @Inject lateinit var onlineStatusTracker: OnlineStatusTracker
-    @Inject lateinit var topologyTracker: TopologyTracker
-    @Inject lateinit var breadcrumbCache: BreadcrumbCache
-    @Inject lateinit var pluginRegistry: PluginRegistry
+    private val bleDiscovery: BleDiscoveryManager by inject()
+    private val wifiDirectTransport: WifiDirectTransport by inject()
+    private val gossipEngine: GossipEngine by inject()
+    private val identityManager: IdentityManager by inject()
+    private val onlineStatusTracker: OnlineStatusTracker by inject()
+    private val topologyTracker: TopologyTracker by inject()
+    private val breadcrumbCache: BreadcrumbCache by inject()
+    private val pluginRegistry: PluginRegistry by inject()
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val binder = LocalBinder()

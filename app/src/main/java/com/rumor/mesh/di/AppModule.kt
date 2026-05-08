@@ -1,49 +1,66 @@
 package com.rumor.mesh.di
 
-import android.content.Context
-import com.rumor.mesh.data.BlockEntryDao
-import com.rumor.mesh.data.BlocklistEntryDao
-import com.rumor.mesh.data.BreadcrumbDao
-import com.rumor.mesh.data.ContactDao
-import com.rumor.mesh.data.MessageDao
-import com.rumor.mesh.data.RouteDao
+import com.rumor.mesh.core.identity.IdentityManager
+import com.rumor.mesh.core.protocol.DuplicateFilter
+import com.rumor.mesh.core.protocol.GossipEngine
+import com.rumor.mesh.core.protocol.MessageStore
+import com.rumor.mesh.core.routing.BreadcrumbCache
+import com.rumor.mesh.core.routing.OnlineStatusTracker
+import com.rumor.mesh.core.routing.TopologyTracker
+import com.rumor.mesh.core.transport.ble.BleDiscoveryManager
+import com.rumor.mesh.core.transport.wifidirect.WifiDirectTransport
 import com.rumor.mesh.data.RumorDatabase
-import com.rumor.mesh.data.SubscribedBlocklistDao
-import com.rumor.mesh.service.MeshController
-import com.rumor.mesh.service.MeshService
-import dagger.Module
-import dagger.Provides
-import dagger.hilt.InstallIn
-import dagger.hilt.android.qualifiers.ApplicationContext
-import dagger.hilt.components.SingletonComponent
-import javax.inject.Singleton
+import com.rumor.mesh.plugin.PluginRegistry
+import com.rumor.mesh.service.MeshControllerHolder
+import com.rumor.mesh.ui.contacts.ContactsViewModel
+import com.rumor.mesh.ui.feed.FeedViewModel
+import com.rumor.mesh.ui.settings.SettingsViewModel
+import org.koin.android.ext.koin.androidContext
+import org.koin.androidx.viewmodel.dsl.viewModel
+import org.koin.dsl.module
 
-@Module
-@InstallIn(SingletonComponent::class)
-object AppModule {
+/**
+ * Koin module wiring all singletons + ViewModels.
+ *
+ * Replaces the previous Hilt setup. Constructor params on each class are
+ * resolved via `get()`; ViewModels register through `viewModel { ... }` so
+ * Compose's `koinViewModel()` can fetch them.
+ */
+val appModule = module {
 
-    @Provides @Singleton
-    fun provideDatabase(@ApplicationContext ctx: Context): RumorDatabase =
-        RumorDatabase.create(ctx)
+    // ── Database + DAOs ───────────────────────────────────────────────────────
+    single { RumorDatabase.create(androidContext()) }
+    single { get<RumorDatabase>().messageDao() }
+    single { get<RumorDatabase>().contactDao() }
+    single { get<RumorDatabase>().breadcrumbDao() }
+    single { get<RumorDatabase>().routeDao() }
+    single { get<RumorDatabase>().blockEntryDao() }
+    single { get<RumorDatabase>().subscribedBlocklistDao() }
+    single { get<RumorDatabase>().blocklistEntryDao() }
 
-    @Provides @Singleton
-    fun provideMessageDao(db: RumorDatabase): MessageDao = db.messageDao()
+    // ── Identity ──────────────────────────────────────────────────────────────
+    single { IdentityManager(androidContext()) }
 
-    @Provides @Singleton
-    fun provideContactDao(db: RumorDatabase): ContactDao = db.contactDao()
+    // ── Protocol layer ────────────────────────────────────────────────────────
+    single { DuplicateFilter() }
+    single { MessageStore(get(), get(), get()) }
+    single { OnlineStatusTracker() }
+    single { TopologyTracker(get()) }
+    single { BreadcrumbCache(get()) }
+    single { GossipEngine(get(), get(), get(), get(), get(), get()) }
 
-    @Provides @Singleton
-    fun provideBreadcrumbDao(db: RumorDatabase): BreadcrumbDao = db.breadcrumbDao()
+    // ── Transport ─────────────────────────────────────────────────────────────
+    single { BleDiscoveryManager(androidContext()) }
+    single { WifiDirectTransport(androidContext()) }
 
-    @Provides @Singleton
-    fun provideRouteDao(db: RumorDatabase): RouteDao = db.routeDao()
+    // ── Plugins ───────────────────────────────────────────────────────────────
+    single { PluginRegistry(get(), get(), get()) }
 
-    @Provides @Singleton
-    fun provideBlockEntryDao(db: RumorDatabase): BlockEntryDao = db.blockEntryDao()
+    // ── Service binding bridge ────────────────────────────────────────────────
+    single { MeshControllerHolder() }
 
-    @Provides @Singleton
-    fun provideSubscribedBlocklistDao(db: RumorDatabase): SubscribedBlocklistDao = db.subscribedBlocklistDao()
-
-    @Provides @Singleton
-    fun provideBlocklistEntryDao(db: RumorDatabase): BlocklistEntryDao = db.blocklistEntryDao()
+    // ── ViewModels ────────────────────────────────────────────────────────────
+    viewModel { FeedViewModel(get(), get<MeshControllerHolder>()) }
+    viewModel { ContactsViewModel(get(), get()) }
+    viewModel { SettingsViewModel(get(), androidContext()) }
 }

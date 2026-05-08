@@ -1,8 +1,6 @@
 package com.rumor.mesh.core.protocol
 
 import java.util.LinkedHashMap
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * In-memory size-bounded LRU cache of seen message IDs.
@@ -12,8 +10,7 @@ import javax.inject.Singleton
  * (32-char hex key + LinkedHashMap node), so we budget ~0.5% of max heap.
  * Bounded to a sane range to avoid extremes on tiny or very large heaps.
  */
-@Singleton
-class DuplicateFilter @Inject constructor() {
+class DuplicateFilter() {
 
     private val MIN_CAPACITY = 2_000
     private val MAX_CAPACITY = 200_000

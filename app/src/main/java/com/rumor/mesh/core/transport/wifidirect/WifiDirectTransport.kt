@@ -16,7 +16,6 @@ import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.ExchangeSource
 import com.rumor.mesh.core.protocol.PeerExchangeResult
 import com.rumor.mesh.core.transport.DeviceQuirks
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,8 +26,6 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Wi-Fi Direct transport layer.
@@ -53,9 +50,8 @@ import javax.inject.Singleton
  * providers for messages and known IDs. These are provided at start-time
  * (not as mutable fields) so there are no race conditions with the identity lock.
  */
-@Singleton
-class WifiDirectTransport @Inject constructor(
-    @ApplicationContext private val context: Context,
+class WifiDirectTransport(
+    private val context: Context,
 ) {
     private val TAG = "WifiDirect"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())

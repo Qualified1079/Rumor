@@ -20,8 +20,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
-import javax.inject.Inject
-import javax.inject.Singleton
 
 private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_TTL = 7
@@ -50,8 +48,7 @@ private const val MAX_DIRECT_TTL = DEFAULT_DIRECT_TTL
  * - [messagesForExchange] / [knownMessageIds] — polled by the transport layer
  *   before each gossip session
  */
-@Singleton
-class GossipEngine @Inject constructor(
+class GossipEngine(
     private val messageStore: MessageStore,
     private val duplicateFilter: DuplicateFilter,
     private val identityManager: IdentityManager,

@@ -7,14 +7,11 @@ import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.transport.DeviceQuirks
-import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 data class SettingsState(
     val userId: String? = null,
@@ -24,11 +21,9 @@ data class SettingsState(
     val debugLogging: Boolean = false,
     val showBatteryOptimisationWarning: Boolean = false,
 )
-
-@HiltViewModel
-class SettingsViewModel @Inject constructor(
+class SettingsViewModel(
     private val identityManager: IdentityManager,
-    @ApplicationContext private val context: Context,
+    private val context: Context,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SettingsState())

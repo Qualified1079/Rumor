@@ -7,16 +7,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Tracks which peer a ping for a given target User ID arrived from.
  * Used to route return messages toward a target without carrying the full path.
  * Capped at 5 hops per target; backed by persistent storage.
  */
-@Singleton
-class BreadcrumbCache @Inject constructor(
+class BreadcrumbCache(
     private val breadcrumbDao: BreadcrumbDao,
 ) {
     private val TAG = "BreadcrumbCache"

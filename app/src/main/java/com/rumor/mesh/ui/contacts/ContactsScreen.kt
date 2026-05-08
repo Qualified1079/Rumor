@@ -16,7 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import org.koin.androidx.compose.koinViewModel
 import com.rumor.mesh.core.model.OnlineStatus
 import com.rumor.mesh.ui.theme.AwayGrey
 import com.rumor.mesh.ui.theme.OnlineGreen
@@ -25,7 +25,7 @@ import com.rumor.mesh.ui.theme.RecentlyAmber
 @Composable
 fun ContactsScreen(
     onOpenThread: (peerId: String) -> Unit = {},
-    viewModel: ContactsViewModel = hiltViewModel(),
+    viewModel: ContactsViewModel = koinViewModel(),
 ) {
     val contacts by viewModel.contacts.collectAsState()
 

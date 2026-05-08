@@ -12,8 +12,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Tracks which User IDs have been recently seen on the mesh and classifies
@@ -33,8 +31,7 @@ import javax.inject.Singleton
  * [OnlineStatus] and [PeerPresence] live in core/model so both the UI and this
  * module can reference them without creating a UI → routing dependency.
  */
-@Singleton
-class OnlineStatusTracker @Inject constructor() {
+class OnlineStatusTracker() {
 
     private val TAG = "OnlineStatus"
 

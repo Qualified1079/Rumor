@@ -22,6 +22,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.rumor.mesh.core.identity.IdentityManager
+import com.rumor.mesh.service.MeshControllerHolder
 import com.rumor.mesh.service.MeshService
 import com.rumor.mesh.ui.contacts.ContactsScreen
 import com.rumor.mesh.ui.feed.FeedScreen
@@ -30,13 +31,23 @@ import com.rumor.mesh.ui.navigation.bottomNavItems
 import com.rumor.mesh.ui.onboarding.OnboardingScreen
 import com.rumor.mesh.ui.settings.SettingsScreen
 import com.rumor.mesh.ui.theme.RumorTheme
-import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
+import org.koin.android.ext.android.inject
 
-@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    @Inject lateinit var identityManager: IdentityManager
+    private val identityManager: IdentityManager by inject()
+    private val meshControllerHolder: MeshControllerHolder by inject()
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            (binder as? MeshService.LocalBinder)?.let {
+                meshControllerHolder.set(it.getController())
+            }
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            meshControllerHolder.clear()
+        }
+    }
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -56,10 +67,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Start mesh service if identity is already unlocked
+        // Start mesh service if identity is already unlocked, then bind so the
+        // controller holder gets a live handle for ViewModels to call into.
         if (identityManager.isUnlocked) {
-            ContextCompat.startForegroundService(this, Intent(this, MeshService::class.java))
+            val intent = Intent(this, MeshService::class.java)
+            ContextCompat.startForegroundService(this, intent)
+            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         }
+    }
+
+    override fun onStop() {
+        runCatching { unbindService(serviceConnection) }
+        meshControllerHolder.clear()
+        super.onStop()
     }
 
     private fun requestRequiredPermissions() {

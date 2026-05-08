@@ -4,18 +4,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.MessageStore
-import com.rumor.mesh.service.MeshController
-import dagger.hilt.android.lifecycle.HiltViewModel
+import com.rumor.mesh.service.MeshControllerHolder
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
-@HiltViewModel
-class FeedViewModel @Inject constructor(
+class FeedViewModel(
     private val messageStore: MessageStore,
-    private val meshController: MeshController,
+    private val controllerHolder: MeshControllerHolder,
 ) : ViewModel() {
 
     val broadcasts: StateFlow<List<RumorMessage>> = messageStore
@@ -24,11 +21,11 @@ class FeedViewModel @Inject constructor(
 
     fun sendBroadcast(text: String) {
         if (text.isBlank()) return
-        meshController.sendBroadcast(text.trim())
+        controllerHolder.controller().sendBroadcast(text.trim())
     }
 
     fun relay(message: RumorMessage) {
-        meshController.manualRelay(message)
+        controllerHolder.controller().manualRelay(message)
         viewModelScope.launch {
             messageStore.markRelayed(message.id)
         }

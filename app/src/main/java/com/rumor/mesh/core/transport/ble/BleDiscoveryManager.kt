@@ -13,13 +13,10 @@ import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.transport.DeviceQuirks
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * BLE discovery module.
@@ -30,9 +27,8 @@ import javax.inject.Singleton
  *
  * Identity is established later via the gossip session HELLO handshake.
  */
-@Singleton
-class BleDiscoveryManager @Inject constructor(
-    @ApplicationContext private val context: Context,
+class BleDiscoveryManager(
+    private val context: Context,
 ) {
     private val TAG = "BleDiscovery"
 

@@ -6,7 +6,6 @@ import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.GossipEngine
 import com.rumor.mesh.data.ContactDao
-import dagger.hilt.android.scopes.ServiceScoped
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -14,8 +13,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.map
 import java.util.concurrent.CopyOnWriteArrayList
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Manages the lifecycle of all registered plugins and provides each one with
@@ -27,8 +24,7 @@ import javax.inject.Singleton
  * 2. Call [register] from [com.rumor.mesh.service.MeshService] after the service starts.
  * 3. That's it. The registry handles the rest.
  */
-@Singleton
-class PluginRegistry @Inject constructor(
+class PluginRegistry(
     private val gossipEngine: GossipEngine,
     private val identityManager: IdentityManager,
     private val contactDao: ContactDao,

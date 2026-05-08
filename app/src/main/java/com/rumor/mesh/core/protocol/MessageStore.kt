@@ -11,17 +11,13 @@ import com.rumor.mesh.data.MessageDao
 import com.rumor.mesh.data.MessageEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import javax.inject.Inject
-import javax.inject.Singleton
 
 private const val TAG = "MessageStore"
 private const val DEFAULT_BROADCAST_TTL = 7
 private const val MANUAL_RELAY_BOOST = 2
 private const val MAX_MESSAGES = 50_000
 private const val EVICT_BATCH = 500
-
-@Singleton
-class MessageStore @Inject constructor(
+class MessageStore(
     private val messageDao: MessageDao,
     private val contactDao: ContactDao,
     private val duplicateFilter: DuplicateFilter,

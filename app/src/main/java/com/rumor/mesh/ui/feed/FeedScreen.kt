@@ -15,14 +15,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
+import org.koin.androidx.compose.koinViewModel
 import com.rumor.mesh.core.model.RumorMessage
 import java.text.SimpleDateFormat
 import java.util.*
 
 @Composable
 fun FeedScreen(
-    viewModel: FeedViewModel = hiltViewModel(),
+    viewModel: FeedViewModel = koinViewModel(),
 ) {
     val broadcasts by viewModel.broadcasts.collectAsState()
     var composeText by remember { mutableStateOf("") }

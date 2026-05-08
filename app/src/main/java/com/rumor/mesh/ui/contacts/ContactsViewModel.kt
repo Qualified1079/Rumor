@@ -6,22 +6,18 @@ import com.rumor.mesh.core.model.PeerPresence
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.data.ContactDao
 import com.rumor.mesh.data.ContactEntity
-import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 data class ContactWithStatus(
     val contact: ContactEntity,
     /** Null if this contact has never been seen on the mesh. */
     val presence: PeerPresence?,
 )
-
-@HiltViewModel
-class ContactsViewModel @Inject constructor(
+class ContactsViewModel(
     private val contactDao: ContactDao,
     private val onlineStatusTracker: OnlineStatusTracker,
 ) : ViewModel() {

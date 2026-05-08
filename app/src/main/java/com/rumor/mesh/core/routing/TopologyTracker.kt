@@ -8,8 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Learns network topology passively from gossip session timing.
@@ -17,8 +15,7 @@ import javax.inject.Singleton
  * Over time, each node builds a picture of which routes are fastest.
  * No extra traffic required — data piggybacks on normal message exchange.
  */
-@Singleton
-class TopologyTracker @Inject constructor(
+class TopologyTracker(
     private val routeDao: RouteDao,
 ) {
     private val TAG = "TopologyTracker"
