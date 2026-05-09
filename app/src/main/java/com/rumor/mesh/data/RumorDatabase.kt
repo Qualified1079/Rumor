@@ -15,8 +15,10 @@ import androidx.room.TypeConverters
         BlockEntryEntity::class,
         SubscribedBlocklistEntity::class,
         BlocklistEntryEntity::class,
+        TransferEntity::class,
+        ChunkEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -28,6 +30,8 @@ abstract class RumorDatabase : RoomDatabase() {
     abstract fun blockEntryDao(): BlockEntryDao
     abstract fun subscribedBlocklistDao(): SubscribedBlocklistDao
     abstract fun blocklistEntryDao(): BlocklistEntryDao
+    abstract fun transferDao(): TransferDao
+    abstract fun chunkDao(): ChunkDao
 
     companion object {
         private const val DB_NAME = "rumor.db"

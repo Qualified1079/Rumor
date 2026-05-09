@@ -40,10 +40,16 @@ data class RumorMessage(
 
 @Serializable
 enum class MessageType {
-    @SerialName("broadcast") BROADCAST,
-    @SerialName("direct")    DIRECT,
-    @SerialName("ping")      PING,
-    @SerialName("pong")      PONG,
+    @SerialName("broadcast")         BROADCAST,
+    @SerialName("direct")            DIRECT,
+    @SerialName("ping")              PING,
+    @SerialName("pong")              PONG,
+    /** Announces a chunked transfer: metadata, chunk count, content hash. */
+    @SerialName("transfer_metadata") TRANSFER_METADATA,
+    /** A single chunk of a larger transfer payload. */
+    @SerialName("chunk")             CHUNK,
+    /** NACK: request re-transmission of specific missing chunks. Routed as DM to original sender. */
+    @SerialName("chunk_request")     CHUNK_REQUEST,
 }
 
 @Serializable

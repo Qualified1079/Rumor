@@ -220,6 +220,20 @@ class GossipEngine(
                 if (forwarded.ttl > 0) enqueueRelay(forwarded)
             }
             MessageType.PONG -> { /* handled by routing */ }
+            // Transfer types route like DIRECT: only forward if not addressed to us.
+            MessageType.TRANSFER_METADATA, MessageType.CHUNK -> {
+                val localId = identityManager.identity.value?.userId
+                if (msg.recipientId == null || msg.recipientId == localId) return
+                val forwarded = messageStore.decrementTtl(msg) ?: return
+                enqueueRelay(forwarded)
+            }
+            // CHUNK_REQUEST is a NACK routed back to the original sender — same as DIRECT relay.
+            MessageType.CHUNK_REQUEST -> {
+                val localId = identityManager.identity.value?.userId
+                if (msg.recipientId == localId) return
+                val forwarded = messageStore.decrementTtl(msg) ?: return
+                enqueueRelay(forwarded)
+            }
         }
     }
 
@@ -227,7 +241,8 @@ class GossipEngine(
     private fun clampTtl(msg: RumorMessage): RumorMessage {
         val ceiling = when (msg.type) {
             MessageType.BROADCAST, MessageType.PING, MessageType.PONG -> MAX_BROADCAST_TTL
-            MessageType.DIRECT -> MAX_DIRECT_TTL
+            MessageType.DIRECT, MessageType.TRANSFER_METADATA,
+            MessageType.CHUNK, MessageType.CHUNK_REQUEST -> MAX_DIRECT_TTL
         }
         return if (msg.ttl > ceiling) msg.copy(ttl = ceiling) else msg
     }

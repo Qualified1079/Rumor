@@ -40,6 +40,8 @@ val appModule = module {
     single { get<RumorDatabase>().blockEntryDao() }
     single { get<RumorDatabase>().subscribedBlocklistDao() }
     single { get<RumorDatabase>().blocklistEntryDao() }
+    single { get<RumorDatabase>().transferDao() }
+    single { get<RumorDatabase>().chunkDao() }
 
     // ── Identity ──────────────────────────────────────────────────────────────
     single { IdentityManager(androidContext()) }
