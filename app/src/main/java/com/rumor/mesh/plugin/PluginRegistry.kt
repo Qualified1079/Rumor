@@ -9,9 +9,11 @@ import com.rumor.mesh.data.ContactDao
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.map
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -31,6 +33,8 @@ class PluginRegistry(
 ) {
     private val TAG = "PluginRegistry"
     private val plugins = CopyOnWriteArrayList<RumorPlugin>()
+    /** Per-plugin host-owned scopes. Cancelled on unregister regardless of plugin behaviour. */
+    private val pluginScopes = ConcurrentHashMap<String, CoroutineScope>()
 
     /**
      * Register a plugin and call its [RumorPlugin.onAttach].
@@ -39,16 +43,24 @@ class PluginRegistry(
      */
     fun register(plugin: RumorPlugin) {
         unregister(plugin.pluginId)
-        val ctx = PluginContextImpl(plugin.pluginId)
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        pluginScopes[plugin.pluginId] = scope
+        val ctx = PluginContextImpl(plugin.pluginId, scope)
         plugin.onAttach(ctx)
         plugins.add(plugin)
         RumorLog.i(TAG, "Registered plugin: ${plugin.pluginId} (${plugin.displayName} v${plugin.version})")
     }
 
-    /** Unregister a plugin by ID and call its [RumorPlugin.onDetach]. */
+    /**
+     * Unregister a plugin by ID. Cancels the host-owned scope first — killing every
+     * coroutine the plugin started — and then calls [RumorPlugin.onDetach]. This
+     * order guarantees toggleability even for plugins whose own cleanup is incorrect.
+     */
     fun unregister(pluginId: String) {
         val plugin = plugins.firstOrNull { it.pluginId == pluginId } ?: return
-        plugin.onDetach()
+        pluginScopes.remove(pluginId)?.cancel()
+        runCatching { plugin.onDetach() }
+            .onFailure { RumorLog.w(TAG, "Plugin $pluginId threw in onDetach", it) }
         plugins.remove(plugin)
         RumorLog.i(TAG, "Unregistered plugin: $pluginId")
     }
@@ -80,6 +92,7 @@ class PluginRegistry(
      */
     private inner class PluginContextImpl(
         override val pluginId: String,
+        override val scope: CoroutineScope,
     ) : PluginContext {
 
         override val localUserId: String?

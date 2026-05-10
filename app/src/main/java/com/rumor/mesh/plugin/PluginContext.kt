@@ -2,6 +2,7 @@ package com.rumor.mesh.plugin
 
 import com.rumor.mesh.core.logging.LogLevel
 import com.rumor.mesh.core.model.RumorMessage
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -64,6 +65,18 @@ interface PluginContext {
 
     /** Stable plugin ID — same as [RumorPlugin.pluginId]. Provided for convenience inside [sendMessage]. */
     val pluginId: String
+
+    /**
+     * Host-owned [CoroutineScope] tied to this plugin's enabled lifetime.
+     *
+     * Plugins should launch all background work here. The host cancels this
+     * scope when the plugin is disabled or the service is shutting down,
+     * which kills every coroutine the plugin started — regardless of whether
+     * the plugin's [RumorPlugin.onDetach] cleans up. This makes toggleability
+     * a property of the *wrapper*, not something every plugin author has to
+     * implement correctly.
+     */
+    val scope: CoroutineScope
 
     companion object {
         /**

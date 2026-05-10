@@ -47,11 +47,19 @@ abstract class BasePlugin : RumorPlugin {
         private set
 
     /**
-     * Coroutine scope tied to the plugin's lifetime.
-     * Automatically cancelled when [onDetach] is called.
-     * Use this for hardware read loops, retry logic, etc.
+     * Coroutine scope for plugin background work.
+     *
+     * Returns the host-owned scope from [PluginContext.scope] once attached.
+     * The host cancels that scope when the plugin is disabled — every coroutine
+     * launched here dies, regardless of whether [onDetach] is well-behaved.
+     *
+     * Pre-attach use is unsupported (returns a one-shot fallback for safety
+     * during early init only).
      */
-    protected val pluginScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    protected val pluginScope: CoroutineScope
+        get() = context?.scope ?: fallbackScope
+
+    private val fallbackScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onAttach(context: PluginContext) {
         this.context = context
@@ -60,7 +68,9 @@ abstract class BasePlugin : RumorPlugin {
 
     override fun onDetach() {
         log(LogLevel.INFO, "$displayName detaching")
-        pluginScope.cancel()
+        // Host already cancelled context.scope; cancel the fallback too in case
+        // any pre-attach work was launched there.
+        fallbackScope.cancel()
         context = null
     }
 
