@@ -50,6 +50,10 @@ enum class MessageType {
     @SerialName("chunk")             CHUNK,
     /** NACK: request re-transmission of specific missing chunks. Routed as DM to original sender. */
     @SerialName("chunk_request")     CHUNK_REQUEST,
+    /** Signed full blocklist snapshot from a publisher. Broadcast through the mesh. */
+    @SerialName("blocklist_publish") BLOCKLIST_PUBLISH,
+    /** Signed incremental blocklist diff from a publisher. Broadcast through the mesh. */
+    @SerialName("blocklist_diff")    BLOCKLIST_DIFF,
 }
 
 @Serializable

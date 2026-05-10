@@ -83,6 +83,12 @@ class BlockManager(
 
     suspend fun activeLocalBlocks(): List<BlockEntryEntity> = blockEntryDao.getActive()
 
+    /**
+     * Refresh the in-memory union after an externally-driven write — e.g.
+     * [BlocklistGossipBridge] applying a subscribed publisher's snapshot.
+     */
+    suspend fun refreshExternal() = refresh()
+
     // ── Encrypted export / import ─────────────────────────────────────────────
 
     /**

@@ -293,13 +293,20 @@ class GossipEngine(
                 val forwarded = messageStore.decrementTtl(msg) ?: return
                 enqueueRelay(forwarded)
             }
+            // Blocklist artifacts flood like BROADCAST — every node that subscribes
+            // benefits from propagation regardless of who originated.
+            MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF -> {
+                val forwarded = messageStore.decrementTtl(msg) ?: return
+                enqueueRelay(forwarded)
+            }
         }
     }
 
     /** Clamp TTL to the protocol ceiling. Senders can claim anything; receivers refuse to honor more. */
     private fun clampTtl(msg: RumorMessage): RumorMessage {
         val ceiling = when (msg.type) {
-            MessageType.BROADCAST, MessageType.PING, MessageType.PONG -> MAX_BROADCAST_TTL
+            MessageType.BROADCAST, MessageType.PING, MessageType.PONG,
+            MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF -> MAX_BROADCAST_TTL
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST -> MAX_DIRECT_TTL
         }

@@ -18,6 +18,7 @@ import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.protocol.GossipEngine
+import com.rumor.mesh.core.block.BlocklistGossipBridge
 import com.rumor.mesh.core.transfer.TransferAssembler
 import com.rumor.mesh.core.transfer.TransferSender
 import com.rumor.mesh.core.routing.BreadcrumbCache
@@ -77,6 +78,8 @@ class MeshService : Service(), MeshController {
     // Injected for side effect — its constructor subscribes to incoming gossip.
     @Suppress("unused")
     private val transferAssembler: TransferAssembler by inject()
+    @Suppress("unused")
+    private val blocklistGossipBridge: BlocklistGossipBridge by inject()
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val binder = LocalBinder()

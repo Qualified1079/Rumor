@@ -1,6 +1,7 @@
 package com.rumor.mesh.di
 
 import com.rumor.mesh.core.block.BlockManager
+import com.rumor.mesh.core.block.BlocklistGossipBridge
 import com.rumor.mesh.core.block.BlocklistPublisher
 import com.rumor.mesh.core.block.BlocklistSubscriber
 import com.rumor.mesh.core.identity.IdentityManager
@@ -56,6 +57,8 @@ val appModule = module {
     single { BlockManager(get(), get(), get()) }
     single { BlocklistPublisher(get(), get()) }
     single { BlocklistSubscriber(get(), get()) }
+    // Bridge wires publisher/subscriber into gossip flow. Created after GossipEngine.
+
 
     // ── Protocol layer ────────────────────────────────────────────────────────
     single { DuplicateFilter() }
@@ -70,6 +73,9 @@ val appModule = module {
     // ── Transfer layer ────────────────────────────────────────────────────────
     single { TransferAssembler(get(), get(), get()) }
     single { TransferSender(get(), get(), get(), get()) }
+
+    // ── Blocklist gossip bridge (subscribes to gossip on construction) ────────
+    single { BlocklistGossipBridge(get(), get(), get(), get()) }
 
     // ── Transport ─────────────────────────────────────────────────────────────
     single { BleDiscoveryManager(androidContext()) }
