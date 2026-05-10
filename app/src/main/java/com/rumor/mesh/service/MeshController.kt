@@ -2,6 +2,7 @@ package com.rumor.mesh.service
 
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.plugin.PluginDescriptor
 
 /**
  * Interface the UI uses to interact with the mesh.
@@ -24,4 +25,9 @@ interface MeshController {
     fun manualRelay(message: RumorMessage)
     fun triggerActiveScan()
     fun isServiceRunning(): Boolean
+
+    // ── Plugins (toggle bridges on/off at runtime) ────────────────────────────
+    fun availablePlugins(): List<PluginDescriptor>
+    fun isPluginEnabled(pluginId: String): Boolean
+    fun setPluginEnabled(pluginId: String, enabled: Boolean)
 }

@@ -4,6 +4,7 @@ import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.block.BlocklistPublisher
 import com.rumor.mesh.core.block.BlocklistSubscriber
 import com.rumor.mesh.core.identity.IdentityManager
+import com.rumor.mesh.core.policy.InboxPolicyManager
 import com.rumor.mesh.core.protocol.DuplicateFilter
 import com.rumor.mesh.core.protocol.GossipEngine
 import com.rumor.mesh.core.protocol.MessageStore
@@ -16,6 +17,7 @@ import com.rumor.mesh.core.transfer.TransferSender
 import com.rumor.mesh.core.transport.ble.BleDiscoveryManager
 import com.rumor.mesh.core.transport.wifidirect.WifiDirectTransport
 import com.rumor.mesh.data.RumorDatabase
+import com.rumor.mesh.plugin.PluginCatalog
 import com.rumor.mesh.plugin.PluginRegistry
 import com.rumor.mesh.service.MeshControllerHolder
 import com.rumor.mesh.ui.contacts.ContactsViewModel
@@ -62,7 +64,8 @@ val appModule = module {
     single { TopologyTracker(get()) }
     single { BreadcrumbCache(get()) }
     single { Scheduler() }
-    single { GossipEngine(get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { InboxPolicyManager(androidContext(), get()) }
+    single { GossipEngine(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 
     // ── Transfer layer ────────────────────────────────────────────────────────
     single { TransferAssembler(get(), get(), get()) }
@@ -74,6 +77,7 @@ val appModule = module {
 
     // ── Plugins ───────────────────────────────────────────────────────────────
     single { PluginRegistry(get(), get(), get()) }
+    single { PluginCatalog(androidContext(), get()) }
 
     // ── Service binding bridge ────────────────────────────────────────────────
     single { MeshControllerHolder() }

@@ -26,7 +26,11 @@ import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.transport.ble.BleDiscoveryManager
 import com.rumor.mesh.core.transport.wifidirect.WifiDirectTransport
 import com.rumor.mesh.data.ContactDao
+import com.rumor.mesh.plugin.PluginCatalog
+import com.rumor.mesh.plugin.PluginDescriptor
 import com.rumor.mesh.plugin.PluginRegistry
+import com.rumor.mesh.plugin.meshcore.MeshCoreBridge
+import com.rumor.mesh.plugin.meshtastic.MeshtasticBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -67,6 +71,7 @@ class MeshService : Service(), MeshController {
     private val topologyTracker: TopologyTracker by inject()
     private val breadcrumbCache: BreadcrumbCache by inject()
     private val pluginRegistry: PluginRegistry by inject()
+    private val pluginCatalog: PluginCatalog by inject()
     private val contactDao: ContactDao by inject()
     private val transferSender: TransferSender by inject()
     // Injected for side effect — its constructor subscribes to incoming gossip.
@@ -154,10 +159,28 @@ class MeshService : Service(), MeshController {
             }
         }
 
-        // ── Register bridge plugins ──────────────────────────────────────────
-        // Add new plugins here. Order doesn't matter.
-        // pluginRegistry.register(MeshtasticBridge())
-        // pluginRegistry.register(MeshCoreBridge())
+        // ── Declare available plugins ────────────────────────────────────────
+        // The catalog persists user toggle state. Adding a new plugin = one
+        // declare() call here. Nothing else in core touches plugin code paths.
+        // Plugins of any kind can be added — bridges, logging, automation, etc.
+        pluginCatalog.declare(
+            PluginDescriptor(
+                pluginId = "bridge.meshtastic",
+                displayName = "Meshtastic Bridge",
+                description = "Relay messages to/from a Meshtastic LoRa device",
+                category = "Bridges",
+                factory = { MeshtasticBridge() },
+            )
+        )
+        pluginCatalog.declare(
+            PluginDescriptor(
+                pluginId = "bridge.meshcore",
+                displayName = "MeshCore Bridge",
+                description = "Relay messages to/from a MeshCore LoRa device",
+                category = "Bridges",
+                factory = { MeshCoreBridge() },
+            )
+        )
 
         // ── Start radios ─────────────────────────────────────────────────────
         bleDiscovery.start()
@@ -213,6 +236,15 @@ class MeshService : Service(), MeshController {
     }
 
     override fun isServiceRunning() = true
+
+    override fun availablePlugins(): List<PluginDescriptor> = pluginCatalog.available()
+
+    override fun isPluginEnabled(pluginId: String): Boolean =
+        pluginCatalog.isEnabled(pluginId)
+
+    override fun setPluginEnabled(pluginId: String, enabled: Boolean) {
+        pluginCatalog.setEnabled(pluginId, enabled)
+    }
 
     // ── Notification ──────────────────────────────────────────────────────────
 

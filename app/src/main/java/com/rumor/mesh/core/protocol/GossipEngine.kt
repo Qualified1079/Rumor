@@ -9,6 +9,7 @@ import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.policy.InboxPolicyManager
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.scheduler.Scheduler
@@ -67,6 +68,11 @@ class GossipEngine(
     private val blockManager: com.rumor.mesh.core.block.BlockManager,
     /** Priority-aware outbound scheduler. All relay traffic is routed through it. */
     private val scheduler: Scheduler,
+    /**
+     * User-configurable inbox filter. Consulted only on the inbox emit path,
+     * never on the relay path — same architectural rule as [blockManager].
+     */
+    private val inboxPolicyManager: InboxPolicyManager,
 ) {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val sequenceCounter = AtomicLong(System.currentTimeMillis())
@@ -244,6 +250,7 @@ class GossipEngine(
      */
     private suspend fun emitToInbox(msg: RumorMessage) {
         if (blockManager.isBlocked(msg.senderId)) return
+        if (!inboxPolicyManager.allowsInbox(msg)) return
         _incomingMessages.emit(msg)
     }
 

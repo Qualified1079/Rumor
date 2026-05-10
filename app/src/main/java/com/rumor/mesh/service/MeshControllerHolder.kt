@@ -2,6 +2,7 @@ package com.rumor.mesh.service
 
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.plugin.PluginDescriptor
 
 /**
  * Holds the live [MeshController] handed out by [MeshService]'s binder.
@@ -33,5 +34,8 @@ class MeshControllerHolder {
         override fun manualRelay(message: RumorMessage) {}
         override fun triggerActiveScan() {}
         override fun isServiceRunning(): Boolean = false
+        override fun availablePlugins(): List<PluginDescriptor> = emptyList()
+        override fun isPluginEnabled(pluginId: String): Boolean = false
+        override fun setPluginEnabled(pluginId: String, enabled: Boolean) {}
     }
 }
