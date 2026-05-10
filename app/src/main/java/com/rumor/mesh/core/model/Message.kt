@@ -67,10 +67,12 @@ data class MessagePayload(
 
 @Serializable
 enum class ContentType {
-    @SerialName("text")  TEXT,
-    @SerialName("image") IMAGE,
-    @SerialName("voice") VOICE,
-    @SerialName("file")  FILE,
+    @SerialName("text")    TEXT,
+    @SerialName("image")   IMAGE,
+    @SerialName("voice")   VOICE,
+    @SerialName("file")    FILE,
+    /** Protocol control payloads (CHUNK_REQUEST, etc.). Not displayed in UI. */
+    @SerialName("control") CONTROL,
 }
 
 /**

@@ -10,6 +10,8 @@ import com.rumor.mesh.core.protocol.MessageStore
 import com.rumor.mesh.core.routing.BreadcrumbCache
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
+import com.rumor.mesh.core.scheduler.Scheduler
+import com.rumor.mesh.core.transfer.TransferAssembler
 import com.rumor.mesh.core.transport.ble.BleDiscoveryManager
 import com.rumor.mesh.core.transport.wifidirect.WifiDirectTransport
 import com.rumor.mesh.data.RumorDatabase
@@ -58,7 +60,11 @@ val appModule = module {
     single { OnlineStatusTracker() }
     single { TopologyTracker(get()) }
     single { BreadcrumbCache(get()) }
-    single { GossipEngine(get(), get(), get(), get(), get(), get(), get()) }
+    single { Scheduler() }
+    single { GossipEngine(get(), get(), get(), get(), get(), get(), get(), get()) }
+
+    // ── Transfer layer ────────────────────────────────────────────────────────
+    single { TransferAssembler(get(), get(), get()) }
 
     // ── Transport ─────────────────────────────────────────────────────────────
     single { BleDiscoveryManager(androidContext()) }

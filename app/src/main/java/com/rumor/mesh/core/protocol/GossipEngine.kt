@@ -4,12 +4,14 @@ import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.logging.RumorLog
+import com.rumor.mesh.core.model.ChunkRequest
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
+import com.rumor.mesh.core.scheduler.Scheduler
 import com.rumor.mesh.data.ContactDao
 import com.rumor.mesh.plugin.PluginContext
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +20,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -61,11 +65,11 @@ class GossipEngine(
      * and never from [enqueueRelay]. See architecture invariants.
      */
     private val blockManager: com.rumor.mesh.core.block.BlockManager,
+    /** Priority-aware outbound scheduler. All relay traffic is routed through it. */
+    private val scheduler: Scheduler,
 ) {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val sequenceCounter = AtomicLong(System.currentTimeMillis())
-
-    private val pendingRelay = ArrayDeque<RumorMessage>(200)
 
     /** Every new message ingested from any source. UI and plugins subscribe here. */
     private val _incomingMessages = MutableSharedFlow<RumorMessage>(extraBufferCapacity = 256)
@@ -160,12 +164,32 @@ class GossipEngine(
         scope.launch { messageStore.markRelayed(msg.id) }
     }
 
+    /**
+     * Build and enqueue a CHUNK_REQUEST NACK directed at [originalSenderId].
+     * Called by [TransferAssembler] when the NACK watchdog fires.
+     */
+    fun composeChunkRequest(
+        transferId: String,
+        missingIndices: List<Int>,
+        originalSenderId: String,
+    ): RumorMessage? {
+        val identity = identityManager.identity.value ?: return null
+        val body = Json.encodeToString(ChunkRequest(transferId, missingIndices))
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.CHUNK_REQUEST,
+            ttl = DEFAULT_DIRECT_TTL,
+            payload = MessagePayload(ContentType.CONTROL, body),
+            recipientId = originalSenderId,
+        )
+        enqueueRelay(msg)
+        return msg
+    }
+
     // ── Transport supply ──────────────────────────────────────────────────────
 
-    /** Returns pending messages to offer during the next gossip exchange. */
-    fun messagesForExchange(): List<RumorMessage> = synchronized(pendingRelay) {
-        pendingRelay.toList().also { pendingRelay.clear() }
-    }
+    /** Returns pending messages to offer during the next gossip exchange, in priority order. */
+    fun messagesForExchange(): List<RumorMessage> = scheduler.take(200)
 
     fun knownMessageIds(): Set<String> = duplicateFilter.knownIds()
 
@@ -173,7 +197,7 @@ class GossipEngine(
 
     private suspend fun processIncoming(rawMsg: RumorMessage, autoRelayIds: Set<String>) {
         val msg = clampTtl(rawMsg)
-        val isBridgeMessage = msg.signature == com.rumor.mesh.plugin.PluginContext.BRIDGE_UNSIGNED
+        val isBridgeMessage = msg.signature == PluginContext.BRIDGE_UNSIGNED
         val isNew = if (isBridgeMessage) {
             duplicateFilter.recordAndCheck(msg.id)
         } else {
@@ -247,10 +271,7 @@ class GossipEngine(
         return if (msg.ttl > ceiling) msg.copy(ttl = ceiling) else msg
     }
 
-    private fun enqueueRelay(msg: RumorMessage) = synchronized(pendingRelay) {
-        if (pendingRelay.size >= 200) pendingRelay.removeFirst()
-        pendingRelay.addLast(msg)
-    }
+    private fun enqueueRelay(msg: RumorMessage) = scheduler.enqueue(msg)
 
     private fun buildMessage(
         identity: com.rumor.mesh.core.identity.LocalIdentity,
