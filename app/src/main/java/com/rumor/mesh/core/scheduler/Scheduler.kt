@@ -21,13 +21,17 @@ import com.rumor.mesh.core.model.RumorMessage
  */
 class Scheduler(
     private val quantumBytes: Int = DEFAULT_QUANTUM_BYTES,
+    private val perFlowCap: Int = DEFAULT_PER_FLOW_CAP,
 ) {
     private val lock = Any()
     private val queues = LinkedHashMap<String, ArrayDeque<RumorMessage>>()
     private val deficits = HashMap<String, Int>()
 
     fun enqueue(msg: RumorMessage) = synchronized(lock) {
-        queues.getOrPut(flowKey(msg)) { ArrayDeque() }.addLast(msg)
+        val queue = queues.getOrPut(flowKey(msg)) { ArrayDeque() }
+        // Drop-oldest at cap so a misbehaving sender can't grow memory without bound.
+        while (queue.size >= perFlowCap) queue.removeFirst()
+        queue.addLast(msg)
     }
 
     /**
@@ -85,5 +89,7 @@ class Scheduler(
     companion object {
         /** ~60 KB — one chunk's worth of credit per round. */
         const val DEFAULT_QUANTUM_BYTES = 60_000
+        /** Per-flow queue cap; drop-oldest above this. */
+        const val DEFAULT_PER_FLOW_CAP = 500
     }
 }

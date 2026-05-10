@@ -1,5 +1,6 @@
 package com.rumor.mesh.service
 
+import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.RumorMessage
 
 /**
@@ -22,6 +23,13 @@ class MeshControllerHolder {
     private object NoOp : MeshController {
         override fun sendBroadcast(text: String) {}
         override fun sendDirect(recipientId: String, text: String) {}
+        override fun sendFile(
+            recipientId: String?,
+            contentType: ContentType,
+            data: ByteArray,
+            mimeType: String?,
+            title: String?,
+        ) {}
         override fun manualRelay(message: RumorMessage) {}
         override fun triggerActiveScan() {}
         override fun isServiceRunning(): Boolean = false

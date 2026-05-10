@@ -16,12 +16,16 @@ import com.rumor.mesh.R
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.protocol.GossipEngine
+import com.rumor.mesh.core.transfer.TransferAssembler
+import com.rumor.mesh.core.transfer.TransferSender
 import com.rumor.mesh.core.routing.BreadcrumbCache
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.transport.ble.BleDiscoveryManager
 import com.rumor.mesh.core.transport.wifidirect.WifiDirectTransport
+import com.rumor.mesh.data.ContactDao
 import com.rumor.mesh.plugin.PluginRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +67,11 @@ class MeshService : Service(), MeshController {
     private val topologyTracker: TopologyTracker by inject()
     private val breadcrumbCache: BreadcrumbCache by inject()
     private val pluginRegistry: PluginRegistry by inject()
+    private val contactDao: ContactDao by inject()
+    private val transferSender: TransferSender by inject()
+    // Injected for side effect — its constructor subscribes to incoming gossip.
+    @Suppress("unused")
+    private val transferAssembler: TransferAssembler by inject()
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val binder = LocalBinder()
@@ -172,8 +181,25 @@ class MeshService : Service(), MeshController {
 
     override fun sendDirect(recipientId: String, text: String) {
         scope.launch {
-            // TODO: look up recipientId's public key from ContactDao, then call composeDirect
-            RumorLog.d(TAG, "sendDirect → ${recipientId.take(16)}…")
+            val contact = contactDao.getById(recipientId)
+            if (contact == null) {
+                RumorLog.w(TAG, "sendDirect: no contact for ${recipientId.take(16)}… — dropping")
+                return@launch
+            }
+            val recipientKey = Base64.getDecoder().decode(contact.publicKey)
+            gossipEngine.composeDirect(recipientId, recipientKey, text)
+        }
+    }
+
+    override fun sendFile(
+        recipientId: String?,
+        contentType: ContentType,
+        data: ByteArray,
+        mimeType: String?,
+        title: String?,
+    ) {
+        scope.launch {
+            transferSender.sendFile(recipientId, contentType, data, mimeType, title)
         }
     }
 

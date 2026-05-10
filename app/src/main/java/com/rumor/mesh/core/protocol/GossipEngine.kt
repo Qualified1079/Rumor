@@ -186,6 +186,34 @@ class GossipEngine(
         return msg
     }
 
+    /**
+     * Generic composer for transfer-layer messages (TRANSFER_METADATA, CHUNK).
+     * Signs with the local identity and enqueues. Returns null if identity is locked.
+     *
+     * [recipientId] null = broadcast transfer.
+     */
+    fun composeOutbound(
+        type: MessageType,
+        payload: MessagePayload,
+        recipientId: String? = null,
+    ): RumorMessage? {
+        val identity = identityManager.identity.value ?: return null
+        val ttl = if (type == MessageType.BROADCAST || recipientId == null) {
+            DEFAULT_BROADCAST_TTL
+        } else {
+            DEFAULT_DIRECT_TTL
+        }
+        val msg = buildMessage(
+            identity = identity,
+            type = type,
+            ttl = ttl,
+            payload = payload,
+            recipientId = recipientId,
+        )
+        enqueueRelay(msg)
+        return msg
+    }
+
     // ── Transport supply ──────────────────────────────────────────────────────
 
     /** Returns pending messages to offer during the next gossip exchange, in priority order. */

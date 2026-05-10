@@ -1,5 +1,6 @@
 package com.rumor.mesh.service
 
+import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.RumorMessage
 
 /**
@@ -9,6 +10,17 @@ import com.rumor.mesh.core.model.RumorMessage
 interface MeshController {
     fun sendBroadcast(text: String)
     fun sendDirect(recipientId: String, text: String)
+    /**
+     * Send a chunked file/media payload. [recipientId] null = broadcast.
+     * Splits via Chunker, signs metadata + each chunk, enqueues for gossip.
+     */
+    fun sendFile(
+        recipientId: String?,
+        contentType: ContentType,
+        data: ByteArray,
+        mimeType: String? = null,
+        title: String? = null,
+    )
     fun manualRelay(message: RumorMessage)
     fun triggerActiveScan()
     fun isServiceRunning(): Boolean
