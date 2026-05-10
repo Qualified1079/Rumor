@@ -21,9 +21,15 @@ import com.rumor.mesh.data.RumorDatabase
 import com.rumor.mesh.plugin.PluginCatalog
 import com.rumor.mesh.plugin.PluginRegistry
 import com.rumor.mesh.service.MeshControllerHolder
+import com.rumor.mesh.ui.blocks.BlockManagementViewModel
 import com.rumor.mesh.ui.contacts.ContactsViewModel
 import com.rumor.mesh.ui.feed.FeedViewModel
+import com.rumor.mesh.ui.inbox.InboxPolicyViewModel
+import com.rumor.mesh.ui.messages.MessagesViewModel
+import com.rumor.mesh.ui.messages.ThreadViewModel
+import com.rumor.mesh.ui.plugins.PluginsViewModel
 import com.rumor.mesh.ui.settings.SettingsViewModel
+import com.rumor.mesh.ui.transfers.TransfersViewModel
 import org.koin.android.ext.koin.androidContext
 import org.koin.androidx.viewmodel.dsl.viewModel
 import org.koin.dsl.module
@@ -92,4 +98,10 @@ val appModule = module {
     viewModel { FeedViewModel(get(), get<MeshControllerHolder>()) }
     viewModel { ContactsViewModel(get(), get()) }
     viewModel { SettingsViewModel(get(), androidContext()) }
+    viewModel { PluginsViewModel(get()) }
+    viewModel { InboxPolicyViewModel(get()) }
+    viewModel { BlockManagementViewModel(get(), get()) }
+    viewModel { MessagesViewModel(get(), get(), get(), get()) }
+    viewModel { ThreadViewModel(get(), get(), get(), get(), get()) }
+    viewModel { TransfersViewModel(get(), get()) }
 }

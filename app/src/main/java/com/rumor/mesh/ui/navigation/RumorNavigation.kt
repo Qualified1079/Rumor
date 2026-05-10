@@ -18,6 +18,10 @@ sealed class Screen(val route: String) {
     object Contacts      : Screen("contacts")
     object Settings      : Screen("settings")
     object Logs          : Screen("logs")
+    object Plugins       : Screen("settings/plugins")
+    object InboxPolicy   : Screen("settings/inbox")
+    object Blocks        : Screen("settings/blocks")
+    object Transfers     : Screen("transfers")
 }
 
 data class BottomNavItem(

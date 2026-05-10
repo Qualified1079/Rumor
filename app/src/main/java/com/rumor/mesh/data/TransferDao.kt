@@ -18,6 +18,9 @@ interface TransferDao {
     @Query("SELECT * FROM transfers WHERE status = :status ORDER BY startedAtMs DESC")
     fun observeByStatus(status: TransferStatus): Flow<List<TransferEntity>>
 
+    @Query("SELECT * FROM transfers ORDER BY startedAtMs DESC LIMIT :limit")
+    fun observeRecent(limit: Int = 50): Flow<List<TransferEntity>>
+
     @Query("UPDATE transfers SET status = :status, completedAtMs = :completedAtMs WHERE transferId = :transferId")
     suspend fun updateStatus(transferId: String, status: TransferStatus, completedAtMs: Long?)
 
@@ -42,6 +45,9 @@ interface ChunkDao {
 
     @Query("SELECT chunkIndex FROM chunks WHERE transferId = :transferId")
     suspend fun getReceivedIndices(transferId: String): List<Int>
+
+    @Query("SELECT transferId, COUNT(*) AS received FROM chunks GROUP BY transferId")
+    fun observeAllReceivedCounts(): Flow<List<TransferReceivedCount>>
 
     @Query("UPDATE chunks SET ackedAtMs = :ackedAtMs WHERE transferId = :transferId AND chunkIndex = :chunkIndex")
     suspend fun markAcked(transferId: String, chunkIndex: Int, ackedAtMs: Long)

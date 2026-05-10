@@ -24,12 +24,21 @@ import androidx.navigation.compose.rememberNavController
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.service.MeshControllerHolder
 import com.rumor.mesh.service.MeshService
+import com.rumor.mesh.ui.blocks.BlockManagementScreen
 import com.rumor.mesh.ui.contacts.ContactsScreen
 import com.rumor.mesh.ui.feed.FeedScreen
+import com.rumor.mesh.ui.inbox.InboxPolicyScreen
+import com.rumor.mesh.ui.logs.LogsScreen
+import com.rumor.mesh.ui.messages.MessagesScreen
+import com.rumor.mesh.ui.messages.ThreadScreen
 import com.rumor.mesh.ui.navigation.Screen
 import com.rumor.mesh.ui.navigation.bottomNavItems
 import com.rumor.mesh.ui.onboarding.OnboardingScreen
+import com.rumor.mesh.ui.plugins.PluginsScreen
 import com.rumor.mesh.ui.settings.SettingsScreen
+import com.rumor.mesh.ui.transfers.TransfersScreen
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import com.rumor.mesh.ui.theme.RumorTheme
 import org.koin.android.ext.android.inject
 
@@ -184,13 +193,35 @@ private fun RumorApp(identityManager: IdentityManager) {
                     }
                 )
             }
-            composable(Screen.Settings.route) { SettingsScreen() }
+            composable(Screen.Settings.route) {
+                SettingsScreen(
+                    onOpenPlugins      = { navController.navigate(Screen.Plugins.route) },
+                    onOpenInboxPolicy  = { navController.navigate(Screen.InboxPolicy.route) },
+                    onOpenBlocks       = { navController.navigate(Screen.Blocks.route) },
+                    onOpenTransfers    = { navController.navigate(Screen.Transfers.route) },
+                    onOpenLogs         = { navController.navigate(Screen.Logs.route) },
+                )
+            }
             composable(Screen.Messages.route) {
-                // Thread list — placeholder; full DM thread list is next iteration
-                ContactsScreen(onOpenThread = { peerId ->
+                MessagesScreen(onOpenThread = { peerId ->
                     navController.navigate(Screen.Thread.forPeer(peerId))
                 })
             }
+            composable(
+                route = Screen.Thread.route,
+                arguments = listOf(navArgument("peerId") { type = NavType.StringType }),
+            ) { backStackEntry ->
+                val peerId = backStackEntry.arguments?.getString("peerId") ?: return@composable
+                ThreadScreen(
+                    peerId = peerId,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+            composable(Screen.Plugins.route) { PluginsScreen() }
+            composable(Screen.InboxPolicy.route) { InboxPolicyScreen() }
+            composable(Screen.Blocks.route) { BlockManagementScreen() }
+            composable(Screen.Transfers.route) { TransfersScreen() }
+            composable(Screen.Logs.route) { LogsScreen() }
         }
     }
 }

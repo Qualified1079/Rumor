@@ -32,6 +32,18 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE recipientId = :userId AND isRead = 0")
     fun observeUnread(userId: String): Flow<List<MessageEntity>>
 
+    /**
+     * All DMs the local user is involved in (sent or received), newest first.
+     * Used by the messages screen to assemble per-peer thread previews in memory.
+     */
+    @Query("""
+        SELECT * FROM messages
+        WHERE type = 'DIRECT' AND (senderId = :userId OR recipientId = :userId)
+        ORDER BY sentAtMs DESC
+        LIMIT :limit
+    """)
+    fun observeAllDirect(userId: String, limit: Int = 500): Flow<List<MessageEntity>>
+
     @Query("UPDATE messages SET isRead = 1 WHERE id = :id")
     suspend fun markRead(id: String)
 

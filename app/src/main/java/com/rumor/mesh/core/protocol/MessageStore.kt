@@ -80,6 +80,9 @@ class MessageStore(
     fun observeUnread(localUserId: String): Flow<List<RumorMessage>> =
         messageDao.observeUnread(localUserId).map { list -> list.map { it.toMessage() } }
 
+    fun observeAllDirect(localUserId: String): Flow<List<RumorMessage>> =
+        messageDao.observeAllDirect(localUserId).map { list -> list.map { it.toMessage() } }
+
     suspend fun markRead(id: String) = messageDao.markRead(id)
     suspend fun markRelayed(id: String) = messageDao.markRelayed(id)
 

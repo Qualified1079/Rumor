@@ -1,13 +1,18 @@
 package com.rumor.mesh.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,6 +23,11 @@ import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun SettingsScreen(
+    onOpenPlugins: () -> Unit = {},
+    onOpenInboxPolicy: () -> Unit = {},
+    onOpenBlocks: () -> Unit = {},
+    onOpenTransfers: () -> Unit = {},
+    onOpenLogs: () -> Unit = {},
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -42,6 +52,41 @@ fun SettingsScreen(
             icon = Icons.Default.Key,
             title = "Change passphrase",
             onClick = viewModel::onChangePassphraseTapped,
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        // ── Privacy & filters ─────────────────────────────────────────────
+        SectionHeader("Privacy & filters")
+        SettingRow(
+            icon = Icons.Default.Block,
+            title = "Blocked users & subscriptions",
+            onClick = onOpenBlocks,
+        )
+        SettingRow(
+            icon = Icons.Default.Inbox,
+            title = "Inbox policy",
+            onClick = onOpenInboxPolicy,
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        // ── Plugins ───────────────────────────────────────────────────────
+        SectionHeader("Plugins")
+        SettingRow(
+            icon = Icons.Default.Extension,
+            title = "Manage plugins",
+            onClick = onOpenPlugins,
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        // ── Transfers ─────────────────────────────────────────────────────
+        SectionHeader("Transfers")
+        SettingRow(
+            icon = Icons.Default.Storage,
+            title = "Transfer history",
+            onClick = onOpenTransfers,
         )
 
         Spacer(Modifier.height(4.dp))
@@ -71,7 +116,7 @@ fun SettingsScreen(
             onCheckedChange = viewModel::setDebugLogging,
         )
         if (state.debugLogging) {
-            TextButton(onClick = viewModel::onViewLogsTapped) {
+            TextButton(onClick = onOpenLogs) {
                 Text("View logs")
             }
         }
@@ -131,7 +176,7 @@ private fun SettingRow(
     ListItem(
         headlineContent = { Text(title) },
         leadingContent = { Icon(icon, contentDescription = null) },
-        modifier = Modifier.padding(0.dp),
+        modifier = Modifier.clickable(onClick = onClick),
     )
 }
 

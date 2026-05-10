@@ -8,6 +8,12 @@ import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.TransferDirection
 import com.rumor.mesh.core.model.TransferStatus
 
+/** Projection for a per-transfer chunk count, used by the progress UI. */
+data class TransferReceivedCount(
+    val transferId: String,
+    val received: Int,
+)
+
 @Entity(tableName = "transfers")
 data class TransferEntity(
     @PrimaryKey val transferId: String,
