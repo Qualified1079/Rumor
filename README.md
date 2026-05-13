@@ -94,12 +94,34 @@ The codebase is split into 14 modules with strict dependency rules. Each module 
 | Device quirks | `core/transport/DeviceQuirks.kt` | OEM/OS workaround registry |
 | Gossip engine | `core/protocol/` | Protocol logic, flooding, duplicate suppression |
 | Routing engine | `core/routing/` | Breadcrumbs, topology, online status |
-| Identity manager | `core/identity/` | Keypair, passphrase protection |
 | Plugin API | `plugin/` | `RumorPlugin`, `PluginContext`, `BasePlugin` |
 | Meshtastic bridge | `plugin/meshtastic/` | LoRa bridge stub |
 | MeshCore bridge | `plugin/meshcore/` | LoRa bridge stub |
 | Orchestrator | `service/MeshService.kt` | Wires everything, manages lifecycle |
 | UI | `ui/` | Compose screens and ViewModels |
+
+---
+
+## UI screens
+
+All screens are Jetpack Compose. ViewModels inject only the lowest-layer class that owns the relevant state — no screen imports from another screen's package.
+
+| Screen | Route | Description |
+|---|---|---|
+| Onboarding | `onboarding` | First launch: set passphrase, generate identity |
+| Unlock | `unlock` | Passphrase entry on subsequent launches |
+| Feed | `feed` | Broadcast thread, compose button, manual relay per message |
+| Messages | `messages` | DM thread list with unread badges and online status dots |
+| Thread | `thread/{peerId}` | Per-peer conversation with bubble layout |
+| Contacts | `contacts` | Contact list with ONLINE/RECENTLY/AWAY badge dots |
+| Settings | `settings` | Duty cycle slider, passphrase change, debug toggle, links to sub-screens |
+| Plugins | `settings/plugins` | Enable/disable bridge plugins grouped by category |
+| Inbox policy | `settings/inbox` | Auto-accept rules and per-transfer byte cap |
+| Blocked users | `settings/blocks` | Local blocks and subscribed remote blocklists |
+| Transfers | `transfers` | Chunked file transfer history with progress indicators |
+| Logs | `logs` | In-memory ring buffer viewer with level filter chips and auto-scroll |
+
+Bottom navigation shows Feed, Messages, Contacts, and Settings. All other screens are reachable via navigation from Settings or the relevant parent screen.
 
 ---
 
@@ -120,6 +142,23 @@ Install on a connected device:
 ```
 
 The app targets API 23+ (Android 6.0). Wi-Fi Direct and BLE peripheral mode are required hardware features.
+
+---
+
+## Running tests
+
+```bash
+./gradlew test
+```
+
+Unit test coverage:
+
+| Test class | What it covers |
+|---|---|
+| `SchedulerTest` | DRR fairness, starvation prevention, per-flow drop-oldest eviction cap |
+| `ChunkerTest` | Round-trip reassembly, SHA-256 mismatch rejection, missing-chunk null return |
+| `BlocklistVerifierTest` | Valid Ed25519 signatures accepted; tampered snapshot/diff payload rejected |
+| `OnlineStatusTrackerTest` | ONLINE/RECENTLY/AWAY transitions, `currentSnapshot()` 30-minute cutoff |
 
 ---
 
@@ -277,9 +316,96 @@ Bridge traffic from Meshtastic/MeshCore nodes uses `signature = "bridge_unsigned
 
 **Passphrase lock:** The Ed25519 private key is wrapped with AES-256-GCM. The wrapping key is derived with PBKDF2-SHA256 (100,000 iterations) from the user's passphrase and a random salt. Both the encrypted key and salt are stored in SharedPreferences. The plaintext private key never touches disk.
 
-**Direct message encryption:** Sender generates an ephemeral X25519 keypair, performs DH with the recipient's long-term public key, derives an AES-256-GCM session key. The ephemeral public key travels with the ciphertext so the recipient can recompute the shared secret.
+**Direct message encryption:** Sender generates an ephemeral X25519 keypair, performs DH with the recipient's long-term public key, derives an AES-256-GCM session key. The ephemeral public key travels with the ciphertext so the recipient can recompute the shared secret. Wire format: `<ephemeral_pubkey_b64>.<iv+ciphertext_b64>`.
 
 **Broadcast messages:** Signed but not encrypted. Anyone on the mesh can read them.
+
+---
+
+## Online status
+
+`OnlineStatusTracker` (`core/routing/`) maintains a per-peer last-seen timestamp updated after every completed gossip session. The three states and their thresholds:
+
+| State | Threshold | UI indicator |
+|---|---|---|
+| ONLINE | Last seen < 5 minutes ago | Green dot |
+| RECENTLY | Last seen 5–30 minutes ago | Amber dot |
+| AWAY | Last seen > 30 minutes ago, or never | Grey dot |
+
+`currentSnapshot()` returns only peers seen within the last 30 minutes. Peers older than 30 minutes are pruned from the in-memory map on each update cycle. Status dots appear on contact avatars and DM thread headers.
+
+---
+
+## Inbox policy
+
+`InboxPolicyManager` (`core/protocol/`) controls which incoming DMs are auto-accepted before the gossip engine delivers them to storage.
+
+| Setting | Default | Description |
+|---|---|---|
+| `autoAccept` | `true` | Accept DMs from anyone on the mesh |
+| `requireFollowBack` | `false` | Only accept DMs from contacts already in your contact list |
+| `maxIncomingBytes` | `0` (unlimited) | Drop transfers larger than this byte count before reassembly |
+
+Policy is persisted to SharedPreferences and exposed as `StateFlow<InboxPolicy>` for the UI to observe. The Settings → Inbox policy screen lets users adjust all three settings.
+
+---
+
+## Block and moderation
+
+### Local blocks
+
+`BlockManager.block(userId, durationMinutes, reason)` adds a peer to the local blocklist. Blocked peers' messages are silently dropped at ingest — they are never stored, relayed, or shown in any UI. Blocks are time-limited (expire automatically) or permanent (`durationMinutes = 0`).
+
+```kotlin
+blockManager.block(peerId, durationMinutes = 60 * 24, reason = "spam")
+blockManager.unblock(peerId)
+```
+
+### Subscribed blocklists
+
+Remote blocklists gossip across the mesh in the same way messages do. `BlocklistSubscriber` receives incoming blocklist packets; `BlocklistVerifier` checks the Ed25519 signature on each snapshot and diff before the entries are applied locally. A tampered payload — even a single flipped bit — is rejected outright.
+
+Each subscribed blocklist is identified by its publisher's User ID. You can unsubscribe at any time from Settings → Blocked users.
+
+### Export and import
+
+Encrypted backup of your local block entries:
+
+```kotlin
+val blob = blockManager.exportEncrypted(passphrase)   // returns Base64 string
+blockManager.importEncrypted(blob, passphrase)         // merges into local blocklist
+```
+
+---
+
+## Transfer system
+
+Large payloads (images, voice, files) travel as chunked transfers rather than single messages.
+
+`TransferSender` splits the payload into fixed-size chunks, assigns each a sequential index, and tracks NACK responses from the receiver to retransmit only the missing pieces. This keeps retransmission cost proportional to loss rate rather than payload size.
+
+`TransferAssembler` accumulates received chunks and, once all are present, verifies the SHA-256 hash of the reassembled payload. If the hash matches, the file is written to storage. If any chunk is missing or the hash fails, the transfer is discarded — no partial files reach the application layer.
+
+Progress is tracked per transfer:
+
+| Status | Meaning |
+|---|---|
+| `IN_PROGRESS` | Chunks still arriving; progress bar shows `received / total` |
+| `COMPLETE` | All chunks received and hash verified |
+| `FAILED` | Hash mismatch after all chunks arrived |
+| `ABANDONED` | Sender gave up or TTL expired before completion |
+
+The Transfers screen shows recent transfers with a progress indicator for in-flight ones and a status badge for finished ones.
+
+---
+
+## Scheduler — outbound fairness
+
+Outbound messages pass through a Deficit Round Robin (DRR) scheduler keyed by sender User ID before entering the gossip engine's send queue.
+
+Each sender gets an equal byte budget per scheduling round. A peer that sends many small messages cannot crowd out a peer sending one large message — the budget is byte-based, not count-based. Leftover budget (deficit) carries into the next round so bursty senders catch up fairly. A sender with no queued messages resets to zero deficit when they next enqueue.
+
+This means a single noisy peer — or a misconfigured bridge plugin injecting floods — cannot starve other senders on a shared node.
 
 ---
 
@@ -329,6 +455,13 @@ These work well alongside Rumor on the same device:
 - **Trail Sense** — compass, barometer, star navigation from phone sensors
 - **LocalSend** — local file transfer
 - **KeePassDX** — encrypted credentials
+
+---
+
+## Known limitations
+
+- **DM decryption in UI:** Encrypted DMs currently display as `[encrypted]` in the Messages list and Thread screen. The wire format is correct and the encrypted payload is stored; a decrypt helper needs to be wired from `CryptoManager` through `MessageStore` into `ThreadViewModel`.
+- **LoRa bridges:** `MeshtasticBridge` and `MeshCoreBridge` are intentional stubs. Frame parsing and protobuf encode/decode are marked with `// TODO` comments throughout both files.
 
 ---
 
