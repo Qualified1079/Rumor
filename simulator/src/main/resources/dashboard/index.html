@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<!--
+  Rumor simulator dashboard. Single self-contained page: no CDN, no external
+  assets, so it works fully offline. Vanilla JS + a canvas force-graph.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rumor Simulator</title>
+<style>
+  :root { --bg:#11151c; --panel:#1a212b; --line:#2c3744; --fg:#d6dde6; --muted:#7c8a9a;
+          --accent:#4ea1ff; --good:#4ec77f; --bad:#ff5d5d; --warn:#ffb454; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:13px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--fg);
+         display:grid; grid-template-columns:320px 1fr; height:100vh; }
+  #sidebar { background:var(--panel); border-right:1px solid var(--line); overflow-y:auto; padding:14px; }
+  #main { display:flex; flex-direction:column; }
+  #graph { flex:1; background:var(--bg); }
+  h1 { font-size:15px; margin:0 0 12px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+       margin:16px 0 6px; border-bottom:1px solid var(--line); padding-bottom:3px; }
+  button { background:var(--line); color:var(--fg); border:0; border-radius:4px; padding:6px 10px;
+           cursor:pointer; font-size:12px; }
+  button:hover { background:#36475a; }
+  button.primary { background:var(--accent); color:#04111f; font-weight:600; }
+  .controls { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .param { margin-bottom:9px; }
+  .param label { display:flex; justify-content:space-between; color:var(--muted); margin-bottom:2px; }
+  .param .val { color:var(--fg); font-variant-numeric:tabular-nums; }
+  .param .row { display:flex; gap:5px; align-items:center; }
+  .param input[type=range] { flex:1; }
+  .param .dice { padding:2px 6px; font-size:11px; }
+  #metrics { display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; padding:10px 14px;
+             background:var(--panel); border-top:1px solid var(--line); }
+  #metrics div { display:flex; justify-content:space-between; }
+  #metrics span:last-child { color:var(--accent); font-variant-numeric:tabular-nums; }
+  #status { font-size:11px; color:var(--muted); margin-bottom:10px; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
+  .dot.on { background:var(--good); } .dot.off { background:var(--bad); }
+</style>
+</head>
+<body>
+<div id="sidebar">
+  <h1>Rumor Simulator</h1>
+  <div id="status"><span class="dot off"></span><span id="statusText">connecting…</span></div>
+  <div class="controls">
+    <button class="primary" id="btnStart">Start</button>
+    <button id="btnStop">Stop</button>
+    <button id="btnStep">Step</button>
+    <button id="btnReset">Reset</button>
+  </div>
+  <div class="controls">
+    <button id="btnRandom">Randomize all</button>
+    <button id="btnReport">Download report</button>
+  </div>
+  <div id="params"></div>
+</div>
+<div id="main">
+  <canvas id="graph"></canvas>
+  <div id="metrics"></div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+// ── Controls ────────────────────────────────────────────────────────────────
+const post = path => fetch(path, { method:"POST" });
+$("btnStart").onclick  = () => post("/api/start");
+$("btnStop").onclick   = () => post("/api/stop");
+$("btnStep").onclick   = () => post("/api/step");
+$("btnReset").onclick  = () => post("/api/reset");
+$("btnRandom").onclick = () => post("/api/randomize").then(loadParams);
+$("btnReport").onclick = () => window.location = "/api/report";
+
+// ── Parameter sliders (auto-generated from /api/init) ───────────────────────
+async function loadParams() {
+  const init = await (await fetch("/api/init")).json();
+  const byCat = {};
+  init.params.forEach(p => (byCat[p.category] ??= []).push(p));
+  const root = $("params");
+  root.innerHTML = "";
+  for (const [cat, list] of Object.entries(byCat)) {
+    const h = document.createElement("h2");
+    h.textContent = cat.replace("_", " ");
+    root.appendChild(h);
+    list.forEach(p => root.appendChild(paramRow(p)));
+  }
+}
+
+function paramRow(p) {
+  const wrap = document.createElement("div");
+  wrap.className = "param";
+  const isFloat = p.step < 1;
+  wrap.innerHTML =
+    `<label><span>${p.label}</span><span class="val"></span></label>
+     <div class="row">
+       <input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.current}">
+       <button class="dice" title="Randomize">⚄</button>
+     </div>`;
+  const range = wrap.querySelector("input");
+  const val   = wrap.querySelector(".val");
+  const show  = v => val.textContent = isFloat ? Number(v).toFixed(3) : v;
+  show(p.current);
+  range.oninput  = () => show(range.value);
+  range.onchange = () => post(`/api/param/${p.id}?value=${range.value}`);
+  wrap.querySelector(".dice").onclick = () =>
+    post(`/api/randomize/${p.id}`).then(loadParams);
+  return wrap;
+}
+
+// ── Metrics panel ───────────────────────────────────────────────────────────
+function renderMetrics(s) {
+  const m = s.metrics;
+  const rows = [
+    ["Running",        s.running ? "yes" : "no"],
+    ["Sim time",       (s.simTimeMs / 1000).toFixed(1) + "s"],
+    ["Nodes",          m.nodeCount],
+    ["Edges",          m.edgeCount],
+    ["Msgs this tick", m.totalMsgsThisTick],
+    ["Total dropped",  m.totalDropped],
+    ["Heap",           m.heapUsedMb + " / " + m.heapMaxMb + " MB"],
+    ["Partitioned",    s.edges.filter(e => e.partitioned).length],
+  ];
+  $("metrics").innerHTML = rows
+    .map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
+}
+
+// ── Canvas force-directed graph ─────────────────────────────────────────────
+const canvas = $("graph"), ctx = canvas.getContext("2d");
+let nodes = [], edges = [], layout = new Map();
+
+function resize() {
+  canvas.width  = canvas.clientWidth;
+  canvas.height = canvas.clientHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+function syncLayout(state) {
+  nodes = state.nodes; edges = state.edges;
+  const w = canvas.width, h = canvas.height;
+  for (const n of nodes) {
+    if (!layout.has(n.index)) {
+      const a = Math.random() * Math.PI * 2, r = Math.min(w, h) * 0.3;
+      layout.set(n.index, { x: w/2 + Math.cos(a)*r, y: h/2 + Math.sin(a)*r, vx:0, vy:0 });
+    }
+  }
+  for (const k of [...layout.keys()])
+    if (!nodes.find(n => n.index === k)) layout.delete(k);
+}
+
+function stepForces() {
+  const w = canvas.width, h = canvas.height;
+  // Repulsion between every pair.
+  for (const a of nodes) for (const b of nodes) {
+    if (a.index >= b.index) continue;
+    const pa = layout.get(a.index), pb = layout.get(b.index);
+    let dx = pa.x - pb.x, dy = pa.y - pb.y;
+    let d2 = dx*dx + dy*dy || 1;
+    const f = 2200 / d2;
+    const d = Math.sqrt(d2);
+    pa.vx += (dx/d)*f; pa.vy += (dy/d)*f;
+    pb.vx -= (dx/d)*f; pb.vy -= (dy/d)*f;
+  }
+  // Spring along edges.
+  for (const e of edges) {
+    const pa = layout.get(e.from), pb = layout.get(e.to);
+    if (!pa || !pb) continue;
+    const dx = pb.x - pa.x, dy = pb.y - pa.y;
+    const d = Math.sqrt(dx*dx + dy*dy) || 1;
+    const f = (d - 90) * 0.01;
+    pa.vx += (dx/d)*f; pa.vy += (dy/d)*f;
+    pb.vx -= (dx/d)*f; pb.vy -= (dy/d)*f;
+  }
+  // Integrate + centering pull + damping.
+  for (const p of layout.values()) {
+    p.vx += (w/2 - p.x) * 0.0008;
+    p.vy += (h/2 - p.y) * 0.0008;
+    p.vx *= 0.82; p.vy *= 0.82;
+    p.x += p.vx; p.y += p.vy;
+    p.x = Math.max(12, Math.min(w-12, p.x));
+    p.y = Math.max(12, Math.min(h-12, p.y));
+  }
+}
+
+function draw() {
+  stepForces();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Edges: red when congested or partitioned, otherwise faint grey.
+  for (const e of edges) {
+    const pa = layout.get(e.from), pb = layout.get(e.to);
+    if (!pa || !pb) continue;
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
+    if (e.partitioned)      { ctx.strokeStyle = "#3a3f47"; ctx.setLineDash([4,4]); }
+    else if (e.congested)   { ctx.strokeStyle = "#ff5d5d"; ctx.setLineDash([]); ctx.lineWidth = 2; }
+    else                    { ctx.strokeStyle = "#2c3744"; ctx.setLineDash([]); ctx.lineWidth = 1; }
+    ctx.stroke();
+    ctx.setLineDash([]); ctx.lineWidth = 1;
+  }
+  // Nodes: size by queue depth, colour by dup-drop pressure.
+  for (const n of nodes) {
+    const p = layout.get(n.index);
+    if (!p) continue;
+    const r = 4 + Math.min(10, n.queueDepth / 8);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+    ctx.fillStyle = n.queueDepth > 50 ? "#ff5d5d"
+                  : n.queueDepth > 15 ? "#ffb454" : "#4ea1ff";
+    ctx.fill();
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// ── WebSocket feed ──────────────────────────────────────────────────────────
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => {
+    $("status").querySelector(".dot").className = "dot on";
+    $("statusText").textContent = "connected";
+  };
+  ws.onclose = () => {
+    $("status").querySelector(".dot").className = "dot off";
+    $("statusText").textContent = "disconnected — retrying…";
+    setTimeout(connect, 1500);
+  };
+  ws.onmessage = ev => {
+    const state = JSON.parse(ev.data);
+    syncLayout(state);
+    renderMetrics(state);
+  };
+}
+
+loadParams();
+connect();
+</script>
+</body>
+</html>

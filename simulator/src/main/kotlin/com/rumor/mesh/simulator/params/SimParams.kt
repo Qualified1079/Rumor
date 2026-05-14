@@ -3,6 +3,7 @@ package com.rumor.mesh.simulator.params
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.Serializable
 import kotlin.random.Random
 
 enum class ParamCategory { NETWORK, TOPOLOGY, TRAFFIC, PROTOCOL, SIM_CONTROL }
@@ -30,9 +31,21 @@ class SimParam<T : Comparable<T>>(
 
     fun randomize(rng: Random = Random.Default) { value = randomFn(rng) }
 
+    /** Parse [raw] into this param's type and assign it. Used by the dashboard. */
+    @Suppress("UNCHECKED_CAST")
+    fun setFromString(raw: String) {
+        value = when (min) {
+            is Long   -> raw.trim().toLong()   as T
+            is Int    -> raw.trim().toInt()    as T
+            is Double -> raw.trim().toDouble() as T
+            else      -> throw IllegalStateException("Unsupported param type for $id")
+        }
+    }
+
     fun toDescriptor() = ParamDescriptor(id, label, category.name, min.toString(), max.toString(), value.toString(), step)
 }
 
+@Serializable
 data class ParamDescriptor(
     val id: String,
     val label: String,
@@ -141,6 +154,15 @@ class SimParamRegistry {
 
     /** Randomize every param at once from a shared RNG. */
     fun randomizeAll(rng: Random = Random.Default) = all.forEach { it.randomize(rng) }
+
+    fun byId(id: String): SimParam<*>? = all.firstOrNull { it.id == id }
+
+    /** Randomize a single param by id. Returns false if no such param. */
+    fun randomizeOne(id: String, rng: Random = Random.Default): Boolean {
+        val p = byId(id) ?: return false
+        p.randomize(rng)
+        return true
+    }
 
     fun descriptors(): List<ParamDescriptor> = all.map { it.toDescriptor() }
 }
