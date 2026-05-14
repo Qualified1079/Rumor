@@ -4,7 +4,17 @@ import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.block.BlocklistGossipBridge
 import com.rumor.mesh.core.block.BlocklistPublisher
 import com.rumor.mesh.core.block.BlocklistSubscriber
+import com.rumor.mesh.core.data.BreadcrumbRepository
+import com.rumor.mesh.core.data.ChunkRepository
+import com.rumor.mesh.core.data.ContactRepository
+import com.rumor.mesh.core.data.MessageRepository
+import com.rumor.mesh.core.data.RouteRepository
+import com.rumor.mesh.core.data.TransferRepository
 import com.rumor.mesh.core.identity.IdentityManager
+import com.rumor.mesh.core.identity.IdentityProvider
+import com.rumor.mesh.core.logging.AndroidLogSink
+import com.rumor.mesh.core.logging.RumorLog
+import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.policy.InboxPolicyManager
 import com.rumor.mesh.core.protocol.DuplicateFilter
 import com.rumor.mesh.core.protocol.GossipEngine
@@ -18,6 +28,16 @@ import com.rumor.mesh.core.transfer.TransferSender
 import com.rumor.mesh.core.transport.ble.BleDiscoveryManager
 import com.rumor.mesh.core.transport.wifidirect.WifiDirectTransport
 import com.rumor.mesh.data.RumorDatabase
+import com.rumor.mesh.data.adapter.BreadcrumbRepositoryAdapter
+import com.rumor.mesh.data.adapter.BlockEntryRepositoryAdapter
+import com.rumor.mesh.data.adapter.BlocklistEntryRepositoryAdapter
+import com.rumor.mesh.data.adapter.BlockRepositoryAdapter
+import com.rumor.mesh.data.adapter.ChunkRepositoryAdapter
+import com.rumor.mesh.data.adapter.ContactRepositoryAdapter
+import com.rumor.mesh.data.adapter.MessageRepositoryAdapter
+import com.rumor.mesh.data.adapter.RouteRepositoryAdapter
+import com.rumor.mesh.data.adapter.SubscribedBlocklistRepositoryAdapter
+import com.rumor.mesh.data.adapter.TransferRepositoryAdapter
 import com.rumor.mesh.plugin.PluginCatalog
 import com.rumor.mesh.plugin.PluginRegistry
 import com.rumor.mesh.service.MeshControllerHolder
@@ -34,37 +54,33 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.androidx.viewmodel.dsl.viewModel
 import org.koin.dsl.module
 
-/**
- * Koin module wiring all singletons + ViewModels.
- *
- * Replaces the previous Hilt setup. Constructor params on each class are
- * resolved via `get()`; ViewModels register through `viewModel { ... }` so
- * Compose's `koinViewModel()` can fetch them.
- */
 val appModule = module {
 
-    // ── Database + DAOs ───────────────────────────────────────────────────────
+    // Install Android logcat sink once at module init time.
+    single(createdAtStart = true) { RumorLog.apply { sink = AndroidLogSink } }
+
+    // ── Database ──────────────────────────────────────────────────────────────
     single { RumorDatabase.create(androidContext()) }
-    single { get<RumorDatabase>().messageDao() }
-    single { get<RumorDatabase>().contactDao() }
-    single { get<RumorDatabase>().breadcrumbDao() }
-    single { get<RumorDatabase>().routeDao() }
-    single { get<RumorDatabase>().blockEntryDao() }
-    single { get<RumorDatabase>().subscribedBlocklistDao() }
-    single { get<RumorDatabase>().blocklistEntryDao() }
-    single { get<RumorDatabase>().transferDao() }
-    single { get<RumorDatabase>().chunkDao() }
+
+    // ── Repository adapters (Room → core interfaces) ──────────────────────────
+    single<MessageRepository>  { MessageRepositoryAdapter(get<RumorDatabase>().messageDao()) }
+    single<ContactRepository>  { ContactRepositoryAdapter(get<RumorDatabase>().contactDao()) }
+    single<RouteRepository>    { RouteRepositoryAdapter(get<RumorDatabase>().routeDao()) }
+    single<BreadcrumbRepository> { BreadcrumbRepositoryAdapter(get<RumorDatabase>().breadcrumbDao()) }
+    single<TransferRepository> { TransferRepositoryAdapter(get<RumorDatabase>().transferDao()) }
+    single<ChunkRepository>    { ChunkRepositoryAdapter(get<RumorDatabase>().chunkDao()) }
+    single { BlockEntryRepositoryAdapter(get<RumorDatabase>().blockEntryDao()) }
+    single { SubscribedBlocklistRepositoryAdapter(get<RumorDatabase>().subscribedBlocklistDao()) }
+    single { BlocklistEntryRepositoryAdapter(get<RumorDatabase>().blocklistEntryDao()) }
 
     // ── Identity ──────────────────────────────────────────────────────────────
     single { IdentityManager(androidContext()) }
+    single<IdentityProvider> { get<IdentityManager>() }
 
     // ── Block module ──────────────────────────────────────────────────────────
-    // BlockManager is consulted only by the inbox filter, never the relay path.
-    single { BlockManager(get(), get(), get()) }
-    single { BlocklistPublisher(get(), get()) }
-    single { BlocklistSubscriber(get(), get()) }
-    // Bridge wires publisher/subscriber into gossip flow. Created after GossipEngine.
-
+    single { BlockManager(get<BlockEntryRepositoryAdapter>(), get<SubscribedBlocklistRepositoryAdapter>(), get<BlocklistEntryRepositoryAdapter>()) }
+    single { BlocklistPublisher(get<BlockEntryRepositoryAdapter>(), get<IdentityProvider>()) }
+    single { BlocklistSubscriber(get<SubscribedBlocklistRepositoryAdapter>(), get<BlocklistEntryRepositoryAdapter>()) }
 
     // ── Protocol layer ────────────────────────────────────────────────────────
     single { DuplicateFilter() }
@@ -73,14 +89,14 @@ val appModule = module {
     single { TopologyTracker(get()) }
     single { BreadcrumbCache(get()) }
     single { Scheduler() }
-    single { InboxPolicyManager(androidContext(), get()) }
-    single { GossipEngine(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single<InboxFilter> { InboxPolicyManager(androidContext(), get()) }
+    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get()) }
 
     // ── Transfer layer ────────────────────────────────────────────────────────
     single { TransferAssembler(get(), get(), get()) }
-    single { TransferSender(get(), get(), get(), get()) }
+    single { TransferSender(get(), get<IdentityProvider>(), get(), get()) }
 
-    // ── Blocklist gossip bridge (subscribes to gossip on construction) ────────
+    // ── Blocklist gossip bridge ───────────────────────────────────────────────
     single { BlocklistGossipBridge(get(), get(), get(), get()) }
 
     // ── Transport ─────────────────────────────────────────────────────────────
@@ -88,10 +104,10 @@ val appModule = module {
     single { WifiDirectTransport(androidContext()) }
 
     // ── Plugins ───────────────────────────────────────────────────────────────
-    single { PluginRegistry(get(), get(), get()) }
+    single { PluginRegistry(get(), get<IdentityProvider>(), get()) }
     single { PluginCatalog(androidContext(), get()) }
 
-    // ── Service binding bridge ────────────────────────────────────────────────
+    // ── Service ───────────────────────────────────────────────────────────────
     single { MeshControllerHolder() }
 
     // ── ViewModels ────────────────────────────────────────────────────────────

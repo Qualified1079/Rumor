@@ -8,7 +8,8 @@ import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.TransferMetadata
-import com.rumor.mesh.data.ContactDao
+import com.rumor.mesh.core.data.ContactRepository
+import com.rumor.mesh.core.policy.InboxFilter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,8 +31,8 @@ private const val TAG = "InboxPolicyManager"
  */
 class InboxPolicyManager(
     context: Context,
-    private val contactDao: ContactDao,
-) {
+    private val contactRepo: ContactRepository,
+) : InboxFilter {
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -54,7 +55,7 @@ class InboxPolicyManager(
      */
     suspend fun allowsInbox(msg: RumorMessage): Boolean {
         val pol = _policy.value
-        val isContact = contactDao.getById(msg.senderId) != null
+        val isContact = contactRepo.getById(msg.senderId) != null
 
         // Media in plain BROADCAST/DIRECT (rare, but possible).
         if (pol.contactsOnlyMedia && !isContact) {

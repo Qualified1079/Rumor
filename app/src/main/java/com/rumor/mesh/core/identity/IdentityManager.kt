@@ -14,15 +14,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.security.MessageDigest
 import java.util.UUID
 
-data class LocalIdentity(
-    val userId: String,
-    val deviceId: String,
-    val publicKeyBytes: ByteArray,
-    val privateKeyBytes: ByteArray,
-)
+/** Android implementation of [IdentityProvider]. Persists keys in encrypted SharedPreferences. */
 class IdentityManager(
     private val context: Context,
-) {
+) : IdentityProvider {
     private val TAG = "IdentityManager"
     private val PREFS_NAME = "rumor_identity"
 

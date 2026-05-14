@@ -14,3 +14,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Rumor"
 include(":app")
+include(":core")
+include(":simulator")

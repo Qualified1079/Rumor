@@ -1,0 +1,240 @@
+package com.rumor.mesh.simulator.engine
+
+import com.rumor.mesh.core.logging.RumorLog
+import com.rumor.mesh.simulator.params.SimParamRegistry
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.random.Random
+
+private const val TAG = "SimWorld"
+private const val TICK_MS = 100L   // wall-clock ms per sim tick
+
+/**
+ * Top-level simulation orchestrator. Owns all [SimNode]s and [SimTransport]
+ * edges, drives the gossip tick loop, collects metrics, and exposes state for
+ * the Ktor dashboard server.
+ *
+ * Speed control: [params.speedMultiplier] > 1 advances sim time faster than
+ * wall time by reducing the inter-tick sleep. At 0.1× the tick loop sleeps
+ * 10× longer, reducing CPU/memory pressure and allowing more nodes to be run.
+ */
+class SimWorld(val params: SimParamRegistry) {
+
+    private val mutex  = Mutex()
+    private val scope  = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var tickJob: Job? = null
+
+    private val _nodes  = MutableStateFlow<List<SimNode>>(emptyList())
+    val nodes: StateFlow<List<SimNode>> = _nodes.asStateFlow()
+
+    private val _edges  = MutableStateFlow<List<SimTransport>>(emptyList())
+    val edges: StateFlow<List<SimTransport>> = _edges.asStateFlow()
+
+    private val _metrics = MutableStateFlow(WorldMetrics())
+    val metrics: StateFlow<WorldMetrics> = _metrics.asStateFlow()
+
+    private val _running = MutableStateFlow(false)
+    val running: StateFlow<Boolean> = _running.asStateFlow()
+
+    private val _simTimeMs = MutableStateFlow(0L)
+    val simTimeMs: StateFlow<Long> = _simTimeMs.asStateFlow()
+
+    // heap pressure monitor
+    private val runtime = Runtime.getRuntime()
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    suspend fun start() = mutex.withLock {
+        if (_running.value) return
+        rebuild()
+        _running.value = true
+        tickJob = scope.launch { tickLoop() }
+        RumorLog.i(TAG, "Sim started: ${_nodes.value.size} nodes, ${_edges.value.size} edges")
+    }
+
+    suspend fun stop() = mutex.withLock {
+        _running.value = false
+        tickJob?.cancelAndJoin()
+        tickJob = null
+        RumorLog.i(TAG, "Sim stopped")
+    }
+
+    suspend fun reset() {
+        stop()
+        _simTimeMs.value = 0
+        _metrics.value = WorldMetrics()
+        start()
+    }
+
+    /** Step exactly one tick regardless of speed. */
+    suspend fun step() {
+        if (!_running.value) tick()
+    }
+
+    // ── Topology ──────────────────────────────────────────────────────────────
+
+    private fun rebuild() {
+        val rng = Random(params.seed.value)
+        val count = params.nodeCount.value
+        val nodeScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val newNodes = (0 until count).map { SimNode(it, nodeScope) }
+        _nodes.value = newNodes
+
+        val k = params.connectionsPerNode.value
+        val edgeSet = mutableSetOf<String>()
+        val newEdges = mutableListOf<SimTransport>()
+        for (node in newNodes) {
+            val candidates = newNodes.filter { it.index != node.index && SimTransport.edgeKey(node.index, it.index) !in edgeSet }
+            val pick = candidates.shuffled(rng).take(k)
+            for (peer in pick) {
+                val edge = SimTransport(node, peer, buildConditioner())
+                newEdges.add(edge)
+                edgeSet.add(edge.edgeKey)
+            }
+        }
+        _edges.value = newEdges
+    }
+
+    private fun buildConditioner() = NetworkConditioner().also {
+        it.latencyMs          = params.linkLatencyMs.value
+        it.jitterMs           = params.linkJitterMs.value
+        it.lossRate           = params.lossRate.value
+        it.bandwidthBytesPerSec = params.bandwidthKbps.value * 1024L
+    }
+
+    // ── Tick loop ─────────────────────────────────────────────────────────────
+
+    private suspend fun tickLoop() {
+        while (_running.value) {
+            checkHeapPressure()
+            tick()
+            val sleepMs = (TICK_MS / params.speedMultiplier.value).toLong().coerceAtLeast(1L)
+            delay(sleepMs)
+        }
+    }
+
+    private suspend fun tick() {
+        val tickDurationMs = (TICK_MS * params.speedMultiplier.value).toLong()
+        _simTimeMs.value += tickDurationMs
+
+        val nodes = _nodes.value
+        val edges = _edges.value
+        val rng   = Random(_simTimeMs.value xor params.seed.value)
+
+        // 1. Generate traffic from each node.
+        for (node in nodes) {
+            val profile = TrafficProfile(
+                msgPerSecond     = params.msgPerSecondPerNode.value,
+                minPayloadBytes  = params.minPayloadBytes.value,
+                maxPayloadBytes  = params.maxPayloadBytes.value,
+                burstProbability = params.burstProbability.value,
+                burstMultiplier  = params.burstMultiplier.value,
+            )
+            val identity = node.identityProvider.identity.value ?: continue
+            val gen = MessageGenerator(identity, profile)
+            val count = if (rng.nextDouble() < profile.burstProbability) profile.burstMultiplier else 1
+            repeat(count) {
+                val msg = gen.generate(rng) ?: return@repeat
+                node.gossipEngine.injectFromPlugin(msg, "sim-generator")
+                node.recordProcessed()
+            }
+        }
+
+        // 2. Run gossip exchanges on each edge.
+        var totalMsgs = 0L
+        var totalDropped = 0L
+        for (edge in edges) {
+            // Probabilistic partition.
+            if (rng.nextDouble() < params.partitionProbability.value) {
+                edge.conditioner.partitioned = true
+                scope.launch {
+                    delay(params.partitionDurationSec.value * 1000L)
+                    edge.conditioner.partitioned = false
+                }
+            }
+            val m = edge.exchange()
+            totalMsgs    += m.totalMessages
+            totalDropped += m.dropped
+        }
+
+        // 3. Update metrics.
+        _metrics.value = WorldMetrics(
+            nodeCount         = nodes.size,
+            edgeCount         = edges.size,
+            totalMsgsThisTick = totalMsgs,
+            totalDropped      = _metrics.value.totalDropped + totalDropped,
+            simTimeMs         = _simTimeMs.value,
+            heapUsedMb        = (runtime.totalMemory() - runtime.freeMemory()) / 1_048_576,
+            heapMaxMb         = runtime.maxMemory() / 1_048_576,
+        )
+    }
+
+    // ── Memory guard ─────────────────────────────────────────────────────────
+
+    private fun checkHeapPressure() {
+        val used = runtime.totalMemory() - runtime.freeMemory()
+        val max  = runtime.maxMemory()
+        if (used.toDouble() / max > 0.85) {
+            _running.value = false
+            RumorLog.w(TAG, "Heap at ${used * 100 / max}% — sim paused. Reduce node count or slow speed.")
+        }
+    }
+
+    // ── Dashboard helpers ─────────────────────────────────────────────────────
+
+    fun edgeSnapshots(): List<EdgeSnapshot> = _edges.value.map { e ->
+        EdgeSnapshot(
+            from        = e.nodeA.index,
+            to          = e.nodeB.index,
+            latencyMs   = e.conditioner.latencyMs,
+            lossRate    = e.conditioner.lossRate,
+            partitioned = e.conditioner.partitioned,
+        )
+    }
+
+    fun nodeSnapshots(): List<NodeSnapshot> = _nodes.value.map { n ->
+        NodeSnapshot(
+            index           = n.index,
+            userId          = n.userId.take(12),
+            queueDepth      = n.schedulerQueueDepth,
+            messagesProcessed = n.messagesProcessed.value,
+            dupDrops        = n.dupDrops.value,
+        )
+    }
+}
+
+data class WorldMetrics(
+    val nodeCount: Int         = 0,
+    val edgeCount: Int         = 0,
+    val totalMsgsThisTick: Long = 0,
+    val totalDropped: Long     = 0,
+    val simTimeMs: Long        = 0,
+    val heapUsedMb: Long       = 0,
+    val heapMaxMb: Long        = 0,
+)
+
+data class EdgeSnapshot(
+    val from: Int,
+    val to: Int,
+    val latencyMs: Long,
+    val lossRate: Double,
+    val partitioned: Boolean,
+)
+
+data class NodeSnapshot(
+    val index: Int,
+    val userId: String,
+    val queueDepth: Int,
+    val messagesProcessed: Long,
+    val dupDrops: Long,
+)

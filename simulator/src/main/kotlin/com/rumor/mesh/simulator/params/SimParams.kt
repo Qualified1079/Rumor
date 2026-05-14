@@ -1,0 +1,146 @@
+package com.rumor.mesh.simulator.params
+
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlin.random.Random
+
+enum class ParamCategory { NETWORK, TOPOLOGY, TRAFFIC, PROTOCOL, SIM_CONTROL }
+
+/**
+ * A single tunable simulation parameter with bounds, a current value, and
+ * a randomization function. The dashboard generates a slider for each one
+ * automatically via the registry — no per-param UI code needed.
+ */
+class SimParam<T : Comparable<T>>(
+    val id: String,
+    val label: String,
+    val category: ParamCategory,
+    val min: T,
+    val max: T,
+    default: T,
+    val step: Double = 1.0,
+    private val randomFn: (Random) -> T,
+) {
+    private val _value = MutableStateFlow(default)
+    val valueFlow: StateFlow<T> = _value.asStateFlow()
+    var value: T
+        get() = _value.value
+        set(v) { _value.value = v.coerceIn(min, max) }
+
+    fun randomize(rng: Random = Random.Default) { value = randomFn(rng) }
+
+    fun toDescriptor() = ParamDescriptor(id, label, category.name, min.toString(), max.toString(), value.toString(), step)
+}
+
+data class ParamDescriptor(
+    val id: String,
+    val label: String,
+    val category: String,
+    val min: String,
+    val max: String,
+    val current: String,
+    val step: Double,
+)
+
+/**
+ * All simulation parameters in one place. Mutable live — changes take effect
+ * on the next tick.
+ */
+class SimParamRegistry {
+
+    // ── Network ──────────────────────────────────────────────────────────────
+    val linkLatencyMs = SimParam("link_latency_ms", "Link latency (ms)",
+        ParamCategory.NETWORK, 1L, 500L, 50L,
+        randomFn = { rng -> rng.nextLong(1, 301) })
+
+    val linkJitterMs = SimParam("link_jitter_ms", "Latency jitter (ms)",
+        ParamCategory.NETWORK, 0L, 200L, 20L,
+        randomFn = { rng -> rng.nextLong(0, 101) })
+
+    val lossRate = SimParam("loss_rate", "Packet loss rate",
+        ParamCategory.NETWORK, 0.0, 0.5, 0.0, step = 0.01,
+        randomFn = { rng -> rng.nextDouble(0.0, 0.2) })
+
+    val bandwidthKbps = SimParam("bandwidth_kbps", "Link bandwidth (KB/s)",
+        ParamCategory.NETWORK, 1L, 10_000L, 1_000L,
+        randomFn = { rng -> rng.nextLong(64, 5001) })
+
+    val partitionProbability = SimParam("partition_prob", "Partition probability/tick",
+        ParamCategory.NETWORK, 0.0, 0.1, 0.0, step = 0.001,
+        randomFn = { rng -> rng.nextDouble(0.0, 0.05) })
+
+    val partitionDurationSec = SimParam("partition_duration_sec", "Partition duration (s)",
+        ParamCategory.NETWORK, 1L, 300L, 30L,
+        randomFn = { rng -> rng.nextLong(5, 121) })
+
+    // ── Topology ─────────────────────────────────────────────────────────────
+    val nodeCount = SimParam("node_count", "Node count",
+        ParamCategory.TOPOLOGY, 5, 500, 30,
+        randomFn = { rng -> rng.nextInt(10, 201) })
+
+    val connectionsPerNode = SimParam("connections_per_node", "Avg connections/node",
+        ParamCategory.TOPOLOGY, 1, 20, 4,
+        randomFn = { rng -> rng.nextInt(2, 9) })
+
+    val churnRatePerMinute = SimParam("churn_rate", "Churn rate (%/min)",
+        ParamCategory.TOPOLOGY, 0.0, 0.3, 0.0, step = 0.01,
+        randomFn = { rng -> rng.nextDouble(0.0, 0.1) })
+
+    // ── Traffic ──────────────────────────────────────────────────────────────
+    val msgPerSecondPerNode = SimParam("msg_per_sec", "Msg/sec per node",
+        ParamCategory.TRAFFIC, 0.0, 10.0, 0.5, step = 0.1,
+        randomFn = { rng -> rng.nextDouble(0.0, 3.0) })
+
+    val minPayloadBytes = SimParam("min_payload", "Min payload (bytes)",
+        ParamCategory.TRAFFIC, 10, 50_000, 50,
+        randomFn = { rng -> rng.nextInt(10, 1001) })
+
+    val maxPayloadBytes = SimParam("max_payload", "Max payload (bytes)",
+        ParamCategory.TRAFFIC, 10, 5_000_000, 500,
+        randomFn = { rng -> rng.nextInt(500, 10_001) })
+
+    val burstProbability = SimParam("burst_prob", "Burst probability",
+        ParamCategory.TRAFFIC, 0.0, 0.2, 0.01, step = 0.005,
+        randomFn = { rng -> rng.nextDouble(0.0, 0.1) })
+
+    val burstMultiplier = SimParam("burst_mult", "Burst multiplier",
+        ParamCategory.TRAFFIC, 1, 100, 5,
+        randomFn = { rng -> rng.nextInt(2, 21) })
+
+    // ── Protocol ─────────────────────────────────────────────────────────────
+    val ttl = SimParam("ttl", "Message TTL",
+        ParamCategory.PROTOCOL, 1, 15, 7,
+        randomFn = { rng -> rng.nextInt(3, 12) })
+
+    val schedulerQuantumKb = SimParam("scheduler_quantum_kb", "Scheduler quantum (KB)",
+        ParamCategory.PROTOCOL, 10, 500, 60,
+        randomFn = { rng -> rng.nextInt(10, 181) })
+
+    val gossipIntervalMs = SimParam("gossip_interval_ms", "Gossip interval (ms)",
+        ParamCategory.PROTOCOL, 500L, 60_000L, 5_000L,
+        randomFn = { rng -> rng.nextLong(1_000, 15_001) })
+
+    // ── Sim control ──────────────────────────────────────────────────────────
+    val speedMultiplier = SimParam("speed_mult", "Sim speed multiplier",
+        ParamCategory.SIM_CONTROL, 0.01, 100.0, 1.0, step = 0.01,
+        randomFn = { rng -> rng.nextDouble(0.1, 10.0) })
+
+    val seed = SimParam("seed", "Random seed",
+        ParamCategory.SIM_CONTROL, 0L, Long.MAX_VALUE, 42L,
+        randomFn = { rng -> rng.nextLong(0, Long.MAX_VALUE) })
+
+    /** All params in order for serialization and dashboard rendering. */
+    val all: List<SimParam<*>> = listOf(
+        linkLatencyMs, linkJitterMs, lossRate, bandwidthKbps, partitionProbability, partitionDurationSec,
+        nodeCount, connectionsPerNode, churnRatePerMinute,
+        msgPerSecondPerNode, minPayloadBytes, maxPayloadBytes, burstProbability, burstMultiplier,
+        ttl, schedulerQuantumKb, gossipIntervalMs,
+        speedMultiplier, seed,
+    )
+
+    /** Randomize every param at once from a shared RNG. */
+    fun randomizeAll(rng: Random = Random.Default) = all.forEach { it.randomize(rng) }
+
+    fun descriptors(): List<ParamDescriptor> = all.map { it.toDescriptor() }
+}
