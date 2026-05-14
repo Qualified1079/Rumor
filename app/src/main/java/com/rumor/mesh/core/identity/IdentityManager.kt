@@ -26,9 +26,9 @@ class IdentityManager(
     }
 
     private val _identity = MutableStateFlow<LocalIdentity?>(null)
-    val identity: StateFlow<LocalIdentity?> = _identity.asStateFlow()
+    override val identity: StateFlow<LocalIdentity?> = _identity.asStateFlow()
 
-    val isUnlocked: Boolean get() = _identity.value != null
+    override val isUnlocked: Boolean get() = _identity.value != null
     val hasIdentity: Boolean get() = prefs.getBoolean("identity_exists", false)
 
     fun createIdentity(passphrase: String) {

@@ -12,6 +12,7 @@ import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.model.TrustLevel
 import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
@@ -93,7 +94,7 @@ class GossipEngine(
 
             for (msg in result.messagesReceived) {
                 val adjusted = msg.copy(receivedAtMs = System.currentTimeMillis())
-                processIncoming(adjusted, autoRelayIds)
+                processIncoming(adjusted, MessageSource.PEER, autoRelayIds)
             }
         }
     }
@@ -104,7 +105,7 @@ class GossipEngine(
         scope.launch {
             RumorLog.d(TAG, "Injecting from plugin $sourcePluginId: ${message.id.take(8)}…")
             val adjusted = message.copy(receivedAtMs = System.currentTimeMillis())
-            processIncoming(adjusted, emptySet())
+            processIncoming(adjusted, MessageSource.LOCAL_BRIDGE, emptySet())
         }
     }
 
@@ -191,16 +192,26 @@ class GossipEngine(
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
-    private suspend fun processIncoming(rawMsg: RumorMessage, autoRelayIds: Set<String>) {
-        val msg = clampTtl(rawMsg)
-        val isBridgeMessage = msg.signature == BRIDGE_UNSIGNED
-        val isNew = if (isBridgeMessage) {
-            duplicateFilter.recordAndCheck(msg.id)
+    private suspend fun processIncoming(
+        rawMsg: RumorMessage,
+        source: MessageSource,
+        autoRelayIds: Set<String>,
+    ) {
+        val clamped = clampTtl(rawMsg)
+        // Per-transport trust gate. The BRIDGE_UNSIGNED sentinel is honored only
+        // for messages handed in by a local bridge plugin — a network peer cannot
+        // forge it to skip Ed25519 verification.
+        val bridged = source == MessageSource.LOCAL_BRIDGE && clamped.signature == BRIDGE_UNSIGNED
+        val isNew = if (bridged) {
+            duplicateFilter.recordAndCheck(clamped.id)
         } else {
-            messageStore.ingest(msg)
+            messageStore.ingest(clamped)
         }
         if (!isNew) return
 
+        val msg = clamped.copy(
+            trustLevel = if (bridged) TrustLevel.BRIDGED else TrustLevel.VERIFIED,
+        )
         emitToInbox(msg)
         relay(msg, autoRelayIds)
     }
@@ -220,6 +231,10 @@ class GossipEngine(
      * blocking only suppresses what the local user sees.
      */
     private fun relay(msg: RumorMessage, autoRelayIds: Set<String>) {
+        // Unsigned bridge traffic is never re-relayed onto the signed mesh: peers
+        // reject unverifiable messages anyway, and re-signing here would launder a
+        // foreign message into a vouch this node never made.
+        if (msg.trustLevel == TrustLevel.BRIDGED) return
         when (msg.type) {
             MessageType.BROADCAST -> {
                 val forwarded = messageStore.decrementTtl(msg) ?: return
@@ -296,7 +311,21 @@ class GossipEngine(
     }
 
     companion object {
-        /** Sentinel value placed by bridge plugins. Skips sig verification on ingress. */
+        /**
+         * Sentinel placed in [RumorMessage.signature] by bridge plugins for
+         * messages carried in from a non-Rumor network. Honored only when the
+         * message arrives via [injectFromPlugin] ([MessageSource.LOCAL_BRIDGE]);
+         * over a peer transport it is treated as an invalid signature and the
+         * message is dropped.
+         */
         const val BRIDGE_UNSIGNED = "bridge_unsigned"
     }
+}
+
+/** Ingress transport a message arrived on — determines its trust gate. */
+private enum class MessageSource {
+    /** Received from a network peer over a Rumor gossip exchange. */
+    PEER,
+    /** Handed in by a local bridge plugin from an external network. */
+    LOCAL_BRIDGE,
 }

@@ -27,6 +27,13 @@ data class RumorMessage(
     val recipientId: String? = null,
     /** Ed25519 signature over all other fields (Base64). */
     val signature: String,
+    /**
+     * How this node established trust in the message. Set by [GossipEngine] from
+     * the ingress transport — never travels on the wire, so a peer cannot assert
+     * its own trust level.
+     */
+    @kotlinx.serialization.Transient
+    val trustLevel: TrustLevel = TrustLevel.VERIFIED,
     /** Unix epoch millis when this node first saw the message. Not propagated. */
     @kotlinx.serialization.Transient
     val receivedAtMs: Long = System.currentTimeMillis(),
@@ -37,6 +44,17 @@ data class RumorMessage(
     @kotlinx.serialization.Transient
     val wasRelayed: Boolean = false,
 )
+
+/**
+ * Per-hop trust in a message, decided locally from the transport it arrived on.
+ * Deliberately not [Serializable] — trust is never carried in the wire format.
+ */
+enum class TrustLevel {
+    /** [RumorMessage.signature] was verified against the sender's Ed25519 key. */
+    VERIFIED,
+    /** Carried in from a non-Rumor network by a local bridge plugin; unsigned. */
+    BRIDGED,
+}
 
 @Serializable
 enum class MessageType {
