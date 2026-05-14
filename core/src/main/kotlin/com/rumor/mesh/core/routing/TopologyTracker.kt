@@ -17,6 +17,11 @@ class TopologyTracker(
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    /**
+     * Record a completed exchange. [latencyMs] is kept as a smoothed diagnostic
+     * only — it is deliberately *not* used to rank peers, because on BLE/Wi-Fi
+     * Direct it mostly measures discovery timing rather than route quality.
+     */
     fun recordSession(peerId: String, latencyMs: Long, hopCount: Int) {
         scope.launch {
             val existing = routeRepo.getForPeer(peerId)
@@ -31,8 +36,9 @@ class TopologyTracker(
         }
     }
 
+    /** Peers to prefer for gossip — ranked by encounter recency, then session count. */
     suspend fun preferredPeers(limit: Int = 20): List<String> =
-        routeRepo.getFastest(limit).map { it.peerId }
+        routeRepo.getPreferred(limit).map { it.peerId }
 
     fun observeRoutes(): Flow<List<Route>> = routeRepo.observeAll()
 

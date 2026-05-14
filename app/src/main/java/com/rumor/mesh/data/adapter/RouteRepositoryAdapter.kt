@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.map
 
 class RouteRepositoryAdapter(private val dao: RouteDao) : RouteRepository {
     override suspend fun upsert(route: Route) = dao.upsert(route.toEntity())
-    override suspend fun getFastest(limit: Int): List<Route> = dao.getFastest(limit).map(RouteEntity::toModel)
+    override suspend fun getPreferred(limit: Int): List<Route> = dao.getPreferred(limit).map(RouteEntity::toModel)
     override fun observeAll(): Flow<List<Route>> = dao.observeAll().map { it.map(RouteEntity::toModel) }
     override suspend fun getForPeer(peerId: String): Route? = dao.getForPeer(peerId)?.toModel()
     override suspend fun pruneStale(olderThanMs: Long) = dao.pruneStale(olderThanMs)

@@ -111,8 +111,10 @@ class InMemoryRouteRepository : RouteRepository {
         routes[route.peerId] = route
         _flow.value = routes.values.toList()
     }
-    override suspend fun getFastest(limit: Int): List<Route> =
-        routes.values.sortedBy { it.latencyMs }.take(limit)
+    override suspend fun getPreferred(limit: Int): List<Route> =
+        routes.values
+            .sortedWith(compareByDescending<Route> { it.lastUpdatedMs }.thenByDescending { it.sessionCount })
+            .take(limit)
     override fun observeAll(): Flow<List<Route>> = _flow
     override suspend fun getForPeer(peerId: String): Route? = routes[peerId]
     override suspend fun pruneStale(olderThanMs: Long) {

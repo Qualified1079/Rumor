@@ -6,7 +6,8 @@ import kotlinx.coroutines.flow.Flow
 
 interface RouteRepository {
     suspend fun upsert(route: Route)
-    suspend fun getFastest(limit: Int = 20): List<Route>
+    /** Peers to prefer for gossip — ranked by encounter recency, then session count. */
+    suspend fun getPreferred(limit: Int = 20): List<Route>
     fun observeAll(): Flow<List<Route>>
     suspend fun getForPeer(peerId: String): Route?
     suspend fun pruneStale(olderThanMs: Long)
