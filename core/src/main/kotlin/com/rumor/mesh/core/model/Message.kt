@@ -102,8 +102,8 @@ enum class ContentType {
  * within a tier, deficit round robin across sources keeps any single peer from
  * starving the rest.
  *
- * Reserved here so the wire protocol can carry it before the scheduler exists.
- * Until the scheduler is wired in, every frame is treated as REALTIME.
+ * A message's class is derived from its type and content via [trafficClass] —
+ * it is never read off the wire, so it cannot be spoofed.
  */
 @Serializable
 enum class TrafficClass {
@@ -116,3 +116,30 @@ enum class TrafficClass {
     /** Image, voice, video, file chunks. */
     @SerialName("bulk")           BULK,
 }
+
+/**
+ * Traffic class for this message, derived from its [type] and payload content
+ * type.
+ *
+ * Derived rather than carried on the wire on purpose: a sender cannot mislabel
+ * a bulky video as high-priority to jump the queue — the class always reflects
+ * what the message actually is. DIRECT messages are always text DMs in this
+ * protocol (media goes through the chunked-transfer path), so they map to
+ * REALTIME.
+ */
+val RumorMessage.trafficClass: TrafficClass
+    get() = when (type) {
+        MessageType.PING,
+        MessageType.PONG,
+        MessageType.CHUNK_REQUEST,
+        MessageType.BLOCKLIST_PUBLISH,
+        MessageType.BLOCKLIST_DIFF   -> TrafficClass.INFRASTRUCTURE
+        MessageType.TRANSFER_METADATA -> TrafficClass.TRANSFER_SETUP
+        MessageType.CHUNK             -> TrafficClass.BULK
+        MessageType.BROADCAST,
+        MessageType.DIRECT -> when (payload?.contentType) {
+            ContentType.IMAGE, ContentType.VOICE, ContentType.FILE -> TrafficClass.BULK
+            ContentType.CONTROL                                    -> TrafficClass.INFRASTRUCTURE
+            ContentType.TEXT, null                                 -> TrafficClass.REALTIME
+        }
+    }

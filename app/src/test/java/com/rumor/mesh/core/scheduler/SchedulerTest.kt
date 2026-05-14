@@ -10,6 +10,7 @@ import org.junit.Test
 
 class SchedulerTest {
 
+    /** A REALTIME message (BROADCAST + TEXT). */
     private fun msg(
         senderId: String,
         contentLength: Int = 50,
@@ -25,6 +26,14 @@ class SchedulerTest {
         payload = MessagePayload(ContentType.TEXT, "x".repeat(contentLength)),
         signature = "sig",
     )
+
+    /** A BULK message (BROADCAST + IMAGE). */
+    private fun bulkMsg(senderId: String, id: String = java.util.UUID.randomUUID().toString()) =
+        msg(senderId, id = id).copy(payload = MessagePayload(ContentType.IMAGE, "x".repeat(50)))
+
+    /** An INFRASTRUCTURE message (PING, no payload). */
+    private fun infraMsg(senderId: String, id: String = java.util.UUID.randomUUID().toString()) =
+        msg(senderId, id = id).copy(type = MessageType.PING, payload = null)
 
     @Test
     fun `empty scheduler returns empty list`() {
@@ -128,5 +137,32 @@ class SchedulerTest {
         assertTrue(s.isEmpty)
         s.enqueue(msg("alice"))
         assertEquals(1, s.take().size)
+    }
+
+    @Test
+    fun `traffic classes drain in strict priority order`() {
+        val s = Scheduler()
+        // Enqueue lowest-priority first to prove ordering is by class, not arrival.
+        s.enqueue(bulkMsg("alice"))
+        s.enqueue(msg("bob"))          // REALTIME
+        s.enqueue(infraMsg("carol"))   // INFRASTRUCTURE
+
+        val result = s.take()
+        assertEquals(3, result.size)
+        assertEquals("infrastructure first", "carol", result[0].senderId)
+        assertEquals("realtime second", "bob", result[1].senderId)
+        assertEquals("bulk last", "alice", result[2].senderId)
+    }
+
+    @Test
+    fun `overflow sheds bulk before realtime`() {
+        val s = Scheduler(totalQueueCap = 5)
+        repeat(5) { s.enqueue(bulkMsg("alice", id = "bulk-$it")) }
+        s.enqueue(msg("bob", id = "text"))   // pushes total to 6 → one bulk is shed
+
+        val result = s.take()
+        assertEquals("backlog held at the cap", 5, result.size)
+        assertTrue("the text message survived", result.any { it.id == "text" })
+        assertEquals("only bulk was shed", 4, result.count { it.senderId == "alice" })
     }
 }
