@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.logging.RumorLog
+import com.rumor.mesh.core.policy.StaticModeManager
 import com.rumor.mesh.core.transport.DeviceQuirks
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,10 +20,12 @@ data class SettingsState(
     val scanIntervalSec: Int = 5,
     val sleepIntervalSec: Int = 30,
     val debugLogging: Boolean = false,
+    val staticMode: Boolean = false,
     val showBatteryOptimisationWarning: Boolean = false,
 )
 class SettingsViewModel(
     private val identityManager: IdentityManager,
+    private val staticModeManager: StaticModeManager,
     private val context: Context,
 ) : ViewModel() {
 
@@ -38,6 +41,15 @@ class SettingsViewModel(
                 ) }
             }
         }
+        viewModelScope.launch {
+            staticModeManager.enabled.collect { on ->
+                _state.update { it.copy(staticMode = on) }
+            }
+        }
+    }
+
+    fun setStaticMode(enabled: Boolean) {
+        staticModeManager.setEnabled(enabled)
     }
 
     fun setScanInterval(seconds: Int) {

@@ -16,6 +16,8 @@ import com.rumor.mesh.core.logging.AndroidLogSink
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.policy.InboxPolicyManager
+import com.rumor.mesh.core.policy.StaticMode
+import com.rumor.mesh.core.policy.StaticModeManager
 import com.rumor.mesh.core.protocol.DuplicateFilter
 import com.rumor.mesh.core.protocol.GossipEngine
 import com.rumor.mesh.core.protocol.MessageStore
@@ -77,6 +79,10 @@ val appModule = module {
     single { IdentityManager(androidContext()) }
     single<IdentityProvider> { get<IdentityManager>() }
 
+    // ── Static mode ───────────────────────────────────────────────────────────
+    single { StaticModeManager(androidContext()) }
+    single<StaticMode> { get<StaticModeManager>() }
+
     // ── Block module ──────────────────────────────────────────────────────────
     single { BlockManager(get<BlockEntryRepositoryAdapter>(), get<SubscribedBlocklistRepositoryAdapter>(), get<BlocklistEntryRepositoryAdapter>()) }
     single { BlocklistPublisher(get<BlockEntryRepositoryAdapter>(), get<IdentityProvider>()) }
@@ -84,11 +90,11 @@ val appModule = module {
 
     // ── Protocol layer ────────────────────────────────────────────────────────
     single { DuplicateFilter() }
-    single { MessageStore(get(), get(), get()) }
+    single { MessageStore(get(), get(), get(), get<StaticMode>()) }
     single { OnlineStatusTracker() }
     single { TopologyTracker(get()) }
     single { BreadcrumbCache(get()) }
-    single { Scheduler() }
+    single { Scheduler(staticMode = get<StaticMode>()) }
     single<InboxFilter> { InboxPolicyManager(androidContext(), get()) }
     single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get()) }
 
@@ -100,7 +106,7 @@ val appModule = module {
     single { BlocklistGossipBridge(get(), get(), get(), get()) }
 
     // ── Transport ─────────────────────────────────────────────────────────────
-    single { BleDiscoveryManager(androidContext()) }
+    single { BleDiscoveryManager(androidContext(), get<StaticMode>()) }
     single { WifiDirectTransport(androidContext()) }
 
     // ── Plugins ───────────────────────────────────────────────────────────────
@@ -113,7 +119,7 @@ val appModule = module {
     // ── ViewModels ────────────────────────────────────────────────────────────
     viewModel { FeedViewModel(get(), get<MeshControllerHolder>()) }
     viewModel { ContactsViewModel(get(), get()) }
-    viewModel { SettingsViewModel(get(), androidContext()) }
+    viewModel { SettingsViewModel(get(), get(), androidContext()) }
     viewModel { PluginsViewModel(get()) }
     viewModel { InboxPolicyViewModel(get()) }
     viewModel { BlockManagementViewModel(get(), get()) }

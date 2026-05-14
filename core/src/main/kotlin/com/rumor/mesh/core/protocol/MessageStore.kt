@@ -7,6 +7,7 @@ import com.rumor.mesh.core.data.MessageRepository
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.Contact
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.policy.StaticMode
 import kotlinx.coroutines.flow.Flow
 
 private const val TAG = "MessageStore"
@@ -14,11 +15,14 @@ private const val DEFAULT_BROADCAST_TTL = 7
 private const val MANUAL_RELAY_BOOST = 2
 private const val MAX_MESSAGES = 50_000
 private const val EVICT_BATCH = 500
+/** A static node holds a far deeper backlog so it can serve peers that were offline longer. */
+private const val STATIC_CACHE_BOOST = 4
 
 class MessageStore(
     private val messageRepo: MessageRepository,
     private val contactRepo: ContactRepository,
     private val duplicateFilter: DuplicateFilter,
+    private val staticMode: StaticMode? = null,
 ) {
     /**
      * Ingest a message from a gossip exchange.
@@ -40,9 +44,12 @@ class MessageStore(
 
         messageRepo.insert(msg)
 
+        val isStatic = staticMode?.enabled?.value == true
+        val maxMessages = if (isStatic) MAX_MESSAGES * STATIC_CACHE_BOOST else MAX_MESSAGES
+        val evictBatch = if (isStatic) EVICT_BATCH * STATIC_CACHE_BOOST else EVICT_BATCH
         val count = messageRepo.count()
-        if (count > MAX_MESSAGES) {
-            messageRepo.evictOldest(EVICT_BATCH)
+        if (count > maxMessages) {
+            messageRepo.evictOldest(evictBatch)
         }
 
         return true

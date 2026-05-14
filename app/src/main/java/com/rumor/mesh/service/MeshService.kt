@@ -17,6 +17,7 @@ import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.ContentType
+import com.rumor.mesh.core.policy.StaticMode
 import com.rumor.mesh.core.protocol.GossipEngine
 import com.rumor.mesh.core.block.BlocklistGossipBridge
 import com.rumor.mesh.core.transfer.TransferAssembler
@@ -36,6 +37,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import java.util.Base64
@@ -73,6 +75,7 @@ class MeshService : Service(), MeshController {
     private val breadcrumbCache: BreadcrumbCache by inject()
     private val pluginRegistry: PluginRegistry by inject()
     private val pluginCatalog: PluginCatalog by inject()
+    private val staticMode: StaticMode by inject()
     private val contactDao: ContactDao by inject()
     private val transferSender: TransferSender by inject()
     // Injected for side effect — its constructor subscribes to incoming gossip.
@@ -152,13 +155,17 @@ class MeshService : Service(), MeshController {
             }
         }
 
-        // ── Peer count → notification ────────────────────────────────────────
+        // ── Peer count / static mode → notification ──────────────────────────
         scope.launch {
-            wifiDirectTransport.peerCount.collect { count ->
-                updateNotification(
-                    if (count > 0) "$count peer${if (count == 1) "" else "s"} nearby"
-                    else "Scanning for peers…"
-                )
+            wifiDirectTransport.peerCount.collect { updateNotification(statusText(it)) }
+        }
+        // Re-arm BLE on toggle so the new scan/advertise duty cycle takes effect
+        // immediately. drop(1) skips the initial value emitted on collect.
+        scope.launch {
+            staticMode.enabled.drop(1).collect {
+                updateNotification(statusText(wifiDirectTransport.peerCount.value))
+                bleDiscovery.stop()
+                bleDiscovery.start()
             }
         }
 
@@ -284,5 +291,15 @@ class MeshService : Service(), MeshController {
     private fun updateNotification(statusText: String) {
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, buildNotification(statusText))
+    }
+
+    /** Notification status line, with a static-node suffix when the toggle is on. */
+    private fun statusText(peerCount: Int): String {
+        val base = if (peerCount > 0) {
+            "$peerCount peer${if (peerCount == 1) "" else "s"} nearby"
+        } else {
+            "Scanning for peers…"
+        }
+        return if (staticMode.enabled.value) "$base · static node" else base
     }
 }

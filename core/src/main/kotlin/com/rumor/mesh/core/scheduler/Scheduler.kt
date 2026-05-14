@@ -1,6 +1,7 @@
 package com.rumor.mesh.core.scheduler
 
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.policy.StaticMode
 
 /**
  * Pure Deficit Round Robin scheduler.
@@ -22,15 +23,23 @@ import com.rumor.mesh.core.model.RumorMessage
 class Scheduler(
     private val quantumBytes: Int = DEFAULT_QUANTUM_BYTES,
     private val perFlowCap: Int = DEFAULT_PER_FLOW_CAP,
+    private val staticMode: StaticMode? = null,
 ) {
     private val lock = Any()
     private val queues = LinkedHashMap<String, ArrayDeque<RumorMessage>>()
     private val deficits = HashMap<String, Int>()
 
+    // A static node is plugged in: it can afford bigger DRR rounds (more
+    // throughput per drain) and deeper per-flow queues (more buffering for
+    // peers) without worrying about battery.
+    private val isStatic: Boolean get() = staticMode?.enabled?.value == true
+    private val effectiveQuantum: Int get() = if (isStatic) quantumBytes * STATIC_BOOST else quantumBytes
+    private val effectivePerFlowCap: Int get() = if (isStatic) perFlowCap * STATIC_BOOST else perFlowCap
+
     fun enqueue(msg: RumorMessage) = synchronized(lock) {
         val queue = queues.getOrPut(flowKey(msg)) { ArrayDeque() }
         // Drop-oldest at cap so a misbehaving sender can't grow memory without bound.
-        while (queue.size >= perFlowCap) queue.removeFirst()
+        while (queue.size >= effectivePerFlowCap) queue.removeFirst()
         queue.addLast(msg)
     }
 
@@ -49,7 +58,7 @@ class Scheduler(
             for (key in queues.keys.toList()) {
                 if (result.size >= maxCount) break
                 val queue = queues[key] ?: continue
-                var deficit = (deficits[key] ?: 0) + quantumBytes
+                var deficit = (deficits[key] ?: 0) + effectiveQuantum
                 while (queue.isNotEmpty() && result.size < maxCount) {
                     val head = queue.first()
                     val size = sizeOf(head)
@@ -94,5 +103,7 @@ class Scheduler(
         const val DEFAULT_QUANTUM_BYTES = 60_000
         /** Per-flow queue cap; drop-oldest above this. */
         const val DEFAULT_PER_FLOW_CAP = 500
+        /** Multiplier applied to quantum and per-flow cap when [StaticMode] is on. */
+        const val STATIC_BOOST = 3
     }
 }

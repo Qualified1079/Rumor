@@ -12,6 +12,7 @@ import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.rumor.mesh.core.logging.RumorLog
+import com.rumor.mesh.core.policy.StaticMode
 import com.rumor.mesh.core.transport.DeviceQuirks
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +30,7 @@ import java.util.UUID
  */
 class BleDiscoveryManager(
     private val context: Context,
+    private val staticMode: StaticMode,
 ) {
     private val TAG = "BleDiscovery"
 
@@ -117,11 +119,19 @@ class BleDiscoveryManager(
             return
         }
 
+        // A plugged-in static node advertises harder so peers find it faster.
+        val isStatic = staticMode.enabled.value
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
+            .setAdvertiseMode(
+                if (isStatic) AdvertiseSettings.ADVERTISE_MODE_BALANCED
+                else AdvertiseSettings.ADVERTISE_MODE_LOW_POWER
+            )
             .setConnectable(false)
             .setTimeout(0)  // advertise indefinitely
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_LOW)
+            .setTxPowerLevel(
+                if (isStatic) AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM
+                else AdvertiseSettings.ADVERTISE_TX_POWER_LOW
+            )
             .build()
 
         val data = AdvertiseData.Builder()
@@ -188,8 +198,13 @@ class BleDiscoveryManager(
             .setServiceUuid(RUMOR_PARCEL_UUID)
             .build()
 
+        // Static nodes scan at a balanced duty cycle — quicker peer discovery
+        // at a power cost a plugged-in device can absorb.
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_POWER)
+            .setScanMode(
+                if (staticMode.enabled.value) ScanSettings.SCAN_MODE_BALANCED
+                else ScanSettings.SCAN_MODE_LOW_POWER
+            )
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .setMatchMode(ScanSettings.MATCH_MODE_STICKY)
             .build()

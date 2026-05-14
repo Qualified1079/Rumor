@@ -107,6 +107,19 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(4.dp))
 
+        // ── Node mode ─────────────────────────────────────────────────────
+        SectionHeader("Node mode")
+        SwitchRow(
+            icon = Icons.Default.Power,
+            title = "Static mode",
+            subtitle = "For a plugged-in, always-on device. Scans harder, " +
+                "caches more for peers, and pushes larger batches per exchange.",
+            checked = state.staticMode,
+            onCheckedChange = viewModel::setStaticMode,
+        )
+
+        Spacer(Modifier.height(4.dp))
+
         // ── Debug ─────────────────────────────────────────────────────────
         SectionHeader("Debug")
         SwitchRow(
@@ -186,9 +199,11 @@ private fun SwitchRow(
     title: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    subtitle: String? = null,
 ) {
     ListItem(
         headlineContent = { Text(title) },
+        supportingContent = subtitle?.let { { Text(it, style = MaterialTheme.typography.bodySmall) } },
         leadingContent = { Icon(icon, contentDescription = null) },
         trailingContent = {
             Switch(checked = checked, onCheckedChange = onCheckedChange)
