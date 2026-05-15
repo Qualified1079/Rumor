@@ -25,6 +25,8 @@ interface MeshController {
     fun manualRelay(message: RumorMessage)
     fun triggerActiveScan()
     fun isServiceRunning(): Boolean
+    /** Returns the cached plaintext for an outbound DM, or null if not found. */
+    fun sentPlaintextFor(messageId: String): String?
 
     // ── Plugins (toggle bridges on/off at runtime) ────────────────────────────
     fun availablePlugins(): List<PluginDescriptor>

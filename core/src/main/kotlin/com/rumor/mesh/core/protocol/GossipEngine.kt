@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "GossipEngine"
@@ -77,6 +78,17 @@ class GossipEngine(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
 ) {
     private val sequenceCounter = AtomicLong(System.currentTimeMillis())
+
+    /**
+     * Plaintext for outbound DMs keyed by message ID. The ephemeral X25519 private
+     * key is discarded after encryption so the sender cannot re-derive the text.
+     * Bounded to 500 entries; oldest are evicted by insertion order via LinkedHashMap.
+     */
+    private val sentDmPlaintext: MutableMap<String, String> = object : LinkedHashMap<String, String>(64, 0.75f, false) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 500
+    }.let { java.util.Collections.synchronizedMap(it) }
+
+    fun sentPlaintextFor(messageId: String): String? = sentDmPlaintext[messageId]
 
     private val _incomingMessages = MutableSharedFlow<RumorMessage>(extraBufferCapacity = 256)
     val incomingMessages: SharedFlow<RumorMessage> = _incomingMessages
@@ -163,6 +175,7 @@ class GossipEngine(
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
+        sentDmPlaintext[msg.id] = text
         enqueueImmediate(msg)
         return msg
     }

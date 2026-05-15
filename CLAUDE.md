@@ -61,10 +61,15 @@ Update this list whenever something is completed or newly identified.
 
 | # | Item | Notes |
 |---|------|-------|
-| G1 | **DM sent-message plaintext** | Locally sent DMs show `[sent]` because the ephemeral private key is discarded after encryption. Fix: cache plaintext at compose time in a local-only store (new Room table or in-memory map with a `localPlaintext` transient field). |
 | G2 | **BLE reconnect loop for priority peers** | After the Wi-Fi Direct group is kept alive, if the peer disconnects, there is no reconnect attempt. Needs a watcher coroutine on `exchangeResults` per priority peer that re-initiates discovery when the peer goes silent. |
-| G3 | **`onExchangeFailed` wiring** | `GossipEngine.onExchangeFailed()` exists (for canary metrics). `WifiDirectTransport` doesn't call it yet — needs a failure flow or callback in `TransportConfig`. |
-| G4 | **Canary metrics queue-depth push** | `CanaryMetrics.publish(queueDepth)` is called reactively. A periodic background push (every ~5s) would keep the debug screen live without requiring a message event to trigger it. |
+
+### Completed gaps
+
+| # | Item | Resolution |
+|---|------|------------|
+| G1 | **DM sent-message plaintext** | `GossipEngine.sentDmPlaintext` (bounded LinkedHashMap, 500 entries) stores plaintext at compose time. Exposed via `MeshController.sentPlaintextFor()`. `ThreadViewModel` checks this before falling back to `[sent]`. |
+| G3 | **`onExchangeFailed` wiring** | `TransportConfig.onExchangeFailed` callback added; `WifiDirectTransport.runSession` calls it when `session.run()` returns null. `MeshService` wires it to `gossipEngine::onExchangeFailed`. |
+| G4 | **Canary metrics queue-depth push** | `DebugMetricsViewModel` polls `engine.canaryMetrics.publish(engine.queueDepth)` every 1s via a `flow { while(true) { … delay(1_000) } }`. Screen stays live without needing a message event. |
 
 ### Design decisions recorded
 

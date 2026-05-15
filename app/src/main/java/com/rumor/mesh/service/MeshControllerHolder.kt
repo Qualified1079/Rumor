@@ -34,6 +34,7 @@ class MeshControllerHolder {
         override fun manualRelay(message: RumorMessage) {}
         override fun triggerActiveScan() {}
         override fun isServiceRunning(): Boolean = false
+        override fun sentPlaintextFor(messageId: String): String? = null
         override fun availablePlugins(): List<PluginDescriptor> = emptyList()
         override fun isPluginEnabled(pluginId: String): Boolean = false
         override fun setPluginEnabled(pluginId: String, enabled: Boolean) {}

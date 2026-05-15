@@ -90,6 +90,8 @@ class WifiDirectTransport(
          * hammering the same peer continuously. 0 = no cooldown.
          */
         val sessionCooldownMs: Long = 45_000L,
+        /** Invoked with the peer's userId when a session completes with no result. */
+        val onExchangeFailed: (String) -> Unit = {},
     )
 
     private var config: TransportConfig? = null
@@ -267,7 +269,10 @@ class WifiDirectTransport(
         )
         val result = try { session.run() }
         finally { claimedPeer?.let { activePeerSessions.remove(it) } }
-        if (result == null) return
+        if (result == null) {
+            claimedPeer?.let { cfg.onExchangeFailed(it) }
+            return
+        }
 
         // Record the session for cooldown tracking and future addr→userId lookups.
         recentExchangeMs[result.peerUserId] = System.currentTimeMillis()

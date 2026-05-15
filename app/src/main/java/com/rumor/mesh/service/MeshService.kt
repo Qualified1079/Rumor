@@ -141,6 +141,7 @@ class MeshService : Service(), MeshController {
             knownIdsProvider    = gossipEngine::knownMessageIds,
             onlineUsersProvider = onlineStatusTracker::currentSnapshot,
             isPriorityPeer      = { userId -> contactRepo.getById(userId)?.isPriorityPeer == true },
+            onExchangeFailed    = gossipEngine::onExchangeFailed,
         )
 
         // ── Wire gossip engine output → plugins ──────────────────────────────
@@ -248,6 +249,9 @@ class MeshService : Service(), MeshController {
     }
 
     override fun isServiceRunning() = true
+
+    override fun sentPlaintextFor(messageId: String): String? =
+        gossipEngine.sentPlaintextFor(messageId)
 
     override fun availablePlugins(): List<PluginDescriptor> = pluginCatalog.available()
 

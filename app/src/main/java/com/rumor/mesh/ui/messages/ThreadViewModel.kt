@@ -113,7 +113,7 @@ class ThreadViewModel(
         val body = when {
             type == MessageType.TRANSFER_METADATA -> "[transfer]"
             encryptedPayload == null -> payload?.content ?: ""
-            isFromMe -> "[sent]"
+            isFromMe -> controllerHolder.controller().sentPlaintextFor(id) ?: "[sent]"
             else -> decryptPayload(encryptedPayload, identity.privateKeyBytes)
         }
         return DisplayMessage(raw = this, body = body, isFromMe = isFromMe)
