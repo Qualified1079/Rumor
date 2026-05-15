@@ -30,7 +30,7 @@ class SimTransport(
         var dropped = 0
 
         // A → B
-        val outboundA = nodeA.takeOutbound()
+        val outboundA = nodeA.takeOutbound(nodeB.userId)
         val knownB    = nodeB.knownIds()
         val toSendA   = outboundA.filter { it.id !in knownB }
         val deliveredA = mutableListOf<RumorMessage>()
@@ -52,7 +52,7 @@ class SimTransport(
         }
 
         // B → A
-        val outboundB = nodeB.takeOutbound()
+        val outboundB = nodeB.takeOutbound(nodeA.userId)
         val knownA    = nodeA.knownIds()
         val toSendB   = outboundB.filter { it.id !in knownA }
         val deliveredB = mutableListOf<RumorMessage>()

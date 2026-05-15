@@ -267,7 +267,23 @@ class GossipEngine(
 
     // ── Transport supply ──────────────────────────────────────────────────────
 
-    fun messagesForExchange(): List<RumorMessage> = scheduler.take(200)
+    /**
+     * Returns messages to offer to [peerUserId]. The batch size is shaped by the
+     * peer's recent overlap history: a peer that already knew most of our last
+     * offer gets a smaller, freshest-only batch; a peer with low overlap gets a
+     * full batch. This is the protocol-layer expression of diversity-aware
+     * routing — see [NeighborStore]. Peer identity comes from the post-HELLO
+     * Ed25519 fingerprint, never from MAC or pre-handshake hints.
+     */
+    fun messagesForExchange(peerUserId: String): List<RumorMessage> {
+        val overlap = topologyTracker.overlapFor(peerUserId)
+        val cap = when {
+            overlap >= 0.8f -> 50    // peer is well-informed; send just the freshest
+            overlap >= 0.5f -> 100
+            else            -> 200   // novel peer or unknown — send the full batch
+        }
+        return scheduler.take(cap)
+    }
     fun knownMessageIds(): Set<String> = duplicateFilter.knownIds()
     val queueDepth: Int get() = scheduler.queueDepth
 

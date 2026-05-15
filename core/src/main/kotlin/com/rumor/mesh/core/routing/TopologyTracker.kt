@@ -68,6 +68,9 @@ class TopologyTracker(
     suspend fun preferredPeers(limit: Int = 20): List<String> =
         routeRepo.getPreferred(limit).map { it.peerId }
 
+    /** EMA overlap fraction for [peerId], or 0.5 (neutral) if unknown. */
+    fun overlapFor(peerId: String): Float = neighborStore.overlapFor(peerId)
+
     /**
      * Select up to [limit] peers from [candidates] to maximise novel message
      * reach. Uses [NeighborStore] diversity scoring: 80% lowest-overlap peers

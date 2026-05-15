@@ -44,18 +44,16 @@ When adding a new core class that needs to reach the app:
 
 Update this list whenever something is completed or newly identified.
 
-### In-progress / partially done
+### Critical bug history
 
-| # | Item | Status | Files |
-|---|------|--------|-------|
-| P2 | `selectDiversePeers` integration in transport | `NeighborStore` + `TopologyTracker.selectDiversePeers()` exist. Pre-HELLO peer selection is impossible without trusting MACs (which we don't), so diversity is enforced at the protocol layer (`NeighborStore` informs which userIds to favour when there are multiple HELLO-verified candidates queued). | `WifiDirectTransport.kt`, `TopologyTracker.kt` |
+- **Duplicate `GossipSession.kt` / `BloomFilterData.kt`** existed in both `:core/.../transport/` and `:app/.../wifidirect/` with the same FQN, causing the build to fail since `a1bc312`. Resolved: deleted the `:core` copies; the `:app/wifidirect/` versions are canonical. Be wary when adding new same-named files in both modules.
 
 ### Fully stubbed (TODO comments in code)
 
 | # | Item | Files | Notes |
 |---|------|-------|-------|
-| S1 | **Meshtastic bridge** | `app/…/plugin/meshtastic/MeshtasticBridge.kt` | ~14 TODOs. Needs: BT/USB RFCOMM, varint-framed protobuf decode (`MeshPacket`), outbound encode. Everything else (plugin API, trust gating, relay) is done. |
-| S2 | **MeshCore bridge** | `app/…/plugin/meshcore/MeshCoreBridge.kt` | ~11 TODOs. Same pattern as Meshtastic but MeshCore binary format instead of protobuf. |
+| S1 | **Meshtastic bridge** | `app/…/plugin/meshtastic/MeshtasticBridge.kt` | BLE service `6ba1b218-15a8-461f-9fa8-5dcae273eafd`; chars `2c55e69e-…` (FromRadio read), `f75c76d2-…` (ToRadio write), `ed9da18c-…` (FromNum notify). Serial framing `0x94 0xc3` + 2-byte BE length + protobuf. Hand-rolled protobuf decoder for `FromRadio`/`ToRadio`/`MeshPacket`/`Data`/`PortNum` is cheaper than pulling protoc Gradle plugin. Default channel PSK `AQ==` decrypts to a publicly-known AES-256-CTR key; payload nonce = `packetId\|\|fromNode`. **BLE bonding required** by default firmware — must call `device.createBond()` and handle `ACTION_PAIRING_REQUEST`. License: GPL-3.0 (firmware + protobufs). |
+| S2 | **MeshCore bridge** | `app/…/plugin/meshcore/MeshCoreBridge.kt` | Repo: `github.com/meshcore-dev/MeshCore` (MIT). Uses Nordic UART Service `6E400001-…` (RX `…0002` write, TX `…0003` notify). BLE frame = single GATT write/notify (no length prefix). USB-CDC frame = `>`/`<` + 2-byte LE length + frame. Companion sees **plaintext** — radio decrypts before pushing. Send: `CMD_SEND_CHANNEL_MESSAGE` (0x03) / `CMD_SEND_TXT_MSG`. Recv push: `PACKET_CONTACT_MSG_RECV` / `PACKET_CHANNEL_MSG_RECV` (+ `_V3`). No BLE bonding required. Reference impl: `michaelhart/meshcore-decoder` (TS). |
 
 ### Completed gaps
 
@@ -63,6 +61,7 @@ Update this list whenever something is completed or newly identified.
 |---|------|------------|
 | G1 | **DM sent-message plaintext** | `GossipEngine.sentDmPlaintext` (bounded LinkedHashMap, 500 entries) stores plaintext at compose time. Exposed via `MeshController.sentPlaintextFor()`. `ThreadViewModel` checks this before falling back to `[sent]`. |
 | G2 | **Priority-peer reconnect** | `WifiDirectTransport` tracks `activePriorityPeers` (userIds in live priority sessions). On Wi-Fi Direct disconnect, the set is moved to `priorityReconnectPending` and a watcher coroutine fires `discoverPeers()` with 2s→30s exponential backoff until the set drains. Identity is only ever confirmed via HELLO — MAC addresses are never trusted as identity. |
+| P2 | **Protocol-layer diversity** | `messagesForExchange(peerUserId)` is now peer-aware. After HELLO, `GossipSession` calls the provider with the verified userId; `GossipEngine` consults `TopologyTracker.overlapFor(peerUserId)` and shapes the batch: overlap≥0.8 → 50 messages, ≥0.5 → 100, else 200. Well-informed peers get a smaller freshest-only batch; novel peers get the full set. Pre-HELLO selection was rejected because it requires trusting MACs. |
 | G3 | **`onExchangeFailed` wiring** | `TransportConfig.onExchangeFailed` callback added; `WifiDirectTransport.runSession` calls it when `session.run()` returns null. `MeshService` wires it to `gossipEngine::onExchangeFailed`. |
 | G4 | **Canary metrics queue-depth push** | `DebugMetricsViewModel` polls `engine.canaryMetrics.publish(engine.queueDepth)` every 1s via a `flow { while(true) { … delay(1_000) } }`. Screen stays live without needing a message event. |
 
