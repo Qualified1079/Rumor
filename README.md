@@ -401,11 +401,90 @@ The Transfers screen shows recent transfers with a progress indicator for in-fli
 
 ## Scheduler — outbound fairness
 
-Outbound messages pass through a Deficit Round Robin (DRR) scheduler keyed by sender User ID before entering the gossip engine's send queue.
+Outbound messages pass through a class-aware Deficit Round Robin (DRR) scheduler before entering the gossip engine's send queue.
 
-Each sender gets an equal byte budget per scheduling round. A peer that sends many small messages cannot crowd out a peer sending one large message — the budget is byte-based, not count-based. Leftover budget (deficit) carries into the next round so bursty senders catch up fairly. A sender with no queued messages resets to zero deficit when they next enqueue.
+**Two levels of priority:**
 
-This means a single noisy peer — or a misconfigured bridge plugin injecting floods — cannot starve other senders on a shared node.
+1. **Traffic class** — messages are bucketed by derived class and drained in strict priority order: `INFRASTRUCTURE` (ping, chunk requests, blocklist diffs) first, then `REALTIME` (text messages), `TRANSFER_SETUP` (transfer metadata, blocklist snapshots), and `BULK` (image/voice/file chunks) last. Routing chatter and texts never wait behind a flood of media chunks.
+
+2. **Flow (DRR within a class)** — every distinct sender ID is one flow. Each round a flow gets a byte-credit quantum; messages are popped while the head-of-line fits the remaining credit. Leftover deficit carries to the next round.
+
+**Size-ceiling hardening:** A message cannot claim a high-priority class with a large payload. Each class has a ceiling (INFRASTRUCTURE/REALTIME: 16 KB, TRANSFER_SETUP: 256 KB). Anything over its class ceiling is forced to BULK regardless of message type. A custom client mislabelling a 60 KB blob as `PING` gains nothing.
+
+**Overflow shedding:** When the total backlog exceeds the cap, the deepest flow in the lowest-priority class is trimmed first. Under load the node sheds bulk payloads (which recipients can re-request via `CHUNK_REQUEST`) rather than dropping texts or routing traffic.
+
+**Static mode boost:** Nodes marked as static (plugged in, always on) get 3× quantum, per-flow cap, and total cap.
+
+---
+
+## Relay jitter and micro-batching
+
+Received messages are not immediately committed to the outbound scheduler. Instead they sit in a `RelayBatcher` for a random 100–500ms window before being flushed.
+
+Two benefits:
+- **Timing correlation resistance** — a passive observer cannot reliably link an incoming message to its outbound relay by comparing timestamps.
+- **Micro-batching** — multiple relay candidates are committed to the scheduler in one shot rather than one-at-a-time, reducing transport wake-up overhead.
+
+Locally composed messages bypass the batcher entirely — the sender does not feel the delay.
+
+---
+
+## Topology and peer selection
+
+`TopologyTracker` maintains one `Route` record per peer. After each gossip exchange it accumulates:
+
+- `bytesRelayed` — cumulative bytes successfully transferred with this peer (primary ranking signal)
+- `sessionCount` — number of completed exchanges
+- `latencyMs` — smoothed exponential average; stored for diagnostics only, **not** used for routing (on BLE/Wi-Fi Direct it mostly measures discovery timing, not route quality)
+
+`preferredPeers()` ranks by `bytesRelayed DESC, sessionCount DESC` — high-throughput, reliable peers are preferred.
+
+**Neighbor-overlap-aware broadcasting:** After every exchange, `NeighborStore` records what fraction of the local node's outbound offer the peer already knew (exponential moving average, α=0.25). `selectDiversePeers()` returns 80% lowest-overlap peers (maximum novel reach) plus 20% random exploration to prevent clique ossification where the same tight cluster always exchanges with itself.
+
+---
+
+## Priority links
+
+Two nodes can opt into a persistent connection by exchanging `PRIORITY_LINK_REQUEST` / `PRIORITY_LINK_ACCEPT` direct messages. Once both sides have set `isPriorityPeer = true` on the corresponding Contact, the transport can skip the normal session teardown and keep the connection alive between gossip rounds.
+
+To request a priority link:
+```kotlin
+gossipEngine.composePriorityLinkRequest(peerId)
+```
+To accept an incoming request (call from the UI when the user approves):
+```kotlin
+gossipEngine.acceptPriorityLink(requestMessage)
+```
+Both sides are automatically marked priority when an ACCEPT arrives.
+
+---
+
+## Static mode
+
+Settings → Node mode → Static mode enables a higher-performance profile for always-on, plugged-in nodes (a phone in a window, a Raspberry Pi, a relay box):
+
+- BLE scans and advertises more aggressively (`BALANCED` power vs `LOW_POWER`)
+- DRR quantum, per-flow cap, and total message backlog cap are all multiplied by 3
+- Message store cache limit is multiplied by 4 — the node serves as a longer-term cache for peers that were offline
+
+The setting is persisted across restarts and exposed in Settings.
+
+---
+
+## Canary metrics
+
+`GossipEngine.canaryMetrics` exposes live operational counters:
+
+| Metric | Description |
+|--------|-------------|
+| `dedupHitRate` | Fraction of incoming messages already known (suppressed) |
+| `sigFailures` | Messages dropped for invalid Ed25519 signature |
+| `exchangeSuccesses/Failures` | Gossip session outcomes |
+| `avgRttMs` | Smoothed average exchange round-trip time |
+| `relayedMessages` | Messages forwarded on behalf of other senders |
+| `queueDepth` | Current outbound scheduler backlog |
+
+Enable **Debug logging** in Settings to access the live **Node metrics** screen.
 
 ---
 
@@ -461,6 +540,7 @@ These work well alongside Rumor on the same device:
 ## Known limitations
 
 - **DM decryption in UI:** Encrypted DMs currently display as `[encrypted]` in the Messages list and Thread screen. The wire format is correct and the encrypted payload is stored; a decrypt helper needs to be wired from `CryptoManager` through `MessageStore` into `ThreadViewModel`.
+- **Priority link persistent connection:** The `isPriorityPeer` flag, message types, and handshake are fully implemented. The transport-layer behaviour (skipping `removeGroup()` for priority peers to hold the Wi-Fi Direct connection between gossip rounds) is not yet wired in `WifiDirectTransport`.
 - **LoRa bridges:** `MeshtasticBridge` and `MeshCoreBridge` are intentional stubs. Frame parsing and protobuf encode/decode are marked with `// TODO` comments throughout both files.
 
 ---
