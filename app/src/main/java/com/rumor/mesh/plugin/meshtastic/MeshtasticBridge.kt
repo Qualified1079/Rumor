@@ -1,5 +1,6 @@
 package com.rumor.mesh.plugin.meshtastic
 
+import android.content.Context
 import com.rumor.mesh.core.logging.LogLevel
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
@@ -9,143 +10,157 @@ import com.rumor.mesh.plugin.BasePlugin
 import com.rumor.mesh.plugin.PluginContext
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 /**
- * Meshtastic bridge plugin.
+ * Meshtastic bridge plugin — relays BROADCAST text between the Rumor mesh and
+ * a Meshtastic LoRa radio over BLE.
  *
- * Translates between Rumor messages and the Meshtastic device API.
- * Connects to a Meshtastic node via Bluetooth serial (most common — node on
- * roof, phone indoors) or USB serial via OTG adapter.
+ * Same compartmentalization and trust rules as [com.rumor.mesh.plugin.meshcore.MeshCoreBridge]:
+ * package is self-contained, talks to core only via [PluginContext], all
+ * inbound traffic uses [PluginContext.BRIDGE_UNSIGNED] so the gossip engine
+ * keeps it at BRIDGED trust and never re-relays.
  *
- * Protocol reference
- * ------------------
- * Meshtastic protobufs: https://github.com/meshtastic/protobufs
- * Serial framing: https://meshtastic.org/docs/development/device/serial-api
+ * What's bridged
+ * --------------
+ * Only `TEXT_MESSAGE_APP` (port 1) packets are touched. Everything else the
+ * Meshtastic network carries — telemetry, position, routing — is silently
+ * dropped because there is no meaningful Rumor equivalent. Direct messages
+ * are not bridged: Meshtastic DMs use a separate PKC mode (X25519) that we
+ * would need a per-contact key store for; out of scope here.
  *
- * Implementing the TODOs
- * ----------------------
- * 1. Add a Meshtastic protobuf library dependency (e.g., via Maven or local AAR).
- * 2. Implement [openBluetoothConnection] / [openUsbConnection] to open the
- *    serial stream and start [readLoop].
- * 3. Implement [decodeMeshtasticPacket] to parse the raw bytes into a
- *    [MeshPacket] protobuf and extract the fields used in [onPacketReceived].
- * 4. Implement [encodeMeshtasticPacket] to serialise a [RumorMessage] into
- *    the Meshtastic wire format and write it to [outputStream].
- *
- * Everything else — lifecycle, logging, message routing — is handled by
- * [BasePlugin] and [PluginContext]. You only need to touch hardware I/O.
+ * Encryption
+ * ----------
+ * The radio decrypts channel traffic for the companion app and exposes the
+ * plaintext in `MeshPacket.decoded`. If `decoded` is missing — meaning the
+ * radio has the encrypted payload but no key — we drop the frame. We do NOT
+ * try to decrypt it ourselves; doing so would require synchronising channel
+ * PSKs across two software stacks for no benefit, and the failure mode (loud
+ * garbage in the UI) would be worse than silent drop.
  */
-class MeshtasticBridge : BasePlugin() {
+class MeshtasticBridge(
+    private val androidContext: Context,
+) : BasePlugin() {
 
-    override val pluginId    = "meshtastic"
+    override val pluginId    = "bridge.meshtastic"
     override val displayName = "Meshtastic Bridge"
     override val version     = "0.1.0"
 
-    private var connectionType = ConnectionType.NONE
-
-    // Replace with a real stream once hardware I/O is implemented
-    private var outputStream: java.io.OutputStream? = null
-
-    enum class ConnectionType { NONE, BLUETOOTH, USB_SERIAL }
+    private var ble: MeshtasticBleClient? = null
+    @Volatile private var ready = false
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onAttach(ctx: PluginContext) {
         super.onAttach(ctx)
-        // Subscribe to incoming mesh broadcasts and forward them over LoRa
+        val client = MeshtasticBleClient(androidContext)
+        ble = client
+
+        // Mesh → LoRa
         pluginScope.launch {
             observeIncoming()
                 .filter { it.type == MessageType.BROADCAST }
-                .collect { msg -> forwardToMeshtastic(msg) }
+                .filter { it.signature != PluginContext.BRIDGE_UNSIGNED }
+                .collect { msg -> forwardToRadio(msg) }
+        }
+
+        // LoRa → mesh
+        pluginScope.launch {
+            client.inboundFrames.collect { frame -> onFromRadioFrame(frame) }
+        }
+
+        client.startScan { device ->
+            log(LogLevel.INFO, "Found Meshtastic radio: ${device.address}")
+            client.stopScan()
+            client.connect(device) {
+                ready = true
+                log(LogLevel.INFO, "Meshtastic link ready")
+            }
         }
     }
 
     override fun onDetach() {
-        closeConnection()
+        ready = false
+        ble?.stopScan()
+        ble?.disconnect()
+        ble = null
         super.onDetach()
     }
 
-    // ── Hardware connection ───────────────────────────────────────────────────
+    // ── Inbound (radio → mesh) ────────────────────────────────────────────────
 
-    /**
-     * Connect to a Meshtastic device over Bluetooth serial.
-     * Call this from MeshService (or a connection manager) when a paired device is found.
-     */
-    fun connectBluetooth(deviceAddress: String) {
-        log(LogLevel.INFO, "Connecting via Bluetooth: $deviceAddress")
-        connectionType = ConnectionType.BLUETOOTH
-        // TODO: open BT RFCOMM socket to deviceAddress
-        // TODO: outputStream = socket.outputStream
-        // TODO: pluginScope.launch { readLoop(socket.inputStream) }
-    }
+    private fun onFromRadioFrame(frame: ByteArray) {
+        // FromRadio carries many oneof variants; decodeFromRadioPacket returns
+        // non-null only for the `packet` variant. Everything else gets silently
+        // dropped at this layer — that includes config replies, log messages,
+        // and node-info entries that the radio streams during initial handshake.
+        val packet = runCatching { MeshtasticMessages.decodeFromRadioPacket(frame) }
+            .getOrElse {
+                log(LogLevel.WARN, "Malformed FromRadio frame (${frame.size} bytes): ${it.message}")
+                return
+            } ?: return
 
-    /**
-     * Connect to a Meshtastic device over USB serial (OTG adapter or USB-C dongle).
-     * [devicePath] is typically "/dev/ttyUSB0" or obtained from UsbManager.
-     */
-    fun connectUsb(devicePath: String) {
-        log(LogLevel.INFO, "Connecting via USB serial: $devicePath")
-        connectionType = ConnectionType.USB_SERIAL
-        // TODO: open USB serial connection (115200 baud, 8N1, no flow control)
-        // TODO: outputStream = usbStream
-        // TODO: pluginScope.launch { readLoop(usbStream) }
-    }
-
-    private fun closeConnection() {
-        runCatching { outputStream?.close() }
-        outputStream = null
-        connectionType = ConnectionType.NONE
-        log(LogLevel.INFO, "Connection closed")
-    }
-
-    // ── Inbound: Meshtastic → Rumor mesh ─────────────────────────────────────
-
-    /**
-     * Read loop running on [pluginScope].
-     * Call this after opening a hardware stream.
-     */
-    private suspend fun readLoop(inputStream: java.io.InputStream) {
-        log(LogLevel.INFO, "Read loop started")
-        try {
-            // TODO: read Meshtastic framing (varint-length-prefixed protobufs)
-            // TODO: for each frame: call onPacketReceived(bytes)
-        } catch (e: Exception) {
-            log(LogLevel.WARN, "Read loop ended: ${e.message}", e)
+        val data = packet.decoded
+        if (data == null) {
+            // Encrypted payload on a channel whose key the radio doesn't have.
+            // Bridging garbled bytes serves no one — log once and drop.
+            log(LogLevel.DEBUG, "Dropping encrypted packet id=${packet.id} (no channel key on radio)")
+            return
         }
-    }
+        if (data.portnum != MeshtasticMessages.PORT_TEXT_MESSAGE_APP) {
+            // Telemetry, position, routing, etc. — uninteresting for a text bridge.
+            return
+        }
+        if (packet.to != MeshtasticMessages.MeshPacket.BROADCAST_NODE) {
+            // DM to a specific node. Without bridging the per-node PKC keys
+            // we cannot prove it was intended for us, so drop.
+            return
+        }
 
-    /**
-     * Called for each complete Meshtastic packet received from the device.
-     * Decodes the packet and injects the message into the local mesh.
-     */
-    private fun onPacketReceived(rawBytes: ByteArray) {
-        // TODO: decode rawBytes into a Meshtastic MeshPacket protobuf
-        // TODO: extract:
-        //   from      → String (Meshtastic node ID, e.g. "!a1b2c3d4")
-        //   text      → String (decoded payload)
-        //   hopLimit  → Int (becomes RumorMessage.ttl)
-        //   channel   → Int (use for routing decisions if needed)
+        val text = String(data.payload, Charsets.UTF_8)
+        // Synthetic Rumor identity for the LoRa sender. See nameHash in
+        // MeshCoreBridge for the same rationale; here we hash the 32-bit
+        // node number, which is the only stable identifier we have on the
+        // Meshtastic side without doing a node-info lookup.
+        val syntheticUserId = "meshtastic:" + (packet.from.toLong() and 0xFFFFFFFFL).toString(16).padStart(8, '0')
 
-        val message = RumorMessage(
-            id               = java.util.UUID.randomUUID().toString().replace("-", ""),
-            senderId         = "meshtastic_PLACEHOLDER",  // TODO: real node ID
-            senderPublicKey  = "",                        // Meshtastic nodes don't use Ed25519
-            sequenceNumber   = System.currentTimeMillis(),
-            sentAtMs         = System.currentTimeMillis(),
-            type             = MessageType.BROADCAST,
-            ttl              = 3,                         // TODO: map from Meshtastic hop_limit
-            payload          = MessagePayload(ContentType.TEXT, "TODO: decoded payload"),
-            signature        = PluginContext.BRIDGE_UNSIGNED,
+        val rumor = RumorMessage(
+            id              = UUID.randomUUID().toString().replace("-", ""),
+            senderId        = syntheticUserId,
+            senderPublicKey = "",
+            sequenceNumber  = (packet.id.toLong() and 0xFFFFFFFFL),
+            sentAtMs        = System.currentTimeMillis(),
+            type            = MessageType.BROADCAST,
+            ttl             = 1,  // bridged traffic never relays; see MeshCoreBridge note
+            payload         = MessagePayload(ContentType.TEXT, text),
+            signature       = PluginContext.BRIDGE_UNSIGNED,
         )
-        sendMessage(message, sourceDescription = "meshtastic node")
+        sendMessage(rumor, sourceDescription = "meshtastic ch${packet.channel}")
     }
 
-    // ── Outbound: Rumor mesh → Meshtastic ────────────────────────────────────
+    // ── Outbound (mesh → radio) ───────────────────────────────────────────────
 
-    private fun forwardToMeshtastic(message: RumorMessage) {
-        val stream = outputStream ?: return
-        log(LogLevel.DEBUG, "Forwarding to Meshtastic: ${message.id.take(8)}…")
-        // TODO: encode message into a Meshtastic MeshPacket protobuf
-        // TODO: write length-prefixed bytes to stream
+    private fun forwardToRadio(message: RumorMessage) {
+        if (!ready) return
+        val client = ble ?: return
+        val text = message.payload?.content ?: return
+
+        val data = MeshtasticMessages.Data(
+            portnum = MeshtasticMessages.PORT_TEXT_MESSAGE_APP,
+            payload = text.toByteArray(Charsets.UTF_8),
+        )
+        val packet = MeshtasticMessages.MeshPacket(
+            to       = MeshtasticMessages.MeshPacket.BROADCAST_NODE,
+            channel  = 0,  // primary channel; multi-channel selection is a future config
+            decoded  = data,
+            // Random packet ID. The radio uses this for AES-CTR nonce on its
+            // side, plus for deduplication across hops — collisions are
+            // statistically harmless at 32 bits over the time window the
+            // network remembers.
+            id       = java.security.SecureRandom().nextInt(),
+        )
+        val frame = MeshtasticMessages.encodeToRadioPacket(packet)
+        val ok = client.writeFrame(frame)
+        if (!ok) log(LogLevel.WARN, "writeFrame failed for ${message.id.take(8)}…")
     }
 }

@@ -48,12 +48,12 @@ Update this list whenever something is completed or newly identified.
 
 - **Duplicate `GossipSession.kt` / `BloomFilterData.kt`** existed in both `:core/.../transport/` and `:app/.../wifidirect/` with the same FQN, causing the build to fail since `a1bc312`. Resolved: deleted the `:core` copies; the `:app/wifidirect/` versions are canonical. Be wary when adding new same-named files in both modules.
 
-### Fully stubbed (TODO comments in code)
+### Bridges (implemented, BLE-only)
 
-| # | Item | Files | Notes |
-|---|------|-------|-------|
-| S1 | **Meshtastic bridge** | `app/…/plugin/meshtastic/MeshtasticBridge.kt` | BLE service `6ba1b218-15a8-461f-9fa8-5dcae273eafd`; chars `2c55e69e-…` (FromRadio read), `f75c76d2-…` (ToRadio write), `ed9da18c-…` (FromNum notify). Serial framing `0x94 0xc3` + 2-byte BE length + protobuf. Hand-rolled protobuf decoder for `FromRadio`/`ToRadio`/`MeshPacket`/`Data`/`PortNum` is cheaper than pulling protoc Gradle plugin. Default channel PSK `AQ==` decrypts to a publicly-known AES-256-CTR key; payload nonce = `packetId\|\|fromNode`. **BLE bonding required** by default firmware — must call `device.createBond()` and handle `ACTION_PAIRING_REQUEST`. License: GPL-3.0 (firmware + protobufs). |
-| S2 | **MeshCore bridge** | `app/…/plugin/meshcore/MeshCoreBridge.kt` | Repo: `github.com/meshcore-dev/MeshCore` (MIT). Uses Nordic UART Service `6E400001-…` (RX `…0002` write, TX `…0003` notify). BLE frame = single GATT write/notify (no length prefix). USB-CDC frame = `>`/`<` + 2-byte LE length + frame. Companion sees **plaintext** — radio decrypts before pushing. Send: `CMD_SEND_CHANNEL_MESSAGE` (0x03) / `CMD_SEND_TXT_MSG`. Recv push: `PACKET_CONTACT_MSG_RECV` / `PACKET_CHANNEL_MSG_RECV` (+ `_V3`). No BLE bonding required. Reference impl: `michaelhart/meshcore-decoder` (TS). |
+| # | Plugin | Files | Status |
+|---|--------|-------|--------|
+| S1 | **Meshtastic bridge** | `app/…/plugin/meshtastic/{MeshtasticBridge,MeshtasticBleClient,MeshtasticMessages,MeshtasticProtobuf}.kt` | v0.1.0. Hand-rolled minimal protobuf codec (no protoc dep). BLE only — auto-scans, prompts bonding via `createBond()`. Reads plaintext from `MeshPacket.decoded` (radio decrypts); drops encrypted packets the radio can't decode. Only `TEXT_MESSAGE_APP` (port 1) BROADCASTs are bridged. Outbound uses primary channel (idx 0). Bridge traffic → `BRIDGE_UNSIGNED` → BRIDGED trust → never re-relayed. **Not done**: USB serial, DM bridging via PKC, multi-channel selection UI, device picker for multi-radio setups. |
+| S2 | **MeshCore bridge** | `app/…/plugin/meshcore/{MeshCoreBridge,MeshCoreBleClient,MeshCoreFrames}.kt` | v0.1.0. BLE NUS only (`6E400001-…`). Auto-scans, no bonding. Frame layout follows companion-protocol docs; opcodes `CMD_SEND_CHANNEL_MESSAGE` / `RESP_CODE_CHANNEL_MSG_RECV` exact byte values should be verified against current firmware before trusting in the wild. Synthetic sender userId = `meshcore:<FNV-1a of name>`. **Not done**: USB CDC framer, DM bridging via X25519, multi-channel, device picker. |
 
 ### Completed gaps
 

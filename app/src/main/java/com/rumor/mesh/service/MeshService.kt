@@ -182,7 +182,7 @@ class MeshService : Service(), MeshController {
                 displayName = "Meshtastic Bridge",
                 description = "Relay messages to/from a Meshtastic LoRa device",
                 category = "Bridges",
-                factory = { MeshtasticBridge() },
+                factory = { MeshtasticBridge(applicationContext) },
             )
         )
         pluginCatalog.declare(
@@ -191,7 +191,7 @@ class MeshService : Service(), MeshController {
                 displayName = "MeshCore Bridge",
                 description = "Relay messages to/from a MeshCore LoRa device",
                 category = "Bridges",
-                factory = { MeshCoreBridge() },
+                factory = { MeshCoreBridge(applicationContext) },
             )
         )
 
