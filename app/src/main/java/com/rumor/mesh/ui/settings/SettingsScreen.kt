@@ -28,6 +28,7 @@ fun SettingsScreen(
     onOpenBlocks: () -> Unit = {},
     onOpenTransfers: () -> Unit = {},
     onOpenLogs: () -> Unit = {},
+    onOpenMetrics: () -> Unit = {},
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -132,6 +133,11 @@ fun SettingsScreen(
             TextButton(onClick = onOpenLogs) {
                 Text("View logs")
             }
+            SettingRow(
+                icon = Icons.Default.Speed,
+                title = "Node metrics",
+                onClick = onOpenMetrics,
+            )
         }
 
         // Battery optimisation warning

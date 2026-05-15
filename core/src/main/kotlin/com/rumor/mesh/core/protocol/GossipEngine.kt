@@ -40,6 +40,7 @@ private const val MAX_DIRECT_TTL = DEFAULT_DIRECT_TTL
  * Inputs
  * ------
  * - [onExchange] — called by the transport layer after each peer exchange
+ * - [onExchangeFailed] — called when a session failed (for canary metrics)
  * - [injectFromPlugin] — called by PluginRegistry when a bridge plugin
  *   receives a message from an external network
  *
@@ -48,6 +49,10 @@ private const val MAX_DIRECT_TTL = DEFAULT_DIRECT_TTL
  * - [incomingMessages] — every new message, consumed by UI and PluginRegistry
  * - [messagesForExchange] / [knownMessageIds] — polled by the transport layer
  *   before each gossip session
+ *
+ * Relay path uses [RelayBatcher]: received messages are held for a random
+ * 100–500ms window before being queued. Locally-composed messages bypass the
+ * batcher and go directly to the scheduler so the sender doesn't feel the delay.
  */
 class GossipEngine(
     private val messageStore: MessageStore,
@@ -59,7 +64,7 @@ class GossipEngine(
     /**
      * Consulted only on the inbox emit path, never on the relay path. Encoded
      * structurally: [BlockManager.isBlocked] is called from a single site below
-     * and never from [enqueueRelay]. See architecture invariants.
+     * and never from the relay path. See architecture invariants.
      */
     private val blockManager: BlockManager,
     private val scheduler: Scheduler,
@@ -68,6 +73,7 @@ class GossipEngine(
      * never on the relay path — same architectural rule as [blockManager].
      */
     private val inboxFilter: InboxFilter,
+    val canaryMetrics: CanaryMetrics = CanaryMetrics(),
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
 ) {
     private val sequenceCounter = AtomicLong(System.currentTimeMillis())
@@ -78,15 +84,29 @@ class GossipEngine(
     private val _deliveryEvents = MutableSharedFlow<String>(extraBufferCapacity = 256)
     val deliveryEvents: SharedFlow<String> = _deliveryEvents
 
+    /** Relayed messages are buffered here before being committed to the scheduler. */
+    private val relayBatcher = RelayBatcher(scope) { batch ->
+        batch.forEach { scheduler.enqueue(it) }
+        canaryMetrics.publish(scheduler.queueDepth)
+    }
+
     // ── Transport intake ──────────────────────────────────────────────────────
 
     fun onExchange(result: PeerExchangeResult) {
         scope.launch {
             if (result.peerUserId.isNotEmpty()) {
-                topologyTracker.recordSession(result.peerUserId, result.durationMs, hopCount = 1)
+                topologyTracker.recordSession(
+                    peerId           = result.peerUserId,
+                    latencyMs        = result.durationMs,
+                    hopCount         = 1,
+                    bytesTransferred = result.bytesTransferred,
+                    overlapFraction  = result.peerOverlapFraction,
+                )
                 onlineStatusTracker.recordDirectContact(result.peerUserId)
             }
             onlineStatusTracker.mergeRemoteStatus(result.peerOnlineUsers)
+
+            canaryMetrics.recordExchange(success = true, rttMs = result.durationMs)
 
             for (id in result.ackedByPeer) _deliveryEvents.emit(id)
 
@@ -96,6 +116,13 @@ class GossipEngine(
                 val adjusted = msg.copy(receivedAtMs = System.currentTimeMillis())
                 processIncoming(adjusted, MessageSource.PEER, autoRelayIds)
             }
+        }
+    }
+
+    fun onExchangeFailed(peerId: String) {
+        scope.launch {
+            canaryMetrics.recordExchange(success = false, rttMs = 0)
+            RumorLog.d(TAG, "Exchange failed with ${peerId.take(8)}…")
         }
     }
 
@@ -119,7 +146,7 @@ class GossipEngine(
             ttl = DEFAULT_BROADCAST_TTL,
             payload = MessagePayload(ContentType.TEXT, text),
         )
-        enqueueRelay(msg)
+        enqueueImmediate(msg)
         return msg
     }
 
@@ -136,12 +163,12 @@ class GossipEngine(
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
-        enqueueRelay(msg)
+        enqueueImmediate(msg)
         return msg
     }
 
     fun manualRelay(msg: RumorMessage) {
-        enqueueRelay(messageStore.boostTtlForManualRelay(msg))
+        enqueueImmediate(messageStore.boostTtlForManualRelay(msg))
         scope.launch { messageStore.markRelayed(msg.id) }
     }
 
@@ -159,7 +186,7 @@ class GossipEngine(
             payload = MessagePayload(ContentType.CONTROL, body),
             recipientId = originalSenderId,
         )
-        enqueueRelay(msg)
+        enqueueImmediate(msg)
         return msg
     }
 
@@ -181,14 +208,55 @@ class GossipEngine(
             payload = payload,
             recipientId = recipientId,
         )
-        enqueueRelay(msg)
+        enqueueImmediate(msg)
         return msg
+    }
+
+    /**
+     * Request a mutual priority (persistent) link with [recipientId].
+     * The recipient receives the request in their inbox and can accept via
+     * [acceptPriorityLink].
+     */
+    fun composePriorityLinkRequest(recipientId: String): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.PRIORITY_LINK_REQUEST,
+            ttl = DEFAULT_DIRECT_TTL,
+            payload = MessagePayload(ContentType.CONTROL, ""),
+            recipientId = recipientId,
+        )
+        enqueueImmediate(msg)
+        return msg
+    }
+
+    /**
+     * Accept an incoming [PRIORITY_LINK_REQUEST]. Marks the sender as a
+     * priority peer locally and sends [PRIORITY_LINK_ACCEPT] back to them so
+     * they can do the same on their side.
+     */
+    fun acceptPriorityLink(request: RumorMessage) {
+        if (request.type != MessageType.PRIORITY_LINK_REQUEST) return
+        scope.launch {
+            contactRepo.setPriorityPeer(request.senderId, true)
+            RumorLog.i(TAG, "Accepted priority link from ${request.senderId.take(8)}…")
+        }
+        val identity = identityProvider.identity.value ?: return
+        val reply = buildMessage(
+            identity = identity,
+            type = MessageType.PRIORITY_LINK_ACCEPT,
+            ttl = DEFAULT_DIRECT_TTL,
+            payload = MessagePayload(ContentType.CONTROL, ""),
+            recipientId = request.senderId,
+        )
+        enqueueImmediate(reply)
     }
 
     // ── Transport supply ──────────────────────────────────────────────────────
 
     fun messagesForExchange(): List<RumorMessage> = scheduler.take(200)
     fun knownMessageIds(): Set<String> = duplicateFilter.knownIds()
+    val queueDepth: Int get() = scheduler.queueDepth
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
@@ -202,16 +270,28 @@ class GossipEngine(
         // for messages handed in by a local bridge plugin — a network peer cannot
         // forge it to skip Ed25519 verification.
         val bridged = source == MessageSource.LOCAL_BRIDGE && clamped.signature == BRIDGE_UNSIGNED
+        val sigFailuresBefore = messageStore.sigFailureCount
         val isNew = if (bridged) {
             duplicateFilter.recordAndCheck(clamped.id)
         } else {
             messageStore.ingest(clamped)
         }
+        if (!bridged && !isNew && messageStore.sigFailureCount > sigFailuresBefore) {
+            canaryMetrics.recordSigFailure()
+        }
+        canaryMetrics.recordIncoming(isDuplicate = !isNew)
         if (!isNew) return
 
         val msg = clamped.copy(
             trustLevel = if (bridged) TrustLevel.BRIDGED else TrustLevel.VERIFIED,
         )
+
+        // Auto-accept incoming priority link acceptance: mark the sender as priority peer.
+        if (msg.type == MessageType.PRIORITY_LINK_ACCEPT &&
+            msg.recipientId == identityProvider.identity.value?.userId) {
+            scope.launch { contactRepo.setPriorityPeer(msg.senderId, true) }
+        }
+
         emitToInbox(msg)
         relay(msg, autoRelayIds)
     }
@@ -229,6 +309,9 @@ class GossipEngine(
     /**
      * Relay path. Never consults blocklist — relay is shared mesh infrastructure;
      * blocking only suppresses what the local user sees.
+     *
+     * Relayed messages are handed to [RelayBatcher] (100–500ms random window)
+     * rather than the scheduler directly, for timing correlation resistance.
      */
     private fun relay(msg: RumorMessage, autoRelayIds: Set<String>) {
         // Unsigned bridge traffic is never re-relayed onto the signed mesh: peers
@@ -241,34 +324,40 @@ class GossipEngine(
                 val boosted = if (msg.senderId in autoRelayIds) {
                     messageStore.boostTtlForManualRelay(forwarded)
                 } else forwarded
-                enqueueRelay(boosted)
+                enqueueRelayed(boosted)
             }
             MessageType.DIRECT -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
                 val forwarded = messageStore.decrementTtl(msg) ?: return
-                enqueueRelay(forwarded)
+                enqueueRelayed(forwarded)
             }
             MessageType.PING -> {
                 val forwarded = msg.copy(ttl = (msg.ttl - 1).coerceAtLeast(0))
-                if (forwarded.ttl > 0) enqueueRelay(forwarded)
+                if (forwarded.ttl > 0) enqueueRelayed(forwarded)
             }
             MessageType.PONG -> { /* handled by routing */ }
             MessageType.TRANSFER_METADATA, MessageType.CHUNK -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == null || msg.recipientId == localId) return
                 val forwarded = messageStore.decrementTtl(msg) ?: return
-                enqueueRelay(forwarded)
+                enqueueRelayed(forwarded)
             }
             MessageType.CHUNK_REQUEST -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
                 val forwarded = messageStore.decrementTtl(msg) ?: return
-                enqueueRelay(forwarded)
+                enqueueRelayed(forwarded)
             }
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF -> {
                 val forwarded = messageStore.decrementTtl(msg) ?: return
-                enqueueRelay(forwarded)
+                enqueueRelayed(forwarded)
+            }
+            MessageType.PRIORITY_LINK_REQUEST, MessageType.PRIORITY_LINK_ACCEPT -> {
+                val localId = identityProvider.identity.value?.userId
+                if (msg.recipientId == localId) return
+                val forwarded = messageStore.decrementTtl(msg) ?: return
+                enqueueRelayed(forwarded)
             }
         }
     }
@@ -278,12 +367,24 @@ class GossipEngine(
             MessageType.BROADCAST, MessageType.PING, MessageType.PONG,
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF -> MAX_BROADCAST_TTL
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
-            MessageType.CHUNK, MessageType.CHUNK_REQUEST -> MAX_DIRECT_TTL
+            MessageType.CHUNK, MessageType.CHUNK_REQUEST,
+            MessageType.PRIORITY_LINK_REQUEST,
+            MessageType.PRIORITY_LINK_ACCEPT -> MAX_DIRECT_TTL
         }
         return if (msg.ttl > ceiling) msg.copy(ttl = ceiling) else msg
     }
 
-    private fun enqueueRelay(msg: RumorMessage) = scheduler.enqueue(msg)
+    /** Locally-composed messages bypass the batcher — no jitter for the sender. */
+    private fun enqueueImmediate(msg: RumorMessage) {
+        scheduler.enqueue(msg)
+        canaryMetrics.publish(scheduler.queueDepth)
+    }
+
+    /** Relayed messages go through the batcher for timing correlation resistance. */
+    private fun enqueueRelayed(msg: RumorMessage) {
+        relayBatcher.add(msg)
+        canaryMetrics.recordRelay()
+    }
 
     private fun buildMessage(
         identity: LocalIdentity,

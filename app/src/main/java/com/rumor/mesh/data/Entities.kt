@@ -50,6 +50,7 @@ data class ContactEntity(
     val willingToCache: Boolean,
     val firstSeenMs: Long,
     val lastSeenMs: Long,
+    val isPriorityPeer: Boolean = false,
 )
 
 @Entity(
@@ -74,4 +75,5 @@ data class RouteEntity(
     val hopCount: Int,
     val lastUpdatedMs: Long,
     val sessionCount: Int,
+    val bytesRelayed: Long = 0,
 )

@@ -9,6 +9,7 @@ import com.rumor.mesh.core.model.Contact
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.policy.StaticMode
 import kotlinx.coroutines.flow.Flow
+import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "MessageStore"
 private const val DEFAULT_BROADCAST_TTL = 7
@@ -24,6 +25,10 @@ class MessageStore(
     private val duplicateFilter: DuplicateFilter,
     private val staticMode: StaticMode? = null,
 ) {
+    private val _sigFailures = AtomicLong()
+    /** Count of messages dropped due to invalid Ed25519 signatures. */
+    val sigFailureCount: Long get() = _sigFailures.get()
+
     /**
      * Ingest a message from a gossip exchange.
      * Returns true if the message was new and should be forwarded/flooded.
@@ -36,6 +41,7 @@ class MessageStore(
         val sigBytes = msg.signature.fromBase64()
         if (!CryptoManager.verify(payload, sigBytes, pubKeyBytes)) {
             RumorLog.w(TAG, "Dropping message ${msg.id.take(8)}: invalid signature")
+            _sigFailures.incrementAndGet()
             duplicateFilter.recordAndCheck(msg.id)
             return false
         }

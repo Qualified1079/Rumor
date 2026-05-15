@@ -6,6 +6,8 @@ data class Route(
     val hopCount: Int,
     val lastUpdatedMs: Long,
     val sessionCount: Int,
+    /** Cumulative bytes successfully transferred with this peer. Primary ranking signal. */
+    val bytesRelayed: Long = 0,
 )
 
 data class Breadcrumb(

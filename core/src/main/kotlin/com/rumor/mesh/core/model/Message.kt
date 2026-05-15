@@ -72,6 +72,10 @@ enum class MessageType {
     @SerialName("blocklist_publish") BLOCKLIST_PUBLISH,
     /** Signed incremental blocklist diff from a publisher. Broadcast through the mesh. */
     @SerialName("blocklist_diff")    BLOCKLIST_DIFF,
+    /** Request a persistent priority link with the recipient. Routed as DM. */
+    @SerialName("priority_link_request") PRIORITY_LINK_REQUEST,
+    /** Accept an incoming priority link request. Routed as DM back to originator. */
+    @SerialName("priority_link_accept")  PRIORITY_LINK_ACCEPT,
 }
 
 @Serializable
@@ -151,7 +155,9 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.PING,
             MessageType.PONG,
             MessageType.CHUNK_REQUEST,
-            MessageType.BLOCKLIST_DIFF    -> TrafficClass.INFRASTRUCTURE
+            MessageType.BLOCKLIST_DIFF,
+            MessageType.PRIORITY_LINK_REQUEST,
+            MessageType.PRIORITY_LINK_ACCEPT -> TrafficClass.INFRASTRUCTURE
             // A full blocklist snapshot is bulky sync data, not handshake-tier
             // traffic — only the small incremental diff stays INFRASTRUCTURE.
             MessageType.TRANSFER_METADATA,

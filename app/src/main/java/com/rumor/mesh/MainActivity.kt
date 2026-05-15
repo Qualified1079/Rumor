@@ -26,6 +26,7 @@ import com.rumor.mesh.service.MeshControllerHolder
 import com.rumor.mesh.service.MeshService
 import com.rumor.mesh.ui.blocks.BlockManagementScreen
 import com.rumor.mesh.ui.contacts.ContactsScreen
+import com.rumor.mesh.ui.debug.DebugMetricsScreen
 import com.rumor.mesh.ui.feed.FeedScreen
 import com.rumor.mesh.ui.inbox.InboxPolicyScreen
 import com.rumor.mesh.ui.logs.LogsScreen
@@ -200,6 +201,7 @@ private fun RumorApp(identityManager: IdentityManager) {
                     onOpenBlocks       = { navController.navigate(Screen.Blocks.route) },
                     onOpenTransfers    = { navController.navigate(Screen.Transfers.route) },
                     onOpenLogs         = { navController.navigate(Screen.Logs.route) },
+                    onOpenMetrics      = { navController.navigate(Screen.DebugMetrics.route) },
                 )
             }
             composable(Screen.Messages.route) {
@@ -216,6 +218,9 @@ private fun RumorApp(identityManager: IdentityManager) {
                     peerId = peerId,
                     onBack = { navController.popBackStack() },
                 )
+            }
+            composable(Screen.DebugMetrics.route) {
+                DebugMetricsScreen(onBack = { navController.popBackStack() })
             }
             composable(Screen.Plugins.route) { PluginsScreen() }
             composable(Screen.InboxPolicy.route) { InboxPolicyScreen() }

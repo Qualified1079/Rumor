@@ -70,6 +70,14 @@ class GossipSession(
         /** Message IDs we sent that the peer confirmed accepting. */
         val ackedByPeer: List<String>,
         val durationMs: Long,
+        /** Total bytes moved in both directions (rough envelope-aware estimate). */
+        val bytesTransferred: Long = 0,
+        /**
+         * Fraction of [messagesToOffer] that the peer's summary indicated they
+         * already knew (0=fully novel, 1=full overlap). Used to score this peer
+         * for diversity-aware relay selection.
+         */
+        val peerOverlapFraction: Float = 0.5f,
     )
 
     suspend fun run(): SessionResult? = withTimeout(SESSION_TIMEOUT_MS) {
@@ -116,6 +124,11 @@ class GossipSession(
                 return@withTimeout null
             }
 
+            // Phase 1c: NEIGHBOR_DIGEST — share compact representation of our known
+            // message set so each side can compute an overlap fraction after the session.
+            send(out, buildNeighborDigest())
+            val peerDigest = receive(inp) as? GossipPacket.NeighborDigest
+
             // Phase 2: SUMMARY — exchange knowledge sets.
             // Below the bloom threshold, send a raw ID list (zero false positives, more
             // compact at small sizes). Above it, send a bloom filter. Either form is
@@ -130,6 +143,10 @@ class GossipSession(
                 ).let { f -> { id: String -> f.mightContain(id) } }
                 else -> return@withTimeout null
             }
+
+            // How much of our offer did the peer already know? Lower = more valuable relay.
+            val overlapFraction = if (messagesToOffer.isEmpty()) 0f
+            else messagesToOffer.count { peerKnows(it.id) }.toFloat() / messagesToOffer.size
 
             // Phase 3: REQUEST — ask for what we're missing.
             // We can't enumerate "what we're missing" without knowing what they have
@@ -172,16 +189,25 @@ class GossipSession(
             send(out, GossipPacket.Bye())
 
             val duration = System.currentTimeMillis() - startMs
-            RumorLog.i(TAG, "Session complete: ${received.size} received, ${toSend.size} sent in ${duration}ms")
+
+            fun msgBytes(msgs: List<RumorMessage>) = msgs.sumOf { msg ->
+                256L + (msg.payload?.content?.length ?: 0) + (msg.encryptedPayload?.length ?: 0)
+            }
+            val bytesTransferred = msgBytes(received) + msgBytes(toSend)
+
+            RumorLog.i(TAG, "Session complete: ${received.size} received, ${toSend.size} sent " +
+                "in ${duration}ms, overlap=%.2f".format(overlapFraction))
 
             SessionResult(
-                peerUserId = hello.userId,
-                peerPublicKey = hello.publicKey,
-                messagesReceived = received,
-                messagesSent = toSend.size,
-                peerOnlineUsers = theirOnline,
-                ackedByPeer = ackedByPeer,
-                durationMs = duration,
+                peerUserId          = hello.userId,
+                peerPublicKey       = hello.publicKey,
+                messagesReceived    = received,
+                messagesSent        = toSend.size,
+                peerOnlineUsers     = theirOnline,
+                ackedByPeer         = ackedByPeer,
+                durationMs          = duration,
+                bytesTransferred    = bytesTransferred,
+                peerOverlapFraction = overlapFraction,
             )
         } catch (e: Exception) {
             RumorLog.w(TAG, "Session error", e)
@@ -204,6 +230,18 @@ class GossipSession(
         val bytes = ByteArray(len)
         inp.readFully(bytes)
         return json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
+    /**
+     * Compact bloom digest of [knownMessageIds] for overlap scoring.
+     * Always a bloom (never an id_list) — the recipient only needs to probe
+     * membership, not enumerate the set.
+     */
+    private fun buildNeighborDigest(): GossipPacket.NeighborDigest {
+        val n = knownMessageIds.size.coerceAtLeast(1)
+        val filter = BloomFilterData(n)
+        knownMessageIds.forEach { filter.add(it) }
+        return GossipPacket.NeighborDigest(filter.serialize(), n)
     }
 
     /**

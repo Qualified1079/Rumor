@@ -86,6 +86,25 @@ sealed class GossipPacket {
     data class Bye(
         val reason: String = "",
     ) : GossipPacket()
+
+    /**
+     * Compact representation of which messages this node already knows.
+     * Exchanged after [HelloProof] so each side can skip messages the other
+     * already has when selecting relay targets in future exchanges.
+     *
+     * The receiver uses this to compute an overlap fraction: the fraction of
+     * its own known messages that the sender's bloom filter also contains.
+     * A low overlap → this peer extends our reach; a high overlap → they are
+     * already well-informed via other paths.
+     *
+     * [filter] is the Base64-encoded bloom filter bytes (same encoding as
+     * [Bloom]). [expectedItems] drives the bloom reconstruction.
+     */
+    @Serializable @SerialName("neighbor_digest")
+    data class NeighborDigest(
+        val filter: String,
+        val expectedItems: Int,
+    ) : GossipPacket()
 }
 
 /** Domain-tagged challenge bytes a peer signs to prove ownership of their public key. */

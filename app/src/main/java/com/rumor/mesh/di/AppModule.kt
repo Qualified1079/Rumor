@@ -22,6 +22,7 @@ import com.rumor.mesh.core.protocol.DuplicateFilter
 import com.rumor.mesh.core.protocol.GossipEngine
 import com.rumor.mesh.core.protocol.MessageStore
 import com.rumor.mesh.core.routing.BreadcrumbCache
+import com.rumor.mesh.core.routing.NeighborStore
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.scheduler.Scheduler
@@ -50,6 +51,7 @@ import com.rumor.mesh.ui.inbox.InboxPolicyViewModel
 import com.rumor.mesh.ui.messages.MessagesViewModel
 import com.rumor.mesh.ui.messages.ThreadViewModel
 import com.rumor.mesh.ui.plugins.PluginsViewModel
+import com.rumor.mesh.ui.debug.DebugMetricsViewModel
 import com.rumor.mesh.ui.settings.SettingsViewModel
 import com.rumor.mesh.ui.transfers.TransfersViewModel
 import org.koin.android.ext.koin.androidContext
@@ -92,7 +94,8 @@ val appModule = module {
     single { DuplicateFilter() }
     single { MessageStore(get(), get(), get(), get<StaticMode>()) }
     single { OnlineStatusTracker() }
-    single { TopologyTracker(get()) }
+    single { NeighborStore() }
+    single { TopologyTracker(get(), get()) }
     single { BreadcrumbCache(get()) }
     single { Scheduler(staticMode = get<StaticMode>()) }
     single<InboxFilter> { InboxPolicyManager(androidContext(), get()) }
@@ -126,4 +129,5 @@ val appModule = module {
     viewModel { MessagesViewModel(get(), get(), get(), get()) }
     viewModel { ThreadViewModel(get(), get(), get(), get(), get()) }
     viewModel { TransfersViewModel(get(), get()) }
+    viewModel { DebugMetricsViewModel(get()) }
 }

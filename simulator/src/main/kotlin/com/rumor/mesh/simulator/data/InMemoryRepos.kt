@@ -99,6 +99,10 @@ class InMemoryContactRepository : ContactRepository {
         _flow.value = contacts.values.toList()
     }
     override suspend fun getAutoRelayContacts(): List<Contact> = contacts.values.filter { it.autoRelay }
+    override suspend fun setPriorityPeer(userId: String, enabled: Boolean) {
+        contacts[userId]?.let { contacts[userId] = it.copy(isPriorityPeer = enabled) }
+    }
+    override suspend fun getPriorityPeers(): List<Contact> = contacts.values.filter { it.isPriorityPeer }
 }
 
 // ── RouteRepository ───────────────────────────────────────────────────────────
@@ -113,7 +117,11 @@ class InMemoryRouteRepository : RouteRepository {
     }
     override suspend fun getPreferred(limit: Int): List<Route> =
         routes.values
-            .sortedWith(compareByDescending<Route> { it.lastUpdatedMs }.thenByDescending { it.sessionCount })
+            .sortedWith(
+                compareByDescending<Route> { it.bytesRelayed }
+                    .thenByDescending { it.sessionCount }
+                    .thenByDescending { it.lastUpdatedMs }
+            )
             .take(limit)
     override fun observeAll(): Flow<List<Route>> = _flow
     override suspend fun getForPeer(peerId: String): Route? = routes[peerId]

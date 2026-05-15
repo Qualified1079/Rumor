@@ -30,6 +30,17 @@ data class PeerExchangeResult(
     val messagesSent: Int = 0,
     /** Where this exchange originated. */
     val source: ExchangeSource = ExchangeSource.WIFI_DIRECT,
+    /**
+     * Total bytes transferred in both directions during this exchange.
+     * Used for throughput-based peer ranking in [TopologyTracker].
+     */
+    val bytesTransferred: Long = 0,
+    /**
+     * Fraction of our outbound offer that the peer already knew (0.0–1.0).
+     * 0.0 = peer was completely uninformed; 1.0 = full overlap, no novel data.
+     * Propagated to [NeighborStore] for diversity-aware peer selection.
+     */
+    val peerOverlapFraction: Float = 0.5f,
 )
 
 enum class ExchangeSource {

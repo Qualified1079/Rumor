@@ -244,14 +244,16 @@ class WifiDirectTransport(
         // Map from transport-internal SessionResult to the protocol-layer boundary type
         _exchangeResults.emit(
             PeerExchangeResult(
-                peerUserId      = result.peerUserId,
-                peerPublicKey   = result.peerPublicKey,
-                messagesReceived = result.messagesReceived,
-                messagesSent    = result.messagesSent,
-                peerOnlineUsers = result.peerOnlineUsers,
-                ackedByPeer     = result.ackedByPeer,
-                durationMs      = result.durationMs,
-                source          = ExchangeSource.WIFI_DIRECT,
+                peerUserId          = result.peerUserId,
+                peerPublicKey       = result.peerPublicKey,
+                messagesReceived    = result.messagesReceived,
+                messagesSent        = result.messagesSent,
+                peerOnlineUsers     = result.peerOnlineUsers,
+                ackedByPeer         = result.ackedByPeer,
+                durationMs          = result.durationMs,
+                source              = ExchangeSource.WIFI_DIRECT,
+                bytesTransferred    = result.bytesTransferred,
+                peerOverlapFraction = result.peerOverlapFraction,
             )
         )
 

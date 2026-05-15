@@ -22,6 +22,7 @@ sealed class Screen(val route: String) {
     object InboxPolicy   : Screen("settings/inbox")
     object Blocks        : Screen("settings/blocks")
     object Transfers     : Screen("transfers")
+    object DebugMetrics  : Screen("settings/metrics")
 }
 
 data class BottomNavItem(

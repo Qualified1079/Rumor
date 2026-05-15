@@ -44,4 +44,10 @@ interface ContactDao {
 
     @Query("SELECT * FROM contacts WHERE autoRelay = 1")
     suspend fun getAutoRelayContacts(): List<ContactEntity>
+
+    @Query("UPDATE contacts SET isPriorityPeer = :enabled WHERE userId = :userId")
+    suspend fun setPriorityPeer(userId: String, enabled: Boolean)
+
+    @Query("SELECT * FROM contacts WHERE isPriorityPeer = 1")
+    suspend fun getPriorityPeers(): List<ContactEntity>
 }

@@ -17,4 +17,6 @@ interface ContactRepository {
     suspend fun setDisplayName(userId: String, name: String)
     suspend fun delete(userId: String)
     suspend fun getAutoRelayContacts(): List<Contact>
+    suspend fun setPriorityPeer(userId: String, enabled: Boolean)
+    suspend fun getPriorityPeers(): List<Contact>
 }
