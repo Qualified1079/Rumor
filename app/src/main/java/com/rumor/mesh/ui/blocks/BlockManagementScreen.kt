@@ -1,5 +1,6 @@
 package com.rumor.mesh.ui.blocks
 
+import android.content.Intent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -12,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -28,6 +30,7 @@ fun BlockManagementScreen(
     viewModel: BlockManagementViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
 
     var showAddDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
@@ -107,8 +110,17 @@ fun BlockManagementScreen(
     if (showExportDialog) {
         ExportDialog(
             onExport = { passphrase ->
-                viewModel.exportEncrypted(passphrase) { /* blob — future: share intent */ }
-                showExportDialog = false
+                viewModel.exportEncrypted(passphrase) { blob ->
+                    showExportDialog = false
+                    if (blob != null) {
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, blob)
+                            putExtra(Intent.EXTRA_SUBJECT, "Rumor blocklist backup")
+                        }
+                        context.startActivity(Intent.createChooser(intent, "Share blocklist"))
+                    }
+                }
             },
             onDismiss = { showExportDialog = false },
         )

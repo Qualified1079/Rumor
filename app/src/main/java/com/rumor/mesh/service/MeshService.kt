@@ -76,6 +76,7 @@ class MeshService : Service(), MeshController {
     private val pluginRegistry: PluginRegistry by inject()
     private val pluginCatalog: PluginCatalog by inject()
     private val staticMode: StaticMode by inject()
+    private val contactRepo: com.rumor.mesh.core.data.ContactRepository by inject()
     private val contactDao: ContactDao by inject()
     private val transferSender: TransferSender by inject()
     // Injected for side effect — its constructor subscribes to incoming gossip.
@@ -133,12 +134,13 @@ class MeshService : Service(), MeshController {
         // ── Wire transport → gossip engine ───────────────────────────────────
         // TransportConfig is immutable — no mutable vars on WifiDirectTransport.
         val transportConfig = WifiDirectTransport.TransportConfig(
-            localUserId        = identity.userId,
-            localPublicKey     = Base64.getEncoder().encodeToString(identity.publicKeyBytes),
-            signer             = identityManager::sign,
-            messageProvider    = gossipEngine::messagesForExchange,
-            knownIdsProvider   = gossipEngine::knownMessageIds,
+            localUserId         = identity.userId,
+            localPublicKey      = Base64.getEncoder().encodeToString(identity.publicKeyBytes),
+            signer              = identityManager::sign,
+            messageProvider     = gossipEngine::messagesForExchange,
+            knownIdsProvider    = gossipEngine::knownMessageIds,
             onlineUsersProvider = onlineStatusTracker::currentSnapshot,
+            isPriorityPeer      = { userId -> contactRepo.getById(userId)?.isPriorityPeer == true },
         )
 
         // ── Wire gossip engine output → plugins ──────────────────────────────

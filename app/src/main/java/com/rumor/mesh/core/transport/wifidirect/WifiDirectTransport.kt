@@ -78,6 +78,18 @@ class WifiDirectTransport(
         val knownIdsProvider: () -> Set<String>,
         /** Returns online-status elapsed-ms map to share with peers. */
         val onlineUsersProvider: () -> Map<String, Long>,
+        /**
+         * Returns true for peers that have established a mutual priority link.
+         * Priority peers skip [removeGroup] after each exchange so the Wi-Fi
+         * Direct connection is held open between gossip rounds.
+         */
+        val isPriorityPeer: suspend (String) -> Boolean = { false },
+        /**
+         * Minimum time between consecutive exchanges with the same peer.
+         * Naturally spreads sessions across the available pool rather than
+         * hammering the same peer continuously. 0 = no cooldown.
+         */
+        val sessionCooldownMs: Long = 45_000L,
     )
 
     private var config: TransportConfig? = null
@@ -105,6 +117,11 @@ class WifiDirectTransport(
      * exchange completes so the next encounter is fresh.
      */
     private val activePeerSessions = ConcurrentHashMap<String, Boolean>()
+
+    /** peerUserId → epoch-ms of last successful exchange. Used for session cooldown. */
+    private val recentExchangeMs = ConcurrentHashMap<String, Long>()
+    /** Wi-Fi Direct device address → peerUserId learned from the HELLO handshake. */
+    private val deviceAddressToUserId = ConcurrentHashMap<String, String>()
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -156,14 +173,25 @@ class WifiDirectTransport(
 
     private fun connectToPeer(device: WifiP2pDevice) {
         if (!hasLocationPermission()) return
-        val cfg = WifiP2pConfig().apply {
+        val cfg = config ?: return
+        // Skip peers we've exchanged with recently — spreads sessions across the
+        // available pool and avoids redundant back-to-back exchanges with one node.
+        val knownUserId = deviceAddressToUserId[device.deviceAddress]
+        if (knownUserId != null && cfg.sessionCooldownMs > 0) {
+            val lastMs = recentExchangeMs[knownUserId] ?: 0L
+            if (System.currentTimeMillis() - lastMs < cfg.sessionCooldownMs) {
+                RumorLog.d(TAG, "Skipping ${device.deviceAddress} — cooldown active")
+                return
+            }
+        }
+        val p2pCfg = WifiP2pConfig().apply {
             deviceAddress = device.deviceAddress
             // Neutral GO intent. Samsung/MediaTek ignore this and always demand GO —
             // dual-role (server + client) below handles that case transparently.
             groupOwnerIntent = if (DeviceQuirks.wifiDirectDualRoleRequired) 0 else 7
         }
         enqueueCommand {
-            wifiP2pManager?.connect(channel, cfg, object : WifiP2pManager.ActionListener {
+            wifiP2pManager?.connect(channel, p2pCfg, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
                     RumorLog.d(TAG, "Connect initiated: ${device.deviceAddress}")
                 }
@@ -241,6 +269,12 @@ class WifiDirectTransport(
         finally { claimedPeer?.let { activePeerSessions.remove(it) } }
         if (result == null) return
 
+        // Record the session for cooldown tracking and future addr→userId lookups.
+        recentExchangeMs[result.peerUserId] = System.currentTimeMillis()
+        // socket.inetAddress is the peer's IP; the MAC is only in the WifiP2pDevice
+        // we received earlier, so we store a reverse lookup via claimedPeer key.
+        claimedPeer?.let { deviceAddressToUserId[it] = result.peerUserId }
+
         // Map from transport-internal SessionResult to the protocol-layer boundary type
         _exchangeResults.emit(
             PeerExchangeResult(
@@ -257,12 +291,18 @@ class WifiDirectTransport(
             )
         )
 
-        // Disconnect after exchange — Rumor does not hold persistent connections
-        enqueueCommand {
-            wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() { RumorLog.d(TAG, "Group removed after session") }
-                override fun onFailure(r: Int) {}
-            })
+        // Priority peers hold their connection open between gossip rounds.
+        // Non-priority peers disconnect so the radio is free for new discoveries.
+        val priority = cfg.isPriorityPeer(result.peerUserId)
+        if (!priority) {
+            enqueueCommand {
+                wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() { RumorLog.d(TAG, "Group removed after session") }
+                    override fun onFailure(r: Int) {}
+                })
+            }
+        } else {
+            RumorLog.d(TAG, "Keeping group alive for priority peer ${result.peerUserId.take(8)}…")
         }
     }
 

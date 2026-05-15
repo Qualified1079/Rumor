@@ -18,7 +18,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.OnlineStatus
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.ui.theme.AwayGrey
@@ -82,8 +81,8 @@ fun ThreadScreen(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                items(messages, key = { it.id }) { msg ->
-                    MessageBubble(message = msg, isFromMe = msg.senderId != peerId)
+                items(messages, key = { it.raw.id }) { msg ->
+                    MessageBubble(message = msg)
                 }
             }
         }
@@ -112,7 +111,8 @@ private fun StatusLabel(status: OnlineStatus?) {
 }
 
 @Composable
-private fun MessageBubble(message: RumorMessage, isFromMe: Boolean) {
+private fun MessageBubble(message: DisplayMessage) {
+    val isFromMe = message.isFromMe
     val bubbleColor = if (isFromMe)
         MaterialTheme.colorScheme.primary
     else
@@ -137,12 +137,12 @@ private fun MessageBubble(message: RumorMessage, isFromMe: Boolean) {
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Text(
-                    text = bodyText(message),
+                    text = message.body,
                     color = textColor,
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    text = formatElapsed(System.currentTimeMillis() - message.sentAtMs),
+                    text = formatElapsed(System.currentTimeMillis() - message.raw.sentAtMs),
                     color = textColor.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.align(Alignment.End),
@@ -174,12 +174,6 @@ private fun ComposeBar(
             Icon(Icons.Default.Send, contentDescription = "Send")
         }
     }
-}
-
-private fun bodyText(msg: RumorMessage): String = when {
-    msg.encryptedPayload != null -> "[encrypted]"
-    msg.type == MessageType.TRANSFER_METADATA -> "[transfer]"
-    else -> msg.payload?.content ?: ""
 }
 
 private fun formatElapsed(ms: Long): String {
