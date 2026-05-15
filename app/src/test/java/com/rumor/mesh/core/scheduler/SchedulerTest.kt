@@ -4,6 +4,8 @@ import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.model.TrafficClass
+import com.rumor.mesh.core.model.trafficClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -152,6 +154,27 @@ class SchedulerTest {
         assertEquals("infrastructure first", "carol", result[0].senderId)
         assertEquals("realtime second", "bob", result[1].senderId)
         assertEquals("bulk last", "alice", result[2].senderId)
+    }
+
+    @Test
+    fun `oversized message is demoted to BULK regardless of type`() {
+        // BROADCAST+TEXT under the 16 KB ceiling → REALTIME.
+        // Same type with content exceeding the ceiling → forced to BULK.
+        val small = msg("alice", contentLength = 100)
+        val large = msg("alice", contentLength = 17_000) // > 16 * 1024
+
+        assertEquals(TrafficClass.REALTIME, small.trafficClass)
+        assertEquals(TrafficClass.BULK, large.trafficClass)
+
+        // Scheduler must place the demoted message after genuinely REALTIME traffic.
+        val s = Scheduler()
+        s.enqueue(large)           // claims TEXT but oversized → BULK bucket
+        s.enqueue(msg("bob", 50))  // small TEXT → REALTIME bucket
+
+        val result = s.take()
+        assertEquals(2, result.size)
+        assertEquals("realtime drained first", "bob", result[0].senderId)
+        assertEquals("demoted bulk drained last", "alice", result[1].senderId)
     }
 
     @Test

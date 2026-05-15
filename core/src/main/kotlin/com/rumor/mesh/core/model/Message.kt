@@ -118,8 +118,26 @@ enum class TrafficClass {
 }
 
 /**
- * Traffic class for this message, derived from its [type] and payload content
- * type.
+ * Payload-size ceilings (approx bytes) per class. A message may *claim* a
+ * high-priority type, but it cannot also be large: anything over its class's
+ * ceiling is forced down to BULK by [trafficClass]. This makes a custom client
+ * mislabelling a bulky payload upward pointless — and mislabelling a *small*
+ * payload upward is harmless, since small messages cost almost nothing in the
+ * byte-fair scheduler.
+ *
+ * Ceilings are generous relative to legitimate traffic: real PING/PONG, chunk
+ * requests and blocklist diffs are a few KB; a long text is well under 16 KB;
+ * transfer metadata with a thumbnail is tens of KB. Session-layer exchanges
+ * (handshakes, bloom/cache digests) are [GossipPacket]s, not [RumorMessage]s,
+ * so they never pass through here.
+ */
+private const val INFRASTRUCTURE_CEILING_BYTES = 16 * 1024
+private const val REALTIME_CEILING_BYTES       = 16 * 1024
+private const val TRANSFER_SETUP_CEILING_BYTES = 256 * 1024
+
+/**
+ * Traffic class for this message, derived from its [type], payload content
+ * type, and size.
  *
  * Derived rather than carried on the wire on purpose: a sender cannot mislabel
  * a bulky video as high-priority to jump the queue — the class always reflects
@@ -128,18 +146,33 @@ enum class TrafficClass {
  * REALTIME.
  */
 val RumorMessage.trafficClass: TrafficClass
-    get() = when (type) {
-        MessageType.PING,
-        MessageType.PONG,
-        MessageType.CHUNK_REQUEST,
-        MessageType.BLOCKLIST_PUBLISH,
-        MessageType.BLOCKLIST_DIFF   -> TrafficClass.INFRASTRUCTURE
-        MessageType.TRANSFER_METADATA -> TrafficClass.TRANSFER_SETUP
-        MessageType.CHUNK             -> TrafficClass.BULK
-        MessageType.BROADCAST,
-        MessageType.DIRECT -> when (payload?.contentType) {
-            ContentType.IMAGE, ContentType.VOICE, ContentType.FILE -> TrafficClass.BULK
-            ContentType.CONTROL                                    -> TrafficClass.INFRASTRUCTURE
-            ContentType.TEXT, null                                 -> TrafficClass.REALTIME
+    get() {
+        val base = when (type) {
+            MessageType.PING,
+            MessageType.PONG,
+            MessageType.CHUNK_REQUEST,
+            MessageType.BLOCKLIST_DIFF    -> TrafficClass.INFRASTRUCTURE
+            // A full blocklist snapshot is bulky sync data, not handshake-tier
+            // traffic — only the small incremental diff stays INFRASTRUCTURE.
+            MessageType.TRANSFER_METADATA,
+            MessageType.BLOCKLIST_PUBLISH -> TrafficClass.TRANSFER_SETUP
+            MessageType.CHUNK             -> TrafficClass.BULK
+            MessageType.BROADCAST,
+            MessageType.DIRECT -> when (payload?.contentType) {
+                ContentType.IMAGE, ContentType.VOICE, ContentType.FILE -> TrafficClass.BULK
+                ContentType.CONTROL                                    -> TrafficClass.INFRASTRUCTURE
+                ContentType.TEXT, null                                 -> TrafficClass.REALTIME
+            }
         }
+        val ceiling = when (base) {
+            TrafficClass.INFRASTRUCTURE -> INFRASTRUCTURE_CEILING_BYTES
+            TrafficClass.REALTIME       -> REALTIME_CEILING_BYTES
+            TrafficClass.TRANSFER_SETUP -> TRANSFER_SETUP_CEILING_BYTES
+            TrafficClass.BULK           -> return TrafficClass.BULK
+        }
+        return if (approxPayloadBytes > ceiling) TrafficClass.BULK else base
     }
+
+/** Approximate payload byte cost — content + ciphertext, matching the scheduler's costing. */
+private val RumorMessage.approxPayloadBytes: Int
+    get() = (payload?.content?.length ?: 0) + (encryptedPayload?.length ?: 0)
