@@ -84,12 +84,6 @@ class WifiDirectTransport(
          * Direct connection is held open between gossip rounds.
          */
         val isPriorityPeer: suspend (String) -> Boolean = { false },
-        /**
-         * Minimum time between consecutive exchanges with the same peer.
-         * Naturally spreads sessions across the available pool rather than
-         * hammering the same peer continuously. 0 = no cooldown.
-         */
-        val sessionCooldownMs: Long = 45_000L,
         /** Invoked with the peer's userId when a session completes with no result. */
         val onExchangeFailed: (String) -> Unit = {},
     )
@@ -120,10 +114,17 @@ class WifiDirectTransport(
      */
     private val activePeerSessions = ConcurrentHashMap<String, Boolean>()
 
-    /** peerUserId → epoch-ms of last successful exchange. Used for session cooldown. */
-    private val recentExchangeMs = ConcurrentHashMap<String, Long>()
-    /** Wi-Fi Direct device address → peerUserId learned from the HELLO handshake. */
-    private val deviceAddressToUserId = ConcurrentHashMap<String, String>()
+    /**
+     * Priority-peer userIds we want to re-establish a session with. Populated when
+     * a Wi-Fi Direct disconnect drops a previously-connected priority peer; cleared
+     * as each comes back via a new successful exchange. Never trusts MAC addresses —
+     * identity is only confirmed after HELLO. While non-empty, an aggressive
+     * rediscovery loop runs to find the peer again.
+     */
+    private val priorityReconnectPending = ConcurrentHashMap.newKeySet<String>()
+    /** Priority-peer userIds currently in a live session. Snapshotted on disconnect. */
+    private val activePriorityPeers = ConcurrentHashMap.newKeySet<String>()
+    private var priorityWatcher: Job? = null
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -176,16 +177,8 @@ class WifiDirectTransport(
     private fun connectToPeer(device: WifiP2pDevice) {
         if (!hasLocationPermission()) return
         val cfg = config ?: return
-        // Skip peers we've exchanged with recently — spreads sessions across the
-        // available pool and avoids redundant back-to-back exchanges with one node.
-        val knownUserId = deviceAddressToUserId[device.deviceAddress]
-        if (knownUserId != null && cfg.sessionCooldownMs > 0) {
-            val lastMs = recentExchangeMs[knownUserId] ?: 0L
-            if (System.currentTimeMillis() - lastMs < cfg.sessionCooldownMs) {
-                RumorLog.d(TAG, "Skipping ${device.deviceAddress} — cooldown active")
-                return
-            }
-        }
+        // Identity is only known after HELLO. Cooldown is enforced post-handshake
+        // in runSession() — we cannot trust device.deviceAddress as a userId proxy.
         val p2pCfg = WifiP2pConfig().apply {
             deviceAddress = device.deviceAddress
             // Neutral GO intent. Samsung/MediaTek ignore this and always demand GO —
@@ -274,11 +267,7 @@ class WifiDirectTransport(
             return
         }
 
-        // Record the session for cooldown tracking and future addr→userId lookups.
-        recentExchangeMs[result.peerUserId] = System.currentTimeMillis()
-        // socket.inetAddress is the peer's IP; the MAC is only in the WifiP2pDevice
-        // we received earlier, so we store a reverse lookup via claimedPeer key.
-        claimedPeer?.let { deviceAddressToUserId[it] = result.peerUserId }
+        priorityReconnectPending.remove(result.peerUserId)
 
         // Map from transport-internal SessionResult to the protocol-layer boundary type
         _exchangeResults.emit(
@@ -307,6 +296,7 @@ class WifiDirectTransport(
                 })
             }
         } else {
+            activePriorityPeers.add(result.peerUserId)
             RumorLog.d(TAG, "Keeping group alive for priority peer ${result.peerUserId.take(8)}…")
         }
     }
@@ -356,7 +346,32 @@ class WifiDirectTransport(
         serverJob?.cancel()
         runCatching { serverSocket?.close() }
         serverSocket = null
+        if (activePriorityPeers.isNotEmpty()) {
+            priorityReconnectPending.addAll(activePriorityPeers)
+            activePriorityPeers.clear()
+            startPriorityWatcher()
+        }
         RumorLog.d(TAG, "Disconnected")
+    }
+
+    /**
+     * Aggressive rediscovery loop while priority peers are missing. Issues a
+     * Wi-Fi Direct peer discovery with exponential backoff (2s → 30s) until the
+     * pending set is empty. Identity is confirmed only via HELLO — discovery
+     * just produces connection candidates, none of which are trusted pre-handshake.
+     */
+    private fun startPriorityWatcher() {
+        if (priorityWatcher?.isActive == true) return
+        priorityWatcher = scope.launch {
+            var backoffMs = 2_000L
+            while (priorityReconnectPending.isNotEmpty()) {
+                RumorLog.d(TAG, "Priority reconnect: scanning (${priorityReconnectPending.size} pending)")
+                discoverPeers()
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
+            }
+            RumorLog.d(TAG, "Priority reconnect: all peers reattached")
+        }
     }
 
     private fun requestPeers() {

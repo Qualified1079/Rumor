@@ -16,6 +16,7 @@ Key invariants:
 - `BRIDGE_UNSIGNED` sentinel is honored **only** for `MessageSource.LOCAL_BRIDGE`; peer transport always verifies Ed25519.
 - `trafficClass` is derived, never on the wire — a sender cannot claim INFRASTRUCTURE class for a bulk payload.
 - Size ceilings enforced in `trafficClass`: INFRA/REALTIME=16 KB, TRANSFER_SETUP=256 KB. Oversized → BULK.
+- **MAC addresses are never identity.** Android randomises MACs per-connection and they are trivially spoofable. The only identity is the userId proven via HELLO Ed25519 challenge-response. `WifiP2pDevice.deviceAddress` is only used as an opaque connection target for the OS — never as a cache key, cooldown key, or trust anchor.
 
 ## Coding conventions
 
@@ -47,8 +48,7 @@ Update this list whenever something is completed or newly identified.
 
 | # | Item | Status | Files |
 |---|------|--------|-------|
-| P1 | Priority-link persistent Wi-Fi Direct connection | Transport holds group open for priority peers; BLE reconnect loop on drop not yet implemented | `WifiDirectTransport.kt` — already skips `removeGroup()` for priority peers |
-| P2 | `selectDiversePeers` integration in transport | `NeighborStore` + `TopologyTracker.selectDiversePeers()` exist. Session cooldown (45s) is wired. Full overlap-aware connection ordering needs MAC→userId mapping at discovery time (before HELLO) | `WifiDirectTransport.kt`, `TopologyTracker.kt` |
+| P2 | `selectDiversePeers` integration in transport | `NeighborStore` + `TopologyTracker.selectDiversePeers()` exist. Pre-HELLO peer selection is impossible without trusting MACs (which we don't), so diversity is enforced at the protocol layer (`NeighborStore` informs which userIds to favour when there are multiple HELLO-verified candidates queued). | `WifiDirectTransport.kt`, `TopologyTracker.kt` |
 
 ### Fully stubbed (TODO comments in code)
 
@@ -57,17 +57,12 @@ Update this list whenever something is completed or newly identified.
 | S1 | **Meshtastic bridge** | `app/…/plugin/meshtastic/MeshtasticBridge.kt` | ~14 TODOs. Needs: BT/USB RFCOMM, varint-framed protobuf decode (`MeshPacket`), outbound encode. Everything else (plugin API, trust gating, relay) is done. |
 | S2 | **MeshCore bridge** | `app/…/plugin/meshcore/MeshCoreBridge.kt` | ~11 TODOs. Same pattern as Meshtastic but MeshCore binary format instead of protobuf. |
 
-### Known gaps (no code yet)
-
-| # | Item | Notes |
-|---|------|-------|
-| G2 | **BLE reconnect loop for priority peers** | After the Wi-Fi Direct group is kept alive, if the peer disconnects, there is no reconnect attempt. Needs a watcher coroutine on `exchangeResults` per priority peer that re-initiates discovery when the peer goes silent. |
-
 ### Completed gaps
 
 | # | Item | Resolution |
 |---|------|------------|
 | G1 | **DM sent-message plaintext** | `GossipEngine.sentDmPlaintext` (bounded LinkedHashMap, 500 entries) stores plaintext at compose time. Exposed via `MeshController.sentPlaintextFor()`. `ThreadViewModel` checks this before falling back to `[sent]`. |
+| G2 | **Priority-peer reconnect** | `WifiDirectTransport` tracks `activePriorityPeers` (userIds in live priority sessions). On Wi-Fi Direct disconnect, the set is moved to `priorityReconnectPending` and a watcher coroutine fires `discoverPeers()` with 2s→30s exponential backoff until the set drains. Identity is only ever confirmed via HELLO — MAC addresses are never trusted as identity. |
 | G3 | **`onExchangeFailed` wiring** | `TransportConfig.onExchangeFailed` callback added; `WifiDirectTransport.runSession` calls it when `session.run()` returns null. `MeshService` wires it to `gossipEngine::onExchangeFailed`. |
 | G4 | **Canary metrics queue-depth push** | `DebugMetricsViewModel` polls `engine.canaryMetrics.publish(engine.queueDepth)` every 1s via a `flow { while(true) { … delay(1_000) } }`. Screen stays live without needing a message event. |
 
