@@ -19,9 +19,12 @@
 # Keep Room entities
 -keep class com.rumor.mesh.data.** { *; }
 
-# Keep Hilt
--keep class dagger.hilt.** { *; }
--keep class javax.inject.** { *; }
+# Keep Koin — class names are resolved by string at runtime via KClass.qualifiedName
+-keep class org.koin.** { *; }
+-keepnames class * { *; }
+-keepclassmembers class * {
+    @org.koin.core.annotation.* <methods>;
+}
 
 # Keep model classes used in serialization
 -keep class com.rumor.mesh.core.model.** { *; }

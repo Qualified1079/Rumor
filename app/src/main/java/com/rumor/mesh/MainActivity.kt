@@ -14,7 +14,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.padding
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -68,9 +74,27 @@ class MainActivity : ComponentActivity() {
 
         requestRequiredPermissions()
 
+        // Eagerly resolve injected singletons so a Koin misconfiguration surfaces
+        // here with a clear error UI rather than an opaque crash inside composition.
+        val startupError = runCatching { identityManager; meshControllerHolder }.exceptionOrNull()
+
         setContent {
             RumorTheme {
-                RumorApp(identityManager = identityManager)
+                if (startupError != null) {
+                    Box(
+                        Modifier.fillMaxSize().padding(32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "Startup failed — please reinstall the app.\n\n" +
+                                (startupError.message ?: startupError::class.simpleName),
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                } else {
+                    RumorApp(identityManager = identityManager)
+                }
             }
         }
     }

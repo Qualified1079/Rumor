@@ -12,9 +12,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" tools:targetApi="s" />
 
-    <!-- Location needed for BLE scan on API < 31 -->
+    <!-- Fine location required for BLE scan on API < 31 and Wi-Fi Direct on API < 33.
+         Coarse location is omitted — it is implied by fine and adds nothing here. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- ── Wi-Fi Direct ──────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
