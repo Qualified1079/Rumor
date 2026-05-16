@@ -20,16 +20,33 @@ jobs:
       - name: Verify versionCode is monotonically increasing
         run: |
           set -euo pipefail
+          # Anchored regex so comments or string-literals containing "versionCode = "
+          # can't trip the parser into matching the wrong line.
+          VC_RE='^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*$'
+          extract_vc() {
+            # $1 is file contents on stdin
+            sed -nE "s/${VC_RE}/\1/p" | head -1
+          }
+
           CURRENT_TAG="$(git describe --exact-match HEAD)"
-          CURRENT_VC="$(grep 'versionCode = ' app/build.gradle.kts | head -1 | grep -oE '[0-9]+')"
-          PREV_TAG="$(git tag --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -1 || true)"
+          CURRENT_VC="$(extract_vc < app/build.gradle.kts)"
+          PREV_TAG="$(git tag --sort=-v:refname | grep -vxF "${CURRENT_TAG}" | head -1 || true)"
+
+          if [ -z "${CURRENT_VC}" ]; then
+            echo "::error::Could not extract versionCode from app/build.gradle.kts"
+            exit 1
+          fi
 
           if [ -z "${PREV_TAG}" ]; then
             echo "No previous tag found — assuming first release with versionCode=${CURRENT_VC}"
             exit 0
           fi
 
-          PREV_VC="$(git show "${PREV_TAG}:app/build.gradle.kts" | grep 'versionCode = ' | head -1 | grep -oE '[0-9]+')"
+          PREV_VC="$(git show "${PREV_TAG}:app/build.gradle.kts" | extract_vc)"
+          if [ -z "${PREV_VC}" ]; then
+            echo "::error::Could not extract versionCode from ${PREV_TAG}"
+            exit 1
+          fi
 
           if [ "${CURRENT_VC}" -le "${PREV_VC}" ]; then
             echo "::error::versionCode ${CURRENT_VC} must be greater than ${PREV_VC} (from ${PREV_TAG})"

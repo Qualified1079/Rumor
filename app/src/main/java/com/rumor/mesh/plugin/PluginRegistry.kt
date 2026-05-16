@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -47,7 +48,14 @@ class PluginRegistry(
         unregister(plugin.pluginId)
         val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         pluginScopes[plugin.pluginId] = scope
-        val ctx = PluginContextImpl(plugin.pluginId, scope)
+        val ctx = PluginContextImpl(
+            pluginId = plugin.pluginId,
+            scope = scope,
+            gossipEngine = gossipEngine,
+            identityManager = identityManager,
+            contactDao = contactDao,
+            dmEnvelopeRegistry = dmEnvelopeRegistry,
+        )
         pluginContexts[plugin.pluginId] = ctx
         plugin.onAttach(ctx)
         plugins.add(plugin)
@@ -88,73 +96,96 @@ class PluginRegistry(
 
     fun registeredPluginIds(): List<String> = plugins.map { it.pluginId }
 
-    // ── PluginContext implementation ──────────────────────────────────────────
+}
+
+// ── PluginContext implementation ──────────────────────────────────────────
+
+/**
+ * Implementation of [PluginContext] created for each plugin.
+ *
+ * Non-inner (no captured enclosing `PluginRegistry` reference) on purpose: a
+ * plugin downcasting its [PluginContext] to this class would otherwise reach
+ * `PluginRegistry` via Kotlin's synthetic `this$0` and could call
+ * `register`/`unregister` on peer plugins. Exposing only the explicit
+ * collaborators below limits the blast radius to capabilities the plugin
+ * already has via normal interface methods.
+ *
+ * File-private (`internal` visibility is enough within the module; we restrict
+ * by keeping the class outside any public surface).
+ */
+private class PluginContextImpl(
+    override val pluginId: String,
+    override val scope: CoroutineScope,
+    private val gossipEngine: com.rumor.mesh.core.protocol.GossipEngine,
+    private val identityManager: IdentityManager,
+    private val contactDao: ContactDao,
+    private val dmEnvelopeRegistry: DmEnvelopeRegistry,
+) : PluginContext {
+
+    private val TAG = "PluginRegistry"
+    private val registeredPrefixes = CopyOnWriteArrayList<String>()
+
+    override val localUserId: String?
+        get() = identityManager.identity.value?.userId
+
+    override val localPublicKey: String?
+        get() = identityManager.identity.value?.publicKeyBytes
+            ?.let { java.util.Base64.getEncoder().encodeToString(it) }
+
+    override fun sendMessage(message: RumorMessage, sourceDescription: String) {
+        RumorLog.d(TAG, "Plugin $pluginId injecting message from $sourceDescription")
+        gossipEngine.injectFromPlugin(message, pluginId)
+    }
+
+    override fun observeIncoming(): Flow<RumorMessage> =
+        gossipEngine.incomingMessages
+
+    override fun registerDmEnvelope(envelope: DmEnvelope) {
+        dmEnvelopeRegistry.register(envelope)
+        registeredPrefixes.add(envelope.recipientPrefix)
+    }
+
+    override fun injectBridgedDm(
+        recipientUserId: String,
+        senderUserId: String,
+        senderPubKey: ByteArray,
+        ciphertext: ByteArray,
+        envelopeId: String,
+    ) {
+        gossipEngine.injectBridgedDm(recipientUserId, senderUserId, senderPubKey, ciphertext, envelopeId, pluginId)
+    }
 
     /**
-     * Private implementation of [PluginContext] created for each plugin.
-     * Each plugin gets its own instance so logging is attributed correctly,
-     * but all instances share the same underlying engine and DAO references.
+     * H1 fix: filter the engine-wide outbound flow down to events whose recipient
+     * matches one of THIS plugin's registered prefixes. Without this filter, every
+     * plugin (including ones that registered no envelope) would see every other
+     * bridge plugin's outbound ciphertexts and recipient userIds — defeating the
+     * Architecture B promise that only the target bridge sees the bytes.
      */
-    inner class PluginContextImpl(
-        override val pluginId: String,
-        override val scope: CoroutineScope,
-    ) : PluginContext {
-
-        private val registeredPrefixes = CopyOnWriteArrayList<String>()
-
-        override val localUserId: String?
-            get() = identityManager.identity.value?.userId
-
-        override val localPublicKey: String?
-            get() = identityManager.identity.value?.publicKeyBytes
-                ?.let { java.util.Base64.getEncoder().encodeToString(it) }
-
-        override fun sendMessage(message: RumorMessage, sourceDescription: String) {
-            RumorLog.d(TAG, "Plugin $pluginId injecting message from $sourceDescription")
-            gossipEngine.injectFromPlugin(message, pluginId)
+    override fun observeOutboundBridgedDm(): Flow<BridgedDmOutbound> =
+        gossipEngine.outboundBridgedDm.filter { event ->
+            registeredPrefixes.any { event.recipientUserId.startsWith(it) }
         }
 
-        override fun observeIncoming(): Flow<RumorMessage> =
-            gossipEngine.incomingMessages
+    /** Called by [PluginRegistry.unregister] before [RumorPlugin.onDetach]. */
+    fun unregisterAllEnvelopes() {
+        registeredPrefixes.forEach { dmEnvelopeRegistry.unregister(it) }
+        registeredPrefixes.clear()
+    }
 
-        override fun registerDmEnvelope(envelope: DmEnvelope) {
-            dmEnvelopeRegistry.register(envelope)
-            registeredPrefixes.add(envelope.recipientPrefix)
-        }
-
-        override fun injectBridgedDm(
-            recipientUserId: String,
-            senderUserId: String,
-            senderPubKey: ByteArray,
-            ciphertext: ByteArray,
-            envelopeId: String,
-        ) {
-            gossipEngine.injectBridgedDm(recipientUserId, senderUserId, senderPubKey, ciphertext, envelopeId, pluginId)
-        }
-
-        override fun observeOutboundBridgedDm(): Flow<BridgedDmOutbound> =
-            gossipEngine.outboundBridgedDm
-
-        /** Called by [PluginRegistry.unregister] before [RumorPlugin.onDetach]. */
-        fun unregisterAllEnvelopes() {
-            registeredPrefixes.forEach { dmEnvelopeRegistry.unregister(it) }
-            registeredPrefixes.clear()
-        }
-
-        override val contacts: Flow<List<ContactSummary>>
-            get() = contactDao.observeAll().map { entities ->
-                entities.map { e ->
-                    ContactSummary(
-                        userId = e.userId,
-                        publicKey = e.publicKey,
-                        displayName = e.displayName,
-                        isVerified = e.isVerified,
-                    )
-                }
+    override val contacts: Flow<List<ContactSummary>>
+        get() = contactDao.observeAll().map { entities ->
+            entities.map { e ->
+                ContactSummary(
+                    userId = e.userId,
+                    publicKey = e.publicKey,
+                    displayName = e.displayName,
+                    isVerified = e.isVerified,
+                )
             }
-
-        override fun log(level: LogLevel, message: String, throwable: Throwable?) {
-            RumorLog.log(level, pluginId, message, throwable)
         }
+
+    override fun log(level: LogLevel, message: String, throwable: Throwable?) {
+        RumorLog.log(level, pluginId, message, throwable)
     }
 }

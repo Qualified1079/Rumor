@@ -103,6 +103,15 @@ class GossipEngine(
     private val _outboundBridgedDm = MutableSharedFlow<BridgedDmOutbound>(extraBufferCapacity = 64)
     val outboundBridgedDm: SharedFlow<BridgedDmOutbound> = _outboundBridgedDm
 
+    /**
+     * TOFU-pinned sender pubkey per bridged-DM senderUserId. First call to
+     * [injectBridgedDm] for a given senderUserId records the pubkey; subsequent
+     * calls with a different pubkey are dropped as a key-swap attempt by the
+     * bridge plugin. See CLAUDE.md A4 — proper handling needs a re-verification
+     * UI flow; until then we fail closed.
+     */
+    private val bridgedSenderPins = ConcurrentHashMap<String, ByteArray>()
+
     /** Relayed messages are buffered here before being committed to the scheduler. */
     private val relayBatcher = RelayBatcher(scope) { batch ->
         batch.forEach { scheduler.enqueue(it) }
@@ -176,6 +185,15 @@ class GossipEngine(
         envelopeId: String,
         sourcePluginId: String,
     ) {
+        // L2: a plugin may not fabricate DMs addressed to anyone but the local user.
+        // Without this check a malicious plugin could plant entries in the local inbox
+        // attributed to arbitrary third-party recipients ("X sent Y this message").
+        val localId = identityProvider.identity.value?.userId
+        if (localId == null || recipientUserId != localId) {
+            RumorLog.w(TAG, "injectBridgedDm: recipientUserId is not the local user " +
+                "(got='$recipientUserId' local='${localId ?: "(locked)"}'); dropping")
+            return
+        }
         val envelope = dmEnvelopeRegistry.forRecipient(senderUserId)
         if (envelope == null) {
             RumorLog.w(TAG, "injectBridgedDm: no envelope registered for sender prefix of '$senderUserId'; dropping")
@@ -184,6 +202,16 @@ class GossipEngine(
         if (envelope.envelopeId != envelopeId) {
             RumorLog.w(TAG, "injectBridgedDm: envelopeId mismatch " +
                 "(derived='${envelope.envelopeId}' asserted='$envelopeId'); dropping")
+            return
+        }
+        // H2 (TOFU): pin the senderUserId → senderPubKey mapping on first sight. A
+        // bridge plugin substituting a pubkey on subsequent messages from the same
+        // remote user would enable a key-swap attack against any envelope whose
+        // decrypt() uses senderPubKey as ECDH input.
+        val existingPin = bridgedSenderPins.putIfAbsent(senderUserId, senderPubKey)
+        if (existingPin != null && !existingPin.contentEquals(senderPubKey)) {
+            RumorLog.w(TAG, "injectBridgedDm: senderPubKey TOFU mismatch for '$senderUserId' " +
+                "(plugin=$sourcePluginId); dropping — bridged contact needs re-verification")
             return
         }
         val encPayload = "${envelope.envelopeId}:${ciphertext.toBase64()}"

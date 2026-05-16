@@ -73,6 +73,38 @@ class DmEnvelopeRegistryTest {
     }
 
     @Test
+    fun `register rejects empty prefix`() {
+        try {
+            DmEnvelopeRegistry().register(makeEnvelope("", "env-empty"))
+            fail("Expected IllegalArgumentException")
+        } catch (e: IllegalArgumentException) { /* ok */ }
+    }
+
+    @Test
+    fun `register rejects prefix without colon`() {
+        try {
+            DmEnvelopeRegistry().register(makeEnvelope("meshtastic"))
+            fail("Expected IllegalArgumentException — prefix must end with ':'")
+        } catch (e: IllegalArgumentException) { /* ok */ }
+    }
+
+    @Test
+    fun `register rejects envelopeId with colon`() {
+        try {
+            DmEnvelopeRegistry().register(makeEnvelope("meshtastic:", id = "foo:bar"))
+            fail("Expected IllegalArgumentException — envelopeId must match [A-Za-z0-9_.-]+")
+        } catch (e: IllegalArgumentException) { /* ok */ }
+    }
+
+    @Test
+    fun `register rejects envelopeId with whitespace`() {
+        try {
+            DmEnvelopeRegistry().register(makeEnvelope("meshtastic:", id = "env id"))
+            fail("Expected IllegalArgumentException")
+        } catch (e: IllegalArgumentException) { /* ok */ }
+    }
+
+    @Test
     fun `concurrent registration and lookup does not throw`() {
         val r = DmEnvelopeRegistry()
         val threads = (1..8).map { i ->

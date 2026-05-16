@@ -19,10 +19,27 @@ class DmEnvelopeRegistry {
 
     /**
      * Register [envelope] for its [DmEnvelope.recipientPrefix].
+     *
+     * Prefix validation (M1): must end with `:` and be at least 2 chars. A trivial or
+     * empty prefix could intercept native Rumor DMs (hex userIds never contain `:`),
+     * silently diverting them into a plugin envelope.
+     *
+     * Envelope id validation (L1): restricted to `[A-Za-z0-9_.-]+` so it can't contain
+     * the `:` separator used to delimit `envelopeId:base64ciphertext` on the wire.
+     *
+     * @throws IllegalArgumentException if the prefix or envelope id is invalid.
      * @throws IllegalStateException if the prefix is already owned by another envelope.
      */
-    @Throws(IllegalStateException::class)
+    @Throws(IllegalStateException::class, IllegalArgumentException::class)
     fun register(envelope: DmEnvelope) {
+        require(envelope.recipientPrefix.endsWith(":") && envelope.recipientPrefix.length >= 2) {
+            "DmEnvelope.recipientPrefix must end with ':' and be at least 2 chars " +
+                "(got '${envelope.recipientPrefix}')"
+        }
+        require(ENVELOPE_ID_PATTERN.matches(envelope.envelopeId)) {
+            "DmEnvelope.envelopeId must match $ENVELOPE_ID_PATTERN " +
+                "(got '${envelope.envelopeId}')"
+        }
         synchronized(lock) {
             check(envelope.recipientPrefix !in byPrefix) {
                 "DmEnvelope prefix '${envelope.recipientPrefix}' is already registered " +
@@ -30,6 +47,10 @@ class DmEnvelopeRegistry {
             }
             byPrefix[envelope.recipientPrefix] = envelope
         }
+    }
+
+    private companion object {
+        private val ENVELOPE_ID_PATTERN = Regex("^[A-Za-z0-9_.-]+$")
     }
 
     /** Remove the envelope for [recipientPrefix]. No-op if not registered. */
