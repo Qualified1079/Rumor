@@ -41,6 +41,7 @@ import com.rumor.mesh.data.adapter.MessageRepositoryAdapter
 import com.rumor.mesh.data.adapter.RouteRepositoryAdapter
 import com.rumor.mesh.data.adapter.SubscribedBlocklistRepositoryAdapter
 import com.rumor.mesh.data.adapter.TransferRepositoryAdapter
+import com.rumor.mesh.plugin.DmEnvelopeRegistry
 import com.rumor.mesh.plugin.PluginCatalog
 import com.rumor.mesh.plugin.PluginRegistry
 import com.rumor.mesh.service.MeshControllerHolder
@@ -99,7 +100,8 @@ val appModule = module {
     single { BreadcrumbCache(get()) }
     single { Scheduler(staticMode = get<StaticMode>()) }
     single<InboxFilter> { InboxPolicyManager(androidContext(), get()) }
-    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get()) }
+    single { DmEnvelopeRegistry() }
+    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), dmEnvelopeRegistry = get()) }
 
     // ── Transfer layer ────────────────────────────────────────────────────────
     single { TransferAssembler(get(), get(), get()) }
@@ -113,7 +115,7 @@ val appModule = module {
     single { WifiDirectTransport(androidContext()) }
 
     // ── Plugins ───────────────────────────────────────────────────────────────
-    single { PluginRegistry(get(), get<IdentityProvider>(), get()) }
+    single { PluginRegistry(get(), get<IdentityProvider>(), get(), get()) }
     single { PluginCatalog(androidContext(), get()) }
 
     // ── Service ───────────────────────────────────────────────────────────────

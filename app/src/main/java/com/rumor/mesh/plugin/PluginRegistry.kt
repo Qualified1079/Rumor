@@ -11,7 +11,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.map
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -30,11 +29,14 @@ class PluginRegistry(
     private val gossipEngine: GossipEngine,
     private val identityManager: IdentityManager,
     private val contactDao: ContactDao,
+    private val dmEnvelopeRegistry: DmEnvelopeRegistry,
 ) {
     private val TAG = "PluginRegistry"
     private val plugins = CopyOnWriteArrayList<RumorPlugin>()
     /** Per-plugin host-owned scopes. Cancelled on unregister regardless of plugin behaviour. */
     private val pluginScopes = ConcurrentHashMap<String, CoroutineScope>()
+    /** Tracks the PluginContextImpl per plugin so we can unregister envelopes on teardown. */
+    private val pluginContexts = ConcurrentHashMap<String, PluginContextImpl>()
 
     /**
      * Register a plugin and call its [RumorPlugin.onAttach].
@@ -46,6 +48,7 @@ class PluginRegistry(
         val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         pluginScopes[plugin.pluginId] = scope
         val ctx = PluginContextImpl(plugin.pluginId, scope)
+        pluginContexts[plugin.pluginId] = ctx
         plugin.onAttach(ctx)
         plugins.add(plugin)
         RumorLog.i(TAG, "Registered plugin: ${plugin.pluginId} (${plugin.displayName} v${plugin.version})")
@@ -53,12 +56,14 @@ class PluginRegistry(
 
     /**
      * Unregister a plugin by ID. Cancels the host-owned scope first — killing every
-     * coroutine the plugin started — and then calls [RumorPlugin.onDetach]. This
-     * order guarantees toggleability even for plugins whose own cleanup is incorrect.
+     * coroutine the plugin started — then unregisters any DmEnvelopes the plugin
+     * registered (atomically, before onDetach), then calls [RumorPlugin.onDetach].
+     * This order guarantees toggleability even for plugins whose own cleanup is incorrect.
      */
     fun unregister(pluginId: String) {
         val plugin = plugins.firstOrNull { it.pluginId == pluginId } ?: return
         pluginScopes.remove(pluginId)?.cancel()
+        pluginContexts.remove(pluginId)?.unregisterAllEnvelopes()
         runCatching { plugin.onDetach() }
             .onFailure { RumorLog.w(TAG, "Plugin $pluginId threw in onDetach", it) }
         plugins.remove(plugin)
@@ -90,10 +95,12 @@ class PluginRegistry(
      * Each plugin gets its own instance so logging is attributed correctly,
      * but all instances share the same underlying engine and DAO references.
      */
-    private inner class PluginContextImpl(
+    inner class PluginContextImpl(
         override val pluginId: String,
         override val scope: CoroutineScope,
     ) : PluginContext {
+
+        private val registeredPrefixes = CopyOnWriteArrayList<String>()
 
         override val localUserId: String?
             get() = identityManager.identity.value?.userId
@@ -109,6 +116,30 @@ class PluginRegistry(
 
         override fun observeIncoming(): Flow<RumorMessage> =
             gossipEngine.incomingMessages
+
+        override fun registerDmEnvelope(envelope: DmEnvelope) {
+            dmEnvelopeRegistry.register(envelope)
+            registeredPrefixes.add(envelope.recipientPrefix)
+        }
+
+        override fun injectBridgedDm(
+            recipientUserId: String,
+            senderUserId: String,
+            senderPubKey: ByteArray,
+            ciphertext: ByteArray,
+            envelopeId: String,
+        ) {
+            gossipEngine.injectBridgedDm(recipientUserId, senderUserId, senderPubKey, ciphertext, envelopeId, pluginId)
+        }
+
+        override fun observeOutboundBridgedDm(): Flow<BridgedDmOutbound> =
+            gossipEngine.outboundBridgedDm
+
+        /** Called by [PluginRegistry.unregister] before [RumorPlugin.onDetach]. */
+        fun unregisterAllEnvelopes() {
+            registeredPrefixes.forEach { dmEnvelopeRegistry.unregister(it) }
+            registeredPrefixes.clear()
+        }
 
         override val contacts: Flow<List<ContactSummary>>
             get() = contactDao.observeAll().map { entities ->

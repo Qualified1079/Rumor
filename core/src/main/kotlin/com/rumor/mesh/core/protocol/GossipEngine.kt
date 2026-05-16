@@ -17,6 +17,8 @@ import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.scheduler.Scheduler
+import com.rumor.mesh.plugin.BridgedDmOutbound
+import com.rumor.mesh.plugin.DmEnvelopeRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,6 +78,7 @@ class GossipEngine(
     private val inboxFilter: InboxFilter,
     val canaryMetrics: CanaryMetrics = CanaryMetrics(),
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
+    private val dmEnvelopeRegistry: DmEnvelopeRegistry = DmEnvelopeRegistry(),
 ) {
     private val sequenceCounter = AtomicLong(System.currentTimeMillis())
 
@@ -95,6 +98,10 @@ class GossipEngine(
 
     private val _deliveryEvents = MutableSharedFlow<String>(extraBufferCapacity = 256)
     val deliveryEvents: SharedFlow<String> = _deliveryEvents
+
+    /** Emits outbound DMs composed with a registered [DmEnvelopeRegistry] envelope. */
+    private val _outboundBridgedDm = MutableSharedFlow<BridgedDmOutbound>(extraBufferCapacity = 64)
+    val outboundBridgedDm: SharedFlow<BridgedDmOutbound> = _outboundBridgedDm
 
     /** Relayed messages are buffered here before being committed to the scheduler. */
     private val relayBatcher = RelayBatcher(scope) { batch ->
@@ -148,6 +155,56 @@ class GossipEngine(
         }
     }
 
+    /**
+     * Deliver an encrypted DM received from a bridge's external network to the local
+     * recipient's inbox.
+     *
+     * Security constraints enforced here (O5a):
+     * 1. Envelope is looked up by [senderUserId] prefix from the local registry — never
+     *    from the wire-asserted [envelopeId]. If the derived id doesn't match [envelopeId],
+     *    the message is dropped (downgrade attack prevention).
+     * 2. [BRIDGE_UNSIGNED] sentinel + [MessageSource.LOCAL_BRIDGE] → [TrustLevel.BRIDGED].
+     *    The BRIDGED trust level prevents re-relay onto the signed Rumor mesh.
+     * 3. The ciphertext is stored as-is; the recipient's UI decrypts at read time using
+     *    the registered envelope — this node never holds the plaintext.
+     */
+    fun injectBridgedDm(
+        recipientUserId: String,
+        senderUserId: String,
+        senderPubKey: ByteArray,
+        ciphertext: ByteArray,
+        envelopeId: String,
+        sourcePluginId: String,
+    ) {
+        val envelope = dmEnvelopeRegistry.forRecipient(senderUserId)
+        if (envelope == null) {
+            RumorLog.w(TAG, "injectBridgedDm: no envelope registered for sender prefix of '$senderUserId'; dropping")
+            return
+        }
+        if (envelope.envelopeId != envelopeId) {
+            RumorLog.w(TAG, "injectBridgedDm: envelopeId mismatch " +
+                "(derived='${envelope.envelopeId}' asserted='$envelopeId'); dropping")
+            return
+        }
+        val encPayload = "${envelope.envelopeId}:${ciphertext.toBase64()}"
+        val msg = RumorMessage(
+            id               = UUID.randomUUID().toString().replace("-", ""),
+            senderId         = senderUserId,
+            senderPublicKey  = senderPubKey.toBase64(),
+            sequenceNumber   = System.currentTimeMillis(),
+            sentAtMs         = System.currentTimeMillis(),
+            type             = MessageType.DIRECT,
+            ttl              = 1,  // BRIDGED trust prevents relay; ttl=1 is belt-and-suspenders
+            encryptedPayload = encPayload,
+            recipientId      = recipientUserId,
+            signature        = BRIDGE_UNSIGNED,  // → LOCAL_BRIDGE source → TrustLevel.BRIDGED
+        )
+        scope.launch {
+            RumorLog.d(TAG, "Injecting bridged DM from $sourcePluginId: ${msg.id.take(8)}…")
+            processIncoming(msg, MessageSource.LOCAL_BRIDGE, emptySet())
+        }
+    }
+
     // ── Compose ───────────────────────────────────────────────────────────────
 
     fun composeBroadcast(text: String): RumorMessage? {
@@ -164,10 +221,20 @@ class GossipEngine(
 
     fun composeDirect(recipientId: String, recipientPublicKey: ByteArray, text: String): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
-        val ephemeral = CryptoManager.generateX25519KeyPair()
-        val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientPublicKey)
-        val ct = CryptoManager.aesGcmEncrypt(text.toByteArray(Charsets.UTF_8), sharedKey)
-        val encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
+        val envelope = dmEnvelopeRegistry.forRecipient(recipientId)
+        val encryptedPayload: String
+        val rawCiphertext: ByteArray?
+        if (envelope != null) {
+            val ct = envelope.encrypt(recipientId, recipientPublicKey, text.toByteArray(Charsets.UTF_8))
+            encryptedPayload = "${envelope.envelopeId}:${ct.toBase64()}"
+            rawCiphertext = ct
+        } else {
+            val ephemeral = CryptoManager.generateX25519KeyPair()
+            val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientPublicKey)
+            val ct = CryptoManager.aesGcmEncrypt(text.toByteArray(Charsets.UTF_8), sharedKey)
+            encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
+            rawCiphertext = null
+        }
         val msg = buildMessage(
             identity = identity,
             type = MessageType.DIRECT,
@@ -176,7 +243,16 @@ class GossipEngine(
             recipientId = recipientId,
         )
         sentDmPlaintext[msg.id] = text
-        enqueueImmediate(msg)
+        if (envelope != null && rawCiphertext != null) {
+            // Bridged DM: the bridge plugin picks this up via outboundBridgedDm and
+            // forwards the raw ciphertext to the external network. Do not enqueue in the
+            // gossip scheduler — bridged recipients are not reachable via Rumor peers.
+            scope.launch {
+                _outboundBridgedDm.emit(BridgedDmOutbound(recipientId, envelope.envelopeId, rawCiphertext))
+            }
+        } else {
+            enqueueImmediate(msg)
+        }
         return msg
     }
 

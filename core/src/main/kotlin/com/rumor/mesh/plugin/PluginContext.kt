@@ -45,6 +45,51 @@ interface PluginContext {
      */
     fun observeIncoming(): Flow<RumorMessage>
 
+    // ── Encrypted DM bridging (O5a) ───────────────────────────────────────────
+
+    /**
+     * Register a [DmEnvelope] so that outbound DMs to recipients matching
+     * [DmEnvelope.recipientPrefix] use this envelope's crypto instead of the
+     * native Rumor X25519+AES-GCM path.
+     *
+     * @throws IllegalStateException if the prefix is already owned by another envelope.
+     *
+     * The host unregisters this envelope atomically when the plugin is detached,
+     * before [RumorPlugin.onDetach] is called.
+     */
+    fun registerDmEnvelope(envelope: DmEnvelope)
+
+    /**
+     * Deliver an encrypted DM received from the bridge's external network to the
+     * local recipient's inbox. The engine routes the ciphertext to the recipient
+     * without decrypting — the recipient's UI calls [DmEnvelope.decrypt] at read time.
+     *
+     * The engine looks up the decryption envelope by [senderUserId] prefix locally.
+     * [envelopeId] is only a sanity assertion at the bridge boundary — if it does not
+     * match the registered envelope for the prefix, the message is dropped. This
+     * prevents an attacker from coercing decryption with a different envelope by
+     * injecting a fabricated envelope id.
+     *
+     * The resulting message gets [com.rumor.mesh.core.model.TrustLevel.BRIDGED] and
+     * is never re-relayed onto the signed Rumor mesh.
+     */
+    fun injectBridgedDm(
+        recipientUserId: String,
+        senderUserId: String,
+        senderPubKey: ByteArray,
+        ciphertext: ByteArray,
+        envelopeId: String,
+    )
+
+    /**
+     * A hot [Flow] of outbound DIRECT messages composed using a registered [DmEnvelope].
+     * Collect this inside your plugin scope to pick up DMs that the local user addressed
+     * to a bridged contact, then forward [BridgedDmOutbound.ciphertext] to the external
+     * network using your radio framing. The raw ciphertext is the output of
+     * [DmEnvelope.encrypt] — no Rumor message framing is included.
+     */
+    fun observeOutboundBridgedDm(): Flow<BridgedDmOutbound>
+
     // ── Contacts ──────────────────────────────────────────────────────────────
 
     /**
@@ -87,6 +132,17 @@ interface PluginContext {
         const val BRIDGE_UNSIGNED = "bridge_unsigned"
     }
 }
+
+/**
+ * Outbound bridged DM payload emitted by [PluginContext.observeOutboundBridgedDm].
+ * The bridge plugin wraps [ciphertext] in its target-network framing and transmits it.
+ */
+data class BridgedDmOutbound(
+    val recipientUserId: String,
+    val envelopeId: String,
+    /** Raw ciphertext as returned by [DmEnvelope.encrypt]. Ready for target-network framing. */
+    val ciphertext: ByteArray,
+)
 
 /**
  * Simplified contact view exposed to plugins.
