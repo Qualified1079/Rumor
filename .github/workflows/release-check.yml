@@ -1,0 +1,38 @@
+name: Release Version Check
+
+# Enforces O10: versionCode must strictly increase with each release tag.
+# F-Droid and Play both reject uploads where versionCode is not greater than
+# the previously published one, so catching this at tag-push time avoids a
+# release going out and immediately failing distribution.
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need full history to compare against the previous tag
+
+      - name: Verify versionCode is monotonically increasing
+        run: |
+          set -euo pipefail
+          CURRENT_TAG="$(git describe --exact-match HEAD)"
+          CURRENT_VC="$(grep 'versionCode = ' app/build.gradle.kts | head -1 | grep -oE '[0-9]+')"
+          PREV_TAG="$(git tag --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -1 || true)"
+
+          if [ -z "${PREV_TAG}" ]; then
+            echo "No previous tag found — assuming first release with versionCode=${CURRENT_VC}"
+            exit 0
+          fi
+
+          PREV_VC="$(git show "${PREV_TAG}:app/build.gradle.kts" | grep 'versionCode = ' | head -1 | grep -oE '[0-9]+')"
+
+          if [ "${CURRENT_VC}" -le "${PREV_VC}" ]; then
+            echo "::error::versionCode ${CURRENT_VC} must be greater than ${PREV_VC} (from ${PREV_TAG})"
+            exit 1
+          fi
+          echo "OK: versionCode ${CURRENT_VC} > ${PREV_VC} (from ${PREV_TAG})"
