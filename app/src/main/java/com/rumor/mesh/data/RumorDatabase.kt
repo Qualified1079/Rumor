@@ -5,6 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import com.rumor.mesh.BuildConfig
 
 @Database(
     entities = [
@@ -38,7 +39,12 @@ abstract class RumorDatabase : RoomDatabase() {
 
         fun create(context: Context): RumorDatabase =
             Room.databaseBuilder(context, RumorDatabase::class.java, DB_NAME)
-                .fallbackToDestructiveMigration()
+                .apply {
+                    // Release builds must have explicit migrations — silently
+                    // wiping user data on a schema bump is unacceptable in
+                    // production. Dev builds keep the convenience.
+                    if (BuildConfig.DEBUG) fallbackToDestructiveMigration()
+                }
                 .build()
     }
 }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Mesh/signal mark, centred in the 72dp safe zone (18..90 on a 108 canvas). -->
+    <group android:translateX="18" android:translateY="30">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M6,27L15,36C37.36,13.64 73.64,13.64 96,36L105,27C77.66,-0.34 33.34,-0.34 6,27ZM42,63L54,75L66,63C59.37,56.37 48.63,56.37 42,63ZM24,45L33,54C45.43,41.57 65.57,41.57 78,54L87,45C69.61,27.61 41.39,27.61 24,45Z" />
+    </group>
+</vector>

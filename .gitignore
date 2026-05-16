@@ -5,3 +5,6 @@ local.properties
 .idea/
 captures/
 .cxx/
+app/keystore.properties
+app/release.keystore
+*.jks
