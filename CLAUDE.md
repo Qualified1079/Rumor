@@ -76,6 +76,7 @@ Audit-derived punch list. When you close one, move it into "Completed gaps" with
 | O3 | **Reliability half of throughput+reliability ranking** | `bytesRelayed` (throughput proxy) is wired into `getPreferred`. Reliability score (success/failure ratio, drop count) is not tracked. Add a `failureCount` to `Route` and rank by `bytesRelayed / (1 + failureCount)`. |
 | O4 | **Bridges — USB transport** | Both Meshtastic and MeshCore are BLE-only. MeshCore docs `'>'`+LE-len framing for USB CDC; Meshtastic uses 0x94 0xC3 magic + varint length. Significant scope per bridge. |
 | O5 | **Bridges — DM bridging** | Both bridges deliberately broadcast-only today. Two viable architectures; **read the "Encrypted bridging" decision below before designing this**. Recommended: Architecture B (envelope passthrough, true E2E) for both bridges — curves align (both use X25519/Ed25519-derived ECDH), only the AEAD wrapper differs per bridge. Architecture A (decrypt-and-re-encrypt) is fallback only. Both architectures require the bridged-contact UI labelling listed under Architecture A as hard pre-ship blockers. |
+| O5a | **Pluggable DmEnvelope framework** | Prerequisite for O5 if we want this to scale beyond two hardcoded bridges. Move DM crypto behind a `DmEnvelope` interface registered by plugins via `PluginContext.registerDmEnvelope`. Engine selects the envelope by recipient userId prefix; falls back to the native Rumor envelope (X25519+AES-GCM) when no plugin claims the prefix. Inbound path needs `PluginContext.injectBridgedDm(recipient, sender, senderPubKey, ciphertext, envelopeId)` so the recipient's UI can call the same envelope to decrypt at read time. Envelopes can declare `selfAuthenticating=true` to skip the outer Ed25519 signature when the AEAD/MAC is sufficient. See "Encrypted bridging" below for the full sketch. |
 | O6 | **Bridges — multi-channel selection UI** | Both bridges hardcode channel index 0. Need a per-plugin settings screen exposing the radio's channel list. |
 | O7 | **Bridges — device picker** | Both bridges auto-connect to the first matching device. Multi-radio setups need a picker UI feeding `connect(device)`. |
 | O8 | **MeshCore v1/v2 firmware fallback** | Current decoder is v3-only (opcodes 0x10/0x11, snr+reserved+path_len header). Older firmware uses 0x07/0x08 and a simpler layout. Detect via response code on the first frame. |
@@ -108,3 +109,30 @@ Audit-derived punch list. When you close one, move it into "Completed gaps" with
     3. Rumor's Ed25519 signature is dropped for bridged DMs — neither target envelope carries an outer signature, only an AEAD/MAC tag. Acceptable because authenticity is enforced by the AEAD/MAC plus the recipient's knowledge of which key sent it.
 
   Default recommendation: **Architecture B for both bridges.** Worth the per-bridge envelope code to preserve real E2E. Fall back to Architecture A only if a future bridge has no usable ECDH path. Both architectures still require the bridged-contact UI labelling from A1 above — even passthrough has a bridge in the path, and users need to know which contacts are bridged so a compromised bridge can't quietly substitute its own key for a peer's.
+
+  **Framework: pluggable `DmEnvelope` (O5a).** To avoid hardcoding "if recipient starts with meshtastic: do X, if meshcore: do Y" into core, route DM crypto through a registered envelope. Each bridge plugin owns its envelope; core only knows the interface.
+
+  ```kotlin
+  // core/plugin/DmEnvelope.kt
+  interface DmEnvelope {
+      val recipientPrefix: String                  // e.g. "meshtastic:"
+      val envelopeId: String                       // stable wire-format id, persisted on the message
+      val selfAuthenticating: Boolean              // true → engine skips outer Ed25519 sig
+      fun encrypt(recipientUserId: String, recipientPubKey: ByteArray, plaintext: ByteArray): ByteArray
+      fun decrypt(senderUserId: String, senderPubKey: ByteArray, ciphertext: ByteArray): ByteArray?
+  }
+
+  // additions to PluginContext
+  fun registerDmEnvelope(envelope: DmEnvelope)
+  fun injectBridgedDm(
+      recipientUserId: String,
+      senderUserId: String,
+      senderPubKey: ByteArray,
+      ciphertext: ByteArray,
+      envelopeId: String,
+  )
+  ```
+
+  Compose path: `GossipEngine.composeDirect` consults the registry by recipient prefix; falls back to the existing native envelope when none matches. Inbound path: bridge plugin calls `injectBridgedDm` with an opaque blob plus the envelope id; engine routes to the recipient's inbox without ever holding plaintext; the recipient's UI looks up the envelope by id and decrypts at read time.
+
+  This is a prerequisite for O5 if we want more than two bridges without forking core every time. Even with just Meshtastic + MeshCore today it is the right shape — two hardcoded branches in `composeDirect` would be the same wrong direction as the original Hilt → Koin "just rewire it where you need it" pattern we already abandoned. Implement O5a first, then O5 for each bridge is a small, isolated addition.
