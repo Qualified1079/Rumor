@@ -65,9 +65,28 @@ Update this list whenever something is completed or newly identified.
 | G3 | **`onExchangeFailed` wiring** | `TransportConfig.onExchangeFailed` callback added; `WifiDirectTransport.runSession` calls it when `session.run()` returns null. `MeshService` wires it to `gossipEngine::onExchangeFailed`. |
 | G4 | **Canary metrics queue-depth push** | `DebugMetricsViewModel` polls `engine.canaryMetrics.publish(engine.queueDepth)` every 1s via a `flow { while(true) { … delay(1_000) } }`. Screen stays live without needing a message event. |
 
+### Open items / known gaps
+
+Audit-derived punch list. When you close one, move it into "Completed gaps" with the resolution.
+
+| # | Item | Notes |
+|---|------|-------|
+| O1 | **SQLDelight migration** | Promised in commit 3e7f588 as "next commit", never done. Room is still in use. Only worth doing if leaving Google's runtime matters; otherwise stale. |
+| O2 | **Persistent priority-link connection at transport layer** | `Contact.isPriorityPeer` flag + compose/accept messages exist (#7). `WifiDirectTransport` reads the flag for skip-removeGroup, but still operates as one-off exchanges. True persistent connection would require holding the WiFi-Direct group open across the gossip-session boundary and re-running HELLO/exchange on a schedule. |
+| O3 | **Reliability half of throughput+reliability ranking** | `bytesRelayed` (throughput proxy) is wired into `getPreferred`. Reliability score (success/failure ratio, drop count) is not tracked. Add a `failureCount` to `Route` and rank by `bytesRelayed / (1 + failureCount)`. |
+| O4 | **Bridges — USB transport** | Both Meshtastic and MeshCore are BLE-only. MeshCore docs `'>'`+LE-len framing for USB CDC; Meshtastic uses 0x94 0xC3 magic + varint length. Significant scope per bridge. |
+| O5 | **Bridges — DM bridging** | Both bridges deliberately broadcast-only today. DM bridging needs per-contact PKC key sync (Meshtastic) / X25519 (MeshCore). See the "Encrypted bridging" decision below before designing this — the bridge node would necessarily see plaintext as an endpoint, which is a trust-model change, not a crypto break. |
+| O6 | **Bridges — multi-channel selection UI** | Both bridges hardcode channel index 0. Need a per-plugin settings screen exposing the radio's channel list. |
+| O7 | **Bridges — device picker** | Both bridges auto-connect to the first matching device. Multi-radio setups need a picker UI feeding `connect(device)`. |
+| O8 | **MeshCore v1/v2 firmware fallback** | Current decoder is v3-only (opcodes 0x10/0x11, snr+reserved+path_len header). Older firmware uses 0x07/0x08 and a simpler layout. Detect via response code on the first frame. |
+| O9 | **Real test coverage** | Unit tests cover scheduler/dedup/chunker/blocklist/online-status/neighbor only. No instrumented tests, no DI/lifecycle tests, no UI tests, no MainActivity smoke. |
+| O10 | **CI + versionCode discipline** | No CI configured. `versionCode=1` is hardcoded. Need a CI rule that fails if `versionCode` isn't strictly greater than the previous release tag. |
+
 ### Design decisions recorded
 
 - **Latency NOT used for routing.** On BLE/Wi-Fi Direct, measured latency is mostly discovery timing. Ranking is by `bytesRelayed DESC, sessionCount DESC`. `latencyMs` stored for diagnostics only.
 - **Relay path never sees blocklist.** Blocking is a display filter. Nodes relay everything to preserve the mesh's routing integrity.
 - **`BLOCKLIST_PUBLISH` is TRANSFER_SETUP, not INFRASTRUCTURE.** Full snapshots can exceed 16 KB; only incremental `BLOCKLIST_DIFF` stays at INFRASTRUCTURE tier.
 - **Bridge traffic never re-relayed.** Re-signing a bridged message would launder it into a vouch the local node never made.
+- **Bridges are broadcast-only and bridge plaintext only.** Rumor BROADCASTs are signed plaintext on the mesh; we hand the radio plaintext and it applies channel encryption with its own PSK. Inbound, the radio gives us plaintext via `MeshPacket.decoded` (Meshtastic) or after firmware decryption (MeshCore). We never touch channel keys. Encrypted Rumor DMs are not bridged because the bridge node would have to be the actual cryptographic endpoint — see "Encrypted bridging" below.
+- **Encrypted bridging — bridge node is always an endpoint, never a transit.** A future DM bridge necessarily decrypts on the bridge node and re-encrypts to the other side. This is NOT a crypto break: the bridge IS the apparent recipient on the Rumor side (sender E2E-encrypts to the bridge's pubkey), and IS the apparent sender on the LoRa side (re-encrypts to the LoRa contact's PKC key). Pure-relay DMs (Rumor → Rumor that happen to traverse a bridge node) remain end-to-end encrypted because the bridge has no key for messages it isn't the recipient of. The real cost is trust-model: users sending DMs to bridged contacts must understand the bridge operator can read those messages. This is fundamentally unavoidable for cross-network DMs — there is no protocol trick that bridges two distinct PKC systems without an endpoint at the seam. UI must make the bridge endpoint visible (e.g. "via Alice's Meshtastic bridge") before this ships.
