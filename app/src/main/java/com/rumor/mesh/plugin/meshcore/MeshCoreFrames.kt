@@ -7,7 +7,13 @@ import java.nio.ByteOrder
  * MeshCore companion-protocol frame encoding/decoding.
  *
  * The companion protocol is documented at
- * https://github.com/meshcore-dev/MeshCore/wiki/Companion-Radio-Protocol.
+ * https://github.com/meshcore-dev/MeshCore/wiki/Companion-Radio-Protocol and
+ * https://github.com/zjs81/meshcore-open/blob/main/docs/BLE_PROTOCOL.md.
+ *
+ * We target the v3 frame format. v1/v2 used 0x07/0x08 for the contact and
+ * channel message replies; v3 moved them to 0x10/0x11 and added SNR + reserved
+ * bytes plus a path_len/txt_type header. Bridging to firmware older than v3
+ * would need parallel opcodes and a different decoder — out of scope here.
  *
  * Wire layout
  * -----------
@@ -42,11 +48,11 @@ internal object MeshCoreFrames {
     // Sync responses (device → app, in reply to a CMD_*)
     const val RESP_CODE_OK                = 0x00.toByte()
     const val RESP_CODE_ERR               = 0x01.toByte()
-    const val RESP_CODE_CONTACTS_START    = 0x04.toByte()
+    const val RESP_CODE_CONTACTS_START    = 0x02.toByte()
     const val RESP_CODE_SELF_INFO         = 0x05.toByte()
-    const val RESP_CODE_NO_MORE_MESSAGES  = 0x07.toByte()
-    const val RESP_CODE_CONTACT_MSG_RECV  = 0x10.toByte()
-    const val RESP_CODE_CHANNEL_MSG_RECV  = 0x11.toByte()
+    const val RESP_CODE_NO_MORE_MESSAGES  = 0x0A.toByte()
+    const val RESP_CODE_CONTACT_MSG_RECV  = 0x10.toByte()  // v3
+    const val RESP_CODE_CHANNEL_MSG_RECV  = 0x11.toByte()  // v3
 
     // Async pushes (device → app, unsolicited)
     const val PUSH_CODE_ADVERTISEMENT     = 0x80.toByte()
@@ -70,9 +76,12 @@ internal object MeshCoreFrames {
     )
 
     /**
-     * Encode `CMD_SEND_CHANNEL_MESSAGE`. Layout:
+     * Encode `CMD_SEND_CHANNEL_TXT_MSG`. Layout:
      *
-     *     [0x03][0x00 attempt-and-flags][channel_idx u8][timestamp u32 LE][text utf8]
+     *     [0x03][txt_type][channel_idx u8][timestamp u32 LE][text utf8]
+     *
+     * `txt_type` packs message type (bits 7-2) and flags (bits 1-0). Type 0
+     * = plain text, type 1 = CLI. We send 0 (plain) and no flags.
      *
      * The radio caps text at 133 bytes including a header it prepends server-side;
      * we cap input here at 120 bytes to stay safely under that envelope without
@@ -85,7 +94,7 @@ internal object MeshCoreFrames {
         val capped = if (bytes.size <= MAX_TEXT_BYTES) bytes else safeTruncateUtf8(bytes, MAX_TEXT_BYTES)
         val buf = ByteBuffer.allocate(1 + 1 + 1 + 4 + capped.size).order(ByteOrder.LITTLE_ENDIAN)
         buf.put(CMD_SEND_CHANNEL_MESSAGE)
-        buf.put(0x00)                           // attempts=0, flags=0
+        buf.put(TXT_TYPE_PLAIN)                 // type=plain, flags=0
         buf.put((channelIdx and 0xFF).toByte())
         buf.putInt(nowSec.toInt())              // u32 LE; valid until 2106
         buf.put(capped)
@@ -93,26 +102,41 @@ internal object MeshCoreFrames {
     }
 
     /**
-     * Parse a channel message coming back as RESP_CODE_CHANNEL_MSG_RECV or via
-     * the equivalent push. Returns null on any layout error rather than throwing
-     * — a corrupt frame on one side shouldn't kill the bridge for everything else.
+     * Parse a v3 channel message reply. Layout:
+     *
+     *     [0x11][snr u8][reserved x2][channel_idx u8][path_len u8][txt_type u8]
+     *     [timestamp u32 LE][sender_name ": " text]
+     *
+     * The sender name and text are not length-prefixed — they are joined by the
+     * literal ASCII delimiter ": " (colon + space). If the delimiter is absent
+     * (older firmware variants sometimes omit the name), the whole body is the
+     * text and the sender is empty. Returns null on any layout error rather
+     * than throwing — a corrupt frame shouldn't kill the bridge for everything else.
      */
     fun decodeChannelMessage(frame: ByteArray): ChannelMessage? {
-        // Minimum: opcode + channel + timestamp + 1-byte sender_len + 0-byte name + 0-byte text
-        if (frame.size < 7) return null
+        // Minimum: opcode + snr + 2 reserved + channel + path_len + txt_type + 4-byte timestamp = 11
+        if (frame.size < 11) return null
         val buf = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN)
         buf.get()                                // opcode (already matched by caller)
+        buf.get()                                // snr — diagnostic only
+        buf.get(); buf.get()                     // 2 reserved bytes
         val channelIdx = buf.get().toInt() and 0xFF
+        buf.get()                                // path_len — routing metadata, unused here
+        buf.get()                                // txt_type — assume plain
         val ts = buf.int.toLong() and 0xFFFFFFFFL
-        val senderLen = buf.get().toInt() and 0xFF
-        if (senderLen > buf.remaining()) return null
-        val senderBytes = ByteArray(senderLen).also { buf.get(it) }
-        val textBytes = ByteArray(buf.remaining()).also { buf.get(it) }
+        val bodyBytes = ByteArray(buf.remaining()).also { buf.get(it) }
+        val body = String(bodyBytes, Charsets.UTF_8)
+        val delim = body.indexOf(": ")
+        val (sender, text) = if (delim >= 0) {
+            body.substring(0, delim) to body.substring(delim + 2)
+        } else {
+            "" to body
+        }
         return ChannelMessage(
             channelIdx = channelIdx,
             timestampSec = ts,
-            senderName = String(senderBytes, Charsets.UTF_8),
-            text = String(textBytes, Charsets.UTF_8),
+            senderName = sender,
+            text = text,
         )
     }
 
@@ -128,4 +152,7 @@ internal object MeshCoreFrames {
     }
 
     private const val MAX_TEXT_BYTES = 120
+
+    // txt_type byte: bits 7-2 = type, bits 1-0 = flags. We only ever send plain.
+    private const val TXT_TYPE_PLAIN: Byte = 0x00
 }
