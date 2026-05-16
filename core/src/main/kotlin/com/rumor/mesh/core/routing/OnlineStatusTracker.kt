@@ -31,7 +31,21 @@ class OnlineStatusTracker {
     }
 
     @Synchronized
-    fun currentSnapshot(): Map<String, Long> = lastSeen.toMap()
+    fun currentSnapshot(): Map<String, Long> {
+        val cutoff = System.currentTimeMillis() - RECENTLY_WINDOW_MS
+        return lastSeen.filterValues { it >= cutoff }
+    }
+
+    @Synchronized
+    fun statusFor(userId: String): OnlineStatus {
+        val ts = lastSeen[userId] ?: return OnlineStatus.AWAY
+        val age = System.currentTimeMillis() - ts
+        return when {
+            age <= ONLINE_WINDOW_MS -> OnlineStatus.ONLINE
+            age <= RECENTLY_WINDOW_MS -> OnlineStatus.RECENTLY
+            else -> OnlineStatus.AWAY
+        }
+    }
 
     private fun recompute() {
         val now = System.currentTimeMillis()
