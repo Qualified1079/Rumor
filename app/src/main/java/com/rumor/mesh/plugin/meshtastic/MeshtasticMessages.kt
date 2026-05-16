@@ -65,17 +65,19 @@ internal object MeshtasticMessages {
     // ── MeshPacket ────────────────────────────────────────────────────────────
 
     /**
-     * The transport-level packet. Field numbers (subset):
+     * The transport-level packet. Field numbers (subset), verified against
+     * meshtastic/protobufs master mesh.proto:
      *   1  from        fixed32       — sender node number
      *   2  to          fixed32       — recipient (0xFFFFFFFF = broadcast)
      *   3  channel     varint        — channel index
      *   4  decoded     Data sub-msg  — populated when the radio has the channel key
-     *   8  id          fixed32       — packet ID (used as the AES nonce LSBs)
-     *  10  hop_limit   varint        — TTL on the LoRa side
+     *   5  encrypted   bytes         — present only when radio couldn't decrypt
+     *   6  id          fixed32       — packet ID (used as the AES nonce LSBs)
+     *   9  hop_limit   varint        — TTL on the LoRa side
      *
-     * If `decoded` is missing but the encrypted payload (field 5) is present,
-     * the radio couldn't decrypt for us (channel key mismatch). We drop those
-     * — bridging encrypted-blob noise into Rumor would just spam users.
+     * If `decoded` is missing but `encrypted` is present, the radio couldn't
+     * decrypt for us (channel key mismatch). We drop those — bridging
+     * encrypted-blob noise into Rumor would just spam users.
      */
     data class MeshPacket(
         val from: Int = 0,
@@ -96,7 +98,7 @@ internal object MeshtasticMessages {
             writeFixed32(2, to)                    // BROADCAST_NODE = -1 = 0xFFFFFFFF wire-side
             writeInt32(3, channel)
             decoded?.let { writeLengthDelimited(4, it.encode()) }
-            if (id != 0) writeFixed32(8, id)
+            if (id != 0) writeFixed32(6, id)
         }.toByteArray()
 
         companion object {
@@ -116,8 +118,8 @@ internal object MeshtasticMessages {
                         2 -> to = r.readFixed32()
                         3 -> channel = r.readInt()
                         4 -> decoded = r.readSubMessage { Data.decode(it) }
-                        8 -> id = r.readFixed32()
-                        10 -> hop = r.readInt()
+                        6 -> id = r.readFixed32()
+                        9 -> hop = r.readInt()
                         else -> r.skipField(wireType(tag))
                     }
                 }
@@ -129,14 +131,20 @@ internal object MeshtasticMessages {
     // ── FromRadio (device → app) ──────────────────────────────────────────────
 
     /**
-     * `FromRadio` is a oneof of many possible payload types. We only care
-     * about field 11 (packet, a MeshPacket). All other variants are skipped:
-     *   2  my_info       — node info, useful for the synthetic sender ID
-     *   3  node_info     — peer roster, not bridged
-     *   4  config        — settings, irrelevant to bridging
-     *   5  log_record    — debug
-     *   6  config_complete_id — handshake terminator
-     *   8  rebooted      — power events
+     * `FromRadio` has a top-level uint32 `id` at field 1 followed by a
+     * `payload_variant` oneof. The variant we care about is `packet` at
+     * field 2 (a MeshPacket). All other variants are skipped:
+     *   3  my_info             — node info
+     *   4  node_info           — peer roster
+     *   5  config              — settings
+     *   6  log_record          — debug
+     *   7  config_complete_id  — handshake terminator
+     *   8  rebooted            — power events
+     *   10 channel             — channel definition
+     *   11 queueStatus         — TX queue depth (NOT a packet — earlier
+     *                            versions of this file read field 11 thinking
+     *                            it was the packet variant; that silently
+     *                            dropped all inbound text)
      *   ... etc
      *
      * The bridge only reads `packet` so we return null for everything else.
@@ -145,7 +153,7 @@ internal object MeshtasticMessages {
         val r = Reader(frame)
         while (r.hasMore()) {
             val tag = r.readInt()
-            if (fieldNumber(tag) == 11) {
+            if (fieldNumber(tag) == 2) {
                 return r.readSubMessage { MeshPacket.decode(it) }
             }
             r.skipField(wireType(tag))
