@@ -95,18 +95,32 @@ To reproduce: load `replay.json` in the simulator.
         val simTimeMs: Long, val nodeCount: Int, val edgeCount: Int,
     )
     @Serializable data class ReplaySpec(val seed: Long, val params: Map<String, String>)
+
+    @Serializable data class NodeReport(
+        val index: Int, val userId: String,
+        val queueDepth: Int, val messagesProcessed: Long, val dupDrops: Long,
+    )
+    @Serializable data class EdgeReport(
+        val from: Int, val to: Int,
+        val latencyMs: Long, val lossRate: Double, val partitioned: Boolean,
+    )
+    @Serializable data class MetricsReport(
+        val nodeCount: Int, val edgeCount: Int,
+        val totalMsgsThisTick: Long, val totalDropped: Long,
+        val simTimeMs: Long, val heapUsedMb: Long, val heapMaxMb: Long,
+    )
 }
 
-private fun NodeSnapshot.toReport() = mapOf(
-    "index" to index, "userId" to userId,
-    "queueDepth" to queueDepth, "messagesProcessed" to messagesProcessed, "dupDrops" to dupDrops,
+private fun NodeSnapshot.toReport() = ReportWriter.NodeReport(
+    index = index, userId = userId,
+    queueDepth = queueDepth, messagesProcessed = messagesProcessed, dupDrops = dupDrops,
 )
-private fun EdgeSnapshot.toReport() = mapOf(
-    "from" to from, "to" to to,
-    "latencyMs" to latencyMs, "lossRate" to lossRate, "partitioned" to partitioned,
+private fun EdgeSnapshot.toReport() = ReportWriter.EdgeReport(
+    from = from, to = to,
+    latencyMs = latencyMs, lossRate = lossRate, partitioned = partitioned,
 )
-private fun WorldMetrics.toReport() = mapOf(
-    "nodeCount" to nodeCount, "edgeCount" to edgeCount,
-    "totalMsgsThisTick" to totalMsgsThisTick, "totalDropped" to totalDropped,
-    "simTimeMs" to simTimeMs, "heapUsedMb" to heapUsedMb, "heapMaxMb" to heapMaxMb,
+private fun WorldMetrics.toReport() = ReportWriter.MetricsReport(
+    nodeCount = nodeCount, edgeCount = edgeCount,
+    totalMsgsThisTick = totalMsgsThisTick, totalDropped = totalDropped,
+    simTimeMs = simTimeMs, heapUsedMb = heapUsedMb, heapMaxMb = heapMaxMb,
 )
