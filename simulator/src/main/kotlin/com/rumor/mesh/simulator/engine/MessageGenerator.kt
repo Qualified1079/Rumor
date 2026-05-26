@@ -45,10 +45,12 @@ class MessageGenerator(
         return unsigned.copy(signature = sig)
     }
 
+    // Must match MessageStore.signableBytes — hopsToLive is excluded because
+    // it mutates on every relay and would invalidate the signature otherwise.
     private fun signableBytes(msg: RumorMessage): ByteArray = buildString {
         append(msg.id); append(msg.senderId); append(msg.senderPublicKey)
         append(msg.sequenceNumber); append(msg.sentAtMs); append(msg.type.name)
-        append(msg.hopsToLive); append(msg.payload?.content ?: "")
+        append(msg.payload?.content ?: "")
         append(msg.encryptedPayload ?: ""); append(msg.recipientId ?: "")
     }.toByteArray(Charsets.UTF_8)
 }

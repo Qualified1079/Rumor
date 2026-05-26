@@ -104,7 +104,13 @@ class MessageStore(
         }
     }
 
-    /** Canonical bytes that the signature covers — everything except the signature field. */
+    /**
+     * Canonical bytes the signature covers. Excludes hopsToLive (mutated on
+     * every relay via decrementHops — if it were in the signed set, the
+     * signature would become invalid after one hop and the message would
+     * be dropped at every downstream node). Also excludes the signature
+     * field itself.
+     */
     fun signableBytes(msg: RumorMessage): ByteArray = buildString {
         append(msg.id)
         append(msg.senderId)
@@ -112,7 +118,6 @@ class MessageStore(
         append(msg.sequenceNumber)
         append(msg.sentAtMs)
         append(msg.type.name)
-        append(msg.hopsToLive)
         append(msg.payload?.content ?: "")
         append(msg.encryptedPayload ?: "")
         append(msg.recipientId ?: "")
