@@ -168,10 +168,10 @@ class InMemoryBlockEntryRepository : BlockEntryRepository {
     override suspend fun upsert(entry: BlockEntry) { entries[entry.userId] = entry }
     override suspend fun delete(userId: String) { entries.remove(userId) }
     override suspend fun getActive(now: Long): List<BlockEntry> =
-        entries.values.filter { it.expiresAtMs == null || it.expiresAtMs > now }
+        entries.values.filter { val exp = it.expiresAtMs; exp == null || exp > now }
     override suspend fun getActiveIds(now: Long): List<String> = getActive(now).map { it.userId }
     override suspend fun pruneExpired(now: Long): Int {
-        val expired = entries.values.filter { it.expiresAtMs != null && it.expiresAtMs <= now }
+        val expired = entries.values.filter { val exp = it.expiresAtMs; exp != null && exp <= now }
         expired.forEach { entries.remove(it.userId) }
         return expired.size
     }
@@ -187,17 +187,19 @@ class InMemorySubscribedBlocklistRepository : SubscribedBlocklistRepository {
 }
 
 class InMemoryBlocklistEntryRepository : BlocklistEntryRepository {
+    private val lock = Any()
     private val entries = mutableListOf<BlocklistEntry>()
-    @Synchronized override suspend fun insertAll(new: List<BlocklistEntry>) { entries.addAll(new) }
-    @Synchronized override suspend fun deleteAllForPublisher(publisherId: String) {
-        entries.removeAll { it.publisherId == publisherId }
+    override suspend fun insertAll(new: List<BlocklistEntry>) = synchronized(lock) { entries.addAll(new); Unit }
+    override suspend fun deleteAllForPublisher(publisherId: String) = synchronized(lock) {
+        entries.removeAll { it.publisherId == publisherId }; Unit
     }
-    @Synchronized override suspend fun deleteEntries(publisherId: String, userIds: List<String>) {
-        entries.removeAll { it.publisherId == publisherId && it.blockedUserId in userIds }
+    override suspend fun deleteEntries(publisherId: String, userIds: List<String>) = synchronized(lock) {
+        entries.removeAll { it.publisherId == publisherId && it.blockedUserId in userIds }; Unit
     }
-    @Synchronized override suspend fun getAllBlockedIds() = entries.map { it.blockedUserId }.distinct()
-    @Synchronized override suspend fun getBlockedIdsForPublisher(publisherId: String) =
+    override suspend fun getAllBlockedIds() = synchronized(lock) { entries.map { it.blockedUserId }.distinct() }
+    override suspend fun getBlockedIdsForPublisher(publisherId: String) = synchronized(lock) {
         entries.filter { it.publisherId == publisherId }.map { it.blockedUserId }
+    }
 }
 
 // ── TransferRepository ────────────────────────────────────────────────────────
