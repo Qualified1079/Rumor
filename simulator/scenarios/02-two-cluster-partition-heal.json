@@ -1,0 +1,20 @@
+{
+  "name": "two-cluster-partition-heal",
+  "durationSec": 120,
+  "seed": 42,
+  "speedMult": 10.0,
+  "topology": { "kind": "two-cluster", "left": 10, "right": 10, "bridges": 1 },
+  "params": {
+    "msg_per_sec": "1.0",
+    "hops_to_live": "12"
+  },
+  "events": [
+    { "kind": "partition", "atSec": 30, "target": "bridge" },
+    { "kind": "heal",      "atSec": 90, "target": "bridge" }
+  ],
+  "assertions": [
+    { "kind": "min-total-messages", "min": 1000 },
+    { "kind": "cross-cluster-delivery", "fromCluster": "left", "toCluster": "right", "minRatio": 0.3 },
+    { "kind": "deterministic-replay" }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "line-hop-exhaustion",
+  "durationSec": 120,
+  "seed": 42,
+  "speedMult": 10.0,
+  "topology": { "kind": "line", "length": 30 },
+  "params": {
+    "hops_to_live": "7",
+    "msg_per_sec": "1.0",
+    "max_payload": "400",
+    "min_payload": "100"
+  },
+  "events": [],
+  "assertions": [
+    { "kind": "min-total-messages", "min": 500 },
+    { "kind": "deterministic-replay" }
+  ]
+}

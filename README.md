@@ -12,9 +12,9 @@ Messages spread like rumors — carried further by people who think they're wort
 
 **Transport:** When BLE detects nearby nodes, Wi-Fi Direct takes over. Two phones connect, authenticate via a signed challenge-response, exchange everything they each lack, then disconnect. One rich exchange replaces the need for a persistent connection.
 
-**Flooding:** Every broadcast gets a hop count (TTL, default 7). Each node that receives a new message rebroadcasts it once with TTL decremented. Message dies at zero. Manual relay bumps TTL by a small amount, capped at the default — a near-dead message can be revived, but chained relays can't multiply hop count.
+**Flooding:** Every broadcast gets a hop count (hops-to-live, default 7). Each node that receives a new message rebroadcasts it once with hops-to-live decremented. Message dies at zero. Manual relay bumps hops-to-live by a small amount, capped at the default — a near-dead message can be revived, but chained relays can't multiply hop count.
 
-**Direct messages:** Bounded TTL (default 15) so a DM can't ghost-circle the network forever when the recipient is unreachable. Recipients drop the message; everyone else relays once with TTL decremented.
+**Direct messages:** Bounded hops-to-live (default 15) so a DM can't ghost-circle the network forever when the recipient is unreachable. Recipients drop the message; everyone else relays once with hops-to-live decremented.
 
 **LoRa bridges:** Meshtastic and MeshCore bridge plugins extend range to kilometers. A phone with a LoRa dongle on solar is complete infrastructure in one device.
 
@@ -51,7 +51,7 @@ The codebase is split into 14 modules with strict dependency rules. Each module 
 ┌─────────────────▼──────────────────────────────▼─┐
 │  Gossip Engine                                   │  Pure protocol logic, no radio code
 │  - Duplicate suppression (heap-sized LRU)        │
-│  - TTL flood for both broadcasts and DMs         │
+│  - hops-to-live flood for both broadcasts and DMs         │
 │  - Bounded manual relay boost                    │
 └───────────────────┬──────────────────────────────┘
                     │
@@ -393,7 +393,7 @@ Progress is tracked per transfer:
 | `IN_PROGRESS` | Chunks still arriving; progress bar shows `received / total` |
 | `COMPLETE` | All chunks received and hash verified |
 | `FAILED` | Hash mismatch after all chunks arrived |
-| `ABANDONED` | Sender gave up or TTL expired before completion |
+| `ABANDONED` | Sender gave up or hops-to-live expired before completion |
 
 The Transfers screen shows recent transfers with a progress indicator for in-flight ones and a status badge for finished ones.
 

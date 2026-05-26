@@ -19,6 +19,12 @@ class SimTransport(
     val nodeA: SimNode,
     val nodeB: SimNode,
     val conditioner: NetworkConditioner = NetworkConditioner(),
+    /**
+     * Optional tag set so scenarios can address edges symbolically
+     * (e.g. partition every edge tagged "bridge"). The default-graph code
+     * path leaves this empty; topology builders attach tags explicitly.
+     */
+    val tags: Set<String> = emptySet(),
 ) {
     private val rng = Random.Default
 

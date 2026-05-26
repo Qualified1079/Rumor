@@ -1,0 +1,26 @@
+{
+  "name": "custom-lone-bridge",
+  "durationSec": 60,
+  "seed": 42,
+  "speedMult": 10.0,
+  "topology": {
+    "kind": "custom",
+    "nodeCount": 5,
+    "edges": [
+      { "from": 0, "to": 1 },
+      { "from": 1, "to": 2, "tags": ["uplink"] },
+      { "from": 2, "to": 3, "tags": ["uplink"] },
+      { "from": 3, "to": 4 }
+    ]
+  },
+  "params": {
+    "msg_per_sec": "1.0",
+    "hops_to_live": "8"
+  },
+  "events": [
+    { "kind": "kill-node", "atSec": 30, "nodeIndex": 2 }
+  ],
+  "assertions": [
+    { "kind": "min-total-messages", "min": 100 }
+  ]
+}

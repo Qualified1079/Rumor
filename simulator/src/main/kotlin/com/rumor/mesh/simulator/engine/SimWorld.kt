@@ -52,6 +52,16 @@ class SimWorld(val params: SimParamRegistry) {
     // heap pressure monitor
     private val runtime = Runtime.getRuntime()
 
+    /**
+     * Optional pre-built topology. When set, [rebuild] uses it verbatim and
+     * ignores the random-graph params. Scenarios set this before [start].
+     * Clearing it (setting to null) returns to the random-graph behaviour.
+     */
+    @Volatile var customTopology: ((rng: Random) -> Pair<List<SimNode>, List<SimTransport>>)? = null
+
+    /** Indices of nodes that have been killed by a scenario event. They generate no traffic. */
+    private val killedNodes = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     suspend fun start() = mutex.withLock {
@@ -85,6 +95,18 @@ class SimWorld(val params: SimParamRegistry) {
 
     private fun rebuild() {
         val rng = Random(params.seed.value)
+        killedNodes.clear()
+
+        // Scenario-injected topology wins; otherwise build a random k-regular graph.
+        val ct = customTopology
+        if (ct != null) {
+            val (newNodes, newEdges) = ct(rng)
+            _nodes.value = newNodes
+            _edges.value = newEdges
+            _edgeActivity.clear()
+            return
+        }
+
         val count = params.nodeCount.value
         val nodeScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         val newNodes = (0 until count).map { SimNode(it, nodeScope) }
@@ -104,6 +126,18 @@ class SimWorld(val params: SimParamRegistry) {
         }
         _edges.value = newEdges
         _edgeActivity.clear()
+    }
+
+    // ── Scenario-control surface ──────────────────────────────────────────────
+
+    fun killNode(index: Int) { killedNodes.add(index) }
+    fun isKilled(index: Int): Boolean = index in killedNodes
+
+    /** Set partitioned=[on] on every edge whose tag set contains [tag]. */
+    fun setPartitionByTag(tag: String, on: Boolean): Int {
+        val matching = _edges.value.filter { tag in it.tags }
+        matching.forEach { it.conditioner.partitioned = on }
+        return matching.size
     }
 
     /** Per-edge conditioner: ±25% jitter around the global mean so edges aren't all identical. */
@@ -137,8 +171,9 @@ class SimWorld(val params: SimParamRegistry) {
         val edges = _edges.value
         val rng   = Random(_simTimeMs.value xor params.seed.value)
 
-        // 1. Generate traffic from each node.
+        // 1. Generate traffic from each node (skip killed ones — scenario events).
         for (node in nodes) {
+            if (node.index in killedNodes) continue
             val profile = TrafficProfile(
                 msgPerSecond     = params.msgPerSecondPerNode.value,
                 minPayloadBytes  = params.minPayloadBytes.value,
@@ -156,10 +191,11 @@ class SimWorld(val params: SimParamRegistry) {
             }
         }
 
-        // 2. Run gossip exchanges on each edge.
+        // 2. Run gossip exchanges on each edge (skip if either endpoint is killed).
         var totalMsgs = 0L
         var totalDropped = 0L
         for (edge in edges) {
+            if (edge.nodeA.index in killedNodes || edge.nodeB.index in killedNodes) continue
             // Probabilistic partition.
             if (rng.nextDouble() < params.partitionProbability.value) {
                 edge.conditioner.partitioned = true
