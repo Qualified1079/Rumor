@@ -88,6 +88,7 @@ class DashboardServer(
                         call.respondText("unknown param: $id", status = HttpStatusCode.NotFound)
                     } else {
                         param.setFromString(value)
+                        world.params.enforceInvariants()
                         call.ok()
                     }
                 }

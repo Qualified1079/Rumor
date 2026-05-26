@@ -70,6 +70,7 @@ object ReportWriter {
 - Partitioned edges: $partitioned
 
 ## Traffic
+- Messages exchanged (cumulative): ${metrics.totalMessages}
 - Messages this tick: ${metrics.totalMsgsThisTick}
 - Total dropped: ${metrics.totalDropped}
 
@@ -103,10 +104,11 @@ To reproduce: load `replay.json` in the simulator.
     @Serializable data class EdgeReport(
         val from: Int, val to: Int,
         val latencyMs: Long, val lossRate: Double, val partitioned: Boolean,
+        val lastActiveAtMs: Long,
     )
     @Serializable data class MetricsReport(
         val nodeCount: Int, val edgeCount: Int,
-        val totalMsgsThisTick: Long, val totalDropped: Long,
+        val totalMsgsThisTick: Long, val totalMessages: Long, val totalDropped: Long,
         val simTimeMs: Long, val heapUsedMb: Long, val heapMaxMb: Long,
     )
 }
@@ -118,9 +120,10 @@ private fun NodeSnapshot.toReport() = ReportWriter.NodeReport(
 private fun EdgeSnapshot.toReport() = ReportWriter.EdgeReport(
     from = from, to = to,
     latencyMs = latencyMs, lossRate = lossRate, partitioned = partitioned,
+    lastActiveAtMs = lastActiveAtMs,
 )
 private fun WorldMetrics.toReport() = ReportWriter.MetricsReport(
     nodeCount = nodeCount, edgeCount = edgeCount,
-    totalMsgsThisTick = totalMsgsThisTick, totalDropped = totalDropped,
+    totalMsgsThisTick = totalMsgsThisTick, totalMessages = totalMessages, totalDropped = totalDropped,
     simTimeMs = simTimeMs, heapUsedMb = heapUsedMb, heapMaxMb = heapMaxMb,
 )

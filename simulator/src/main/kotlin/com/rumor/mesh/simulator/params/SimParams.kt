@@ -63,68 +63,71 @@ data class ParamDescriptor(
 class SimParamRegistry {
 
     // ── Network ──────────────────────────────────────────────────────────────
+    // Randomization ranges are deliberately narrower than slider bounds: the
+    // bounds let you push to extremes manually, but Randomize-all picks values
+    // that produce a watchable mesh (some traffic, some loss, mostly connected).
     val linkLatencyMs = SimParam("link_latency_ms", "Link latency (ms)",
         ParamCategory.NETWORK, 1L, 500L, 50L,
-        randomFn = { rng -> rng.nextLong(1, 301) })
+        randomFn = { rng -> rng.nextLong(20, 151) })
 
     val linkJitterMs = SimParam("link_jitter_ms", "Latency jitter (ms)",
         ParamCategory.NETWORK, 0L, 200L, 20L,
-        randomFn = { rng -> rng.nextLong(0, 101) })
+        randomFn = { rng -> rng.nextLong(0, 51) })
 
     val lossRate = SimParam("loss_rate", "Packet loss rate",
         ParamCategory.NETWORK, 0.0, 0.5, 0.0, step = 0.01,
-        randomFn = { rng -> rng.nextDouble(0.0, 0.2) })
+        randomFn = { rng -> rng.nextDouble(0.0, 0.08) })
 
     val bandwidthKbps = SimParam("bandwidth_kbps", "Link bandwidth (KB/s)",
         ParamCategory.NETWORK, 1L, 10_000L, 1_000L,
-        randomFn = { rng -> rng.nextLong(64, 5001) })
+        randomFn = { rng -> rng.nextLong(256, 3001) })
 
     val partitionProbability = SimParam("partition_prob", "Partition probability/tick",
         ParamCategory.NETWORK, 0.0, 0.1, 0.0, step = 0.001,
-        randomFn = { rng -> rng.nextDouble(0.0, 0.05) })
+        randomFn = { rng -> rng.nextDouble(0.0, 0.01) })
 
     val partitionDurationSec = SimParam("partition_duration_sec", "Partition duration (s)",
         ParamCategory.NETWORK, 1L, 300L, 30L,
-        randomFn = { rng -> rng.nextLong(5, 121) })
+        randomFn = { rng -> rng.nextLong(5, 61) })
 
     // ── Topology ─────────────────────────────────────────────────────────────
     val nodeCount = SimParam("node_count", "Node count",
         ParamCategory.TOPOLOGY, 5, 500, 30,
-        randomFn = { rng -> rng.nextInt(10, 201) })
+        randomFn = { rng -> rng.nextInt(15, 61) })
 
     val connectionsPerNode = SimParam("connections_per_node", "Avg connections/node",
         ParamCategory.TOPOLOGY, 1, 20, 4,
-        randomFn = { rng -> rng.nextInt(2, 9) })
+        randomFn = { rng -> rng.nextInt(3, 7) })
 
     val churnRatePerMinute = SimParam("churn_rate", "Churn rate (%/min)",
         ParamCategory.TOPOLOGY, 0.0, 0.3, 0.0, step = 0.01,
-        randomFn = { rng -> rng.nextDouble(0.0, 0.1) })
+        randomFn = { rng -> rng.nextDouble(0.0, 0.05) })
 
     // ── Traffic ──────────────────────────────────────────────────────────────
     val msgPerSecondPerNode = SimParam("msg_per_sec", "Msg/sec per node",
         ParamCategory.TRAFFIC, 0.0, 10.0, 0.5, step = 0.1,
-        randomFn = { rng -> rng.nextDouble(0.0, 3.0) })
+        randomFn = { rng -> rng.nextDouble(0.5, 2.5) })
 
     val minPayloadBytes = SimParam("min_payload", "Min payload (bytes)",
         ParamCategory.TRAFFIC, 10, 50_000, 50,
-        randomFn = { rng -> rng.nextInt(10, 1001) })
+        randomFn = { rng -> rng.nextInt(20, 201) })
 
     val maxPayloadBytes = SimParam("max_payload", "Max payload (bytes)",
         ParamCategory.TRAFFIC, 10, 5_000_000, 500,
-        randomFn = { rng -> rng.nextInt(500, 10_001) })
+        randomFn = { rng -> rng.nextInt(400, 2001) })
 
     val burstProbability = SimParam("burst_prob", "Burst probability",
         ParamCategory.TRAFFIC, 0.0, 0.2, 0.01, step = 0.005,
-        randomFn = { rng -> rng.nextDouble(0.0, 0.1) })
+        randomFn = { rng -> rng.nextDouble(0.0, 0.03) })
 
     val burstMultiplier = SimParam("burst_mult", "Burst multiplier",
         ParamCategory.TRAFFIC, 1, 100, 5,
-        randomFn = { rng -> rng.nextInt(2, 21) })
+        randomFn = { rng -> rng.nextInt(2, 7) })
 
     // ── Protocol ─────────────────────────────────────────────────────────────
     val ttl = SimParam("ttl", "Message TTL",
         ParamCategory.PROTOCOL, 1, 15, 7,
-        randomFn = { rng -> rng.nextInt(3, 12) })
+        randomFn = { rng -> rng.nextInt(6, 11) })
 
     val schedulerQuantumKb = SimParam("scheduler_quantum_kb", "Scheduler quantum (KB)",
         ParamCategory.PROTOCOL, 10, 500, 60,
@@ -153,7 +156,10 @@ class SimParamRegistry {
     )
 
     /** Randomize every param at once from a shared RNG. */
-    fun randomizeAll(rng: Random = Random.Default) = all.forEach { it.randomize(rng) }
+    fun randomizeAll(rng: Random = Random.Default) {
+        all.forEach { it.randomize(rng) }
+        enforceInvariants()
+    }
 
     fun byId(id: String): SimParam<*>? = all.firstOrNull { it.id == id }
 
@@ -161,7 +167,23 @@ class SimParamRegistry {
     fun randomizeOne(id: String, rng: Random = Random.Default): Boolean {
         val p = byId(id) ?: return false
         p.randomize(rng)
+        enforceInvariants()
         return true
+    }
+
+    /**
+     * Cross-parameter coherence. Run after any change that could violate a
+     * relationship (e.g. min_payload > max_payload would crash MessageGenerator).
+     * Public so KtorServer can call it after a slider edit too.
+     */
+    fun enforceInvariants() {
+        if (minPayloadBytes.value > maxPayloadBytes.value) {
+            // Swap rather than clamp — clamping silently throws away whichever
+            // value the user just typed, swapping preserves both endpoints.
+            val (lo, hi) = minPayloadBytes.value to maxPayloadBytes.value
+            minPayloadBytes.value = hi
+            maxPayloadBytes.value = lo
+        }
     }
 
     fun descriptors(): List<ParamDescriptor> = all.map { it.toDescriptor() }

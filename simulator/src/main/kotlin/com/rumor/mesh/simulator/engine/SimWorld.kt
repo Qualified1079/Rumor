@@ -97,20 +97,26 @@ class SimWorld(val params: SimParamRegistry) {
             val candidates = newNodes.filter { it.index != node.index && SimTransport.edgeKey(node.index, it.index) !in edgeSet }
             val pick = candidates.shuffled(rng).take(k)
             for (peer in pick) {
-                val edge = SimTransport(node, peer, buildConditioner())
+                val edge = SimTransport(node, peer, buildConditioner(rng))
                 newEdges.add(edge)
                 edgeSet.add(edge.edgeKey)
             }
         }
         _edges.value = newEdges
+        _edgeActivity.clear()
     }
 
-    private fun buildConditioner() = NetworkConditioner().also {
-        it.latencyMs          = params.linkLatencyMs.value
-        it.jitterMs           = params.linkJitterMs.value
-        it.lossRate           = params.lossRate.value
-        it.bandwidthBytesPerSec = params.bandwidthKbps.value * 1024L
+    /** Per-edge conditioner: ±25% jitter around the global mean so edges aren't all identical. */
+    private fun buildConditioner(rng: Random) = NetworkConditioner().also {
+        fun wobble(mean: Double) = mean * (0.75 + rng.nextDouble() * 0.5)
+        it.latencyMs            = wobble(params.linkLatencyMs.value.toDouble()).toLong().coerceAtLeast(1L)
+        it.jitterMs             = params.linkJitterMs.value
+        it.lossRate             = wobble(params.lossRate.value).coerceIn(0.0, 1.0)
+        it.bandwidthBytesPerSec = wobble(params.bandwidthKbps.value * 1024.0).toLong().coerceAtLeast(1024L)
     }
+
+    /** Edge index → sim time of last non-empty exchange. Used by the dashboard for flash hints. */
+    private val _edgeActivity = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     // ── Tick loop ─────────────────────────────────────────────────────────────
 
@@ -165,14 +171,17 @@ class SimWorld(val params: SimParamRegistry) {
             val m = edge.exchange()
             totalMsgs    += m.totalMessages
             totalDropped += m.dropped
+            if (m.hasTraffic) _edgeActivity[edge.edgeKey] = _simTimeMs.value
         }
 
         // 3. Update metrics.
+        val prev = _metrics.value
         _metrics.value = WorldMetrics(
             nodeCount         = nodes.size,
             edgeCount         = edges.size,
             totalMsgsThisTick = totalMsgs,
-            totalDropped      = _metrics.value.totalDropped + totalDropped,
+            totalMessages     = prev.totalMessages + totalMsgs,
+            totalDropped      = prev.totalDropped + totalDropped,
             simTimeMs         = _simTimeMs.value,
             heapUsedMb        = (runtime.totalMemory() - runtime.freeMemory()) / 1_048_576,
             heapMaxMb         = runtime.maxMemory() / 1_048_576,
@@ -194,11 +203,12 @@ class SimWorld(val params: SimParamRegistry) {
 
     fun edgeSnapshots(): List<EdgeSnapshot> = _edges.value.map { e ->
         EdgeSnapshot(
-            from        = e.nodeA.index,
-            to          = e.nodeB.index,
-            latencyMs   = e.conditioner.latencyMs,
-            lossRate    = e.conditioner.lossRate,
-            partitioned = e.conditioner.partitioned,
+            from           = e.nodeA.index,
+            to             = e.nodeB.index,
+            latencyMs      = e.conditioner.latencyMs,
+            lossRate       = e.conditioner.lossRate,
+            partitioned    = e.conditioner.partitioned,
+            lastActiveAtMs = _edgeActivity[e.edgeKey] ?: -1L,
         )
     }
 
@@ -214,13 +224,14 @@ class SimWorld(val params: SimParamRegistry) {
 }
 
 data class WorldMetrics(
-    val nodeCount: Int         = 0,
-    val edgeCount: Int         = 0,
+    val nodeCount: Int          = 0,
+    val edgeCount: Int          = 0,
     val totalMsgsThisTick: Long = 0,
-    val totalDropped: Long     = 0,
-    val simTimeMs: Long        = 0,
-    val heapUsedMb: Long       = 0,
-    val heapMaxMb: Long        = 0,
+    val totalMessages: Long     = 0,
+    val totalDropped: Long      = 0,
+    val simTimeMs: Long         = 0,
+    val heapUsedMb: Long        = 0,
+    val heapMaxMb: Long         = 0,
 )
 
 data class EdgeSnapshot(
@@ -229,6 +240,7 @@ data class EdgeSnapshot(
     val latencyMs: Long,
     val lossRate: Double,
     val partitioned: Boolean,
+    val lastActiveAtMs: Long = -1L,
 )
 
 data class NodeSnapshot(

@@ -20,9 +20,13 @@
   h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
        margin:16px 0 6px; border-bottom:1px solid var(--line); padding-bottom:3px; }
   button { background:var(--line); color:var(--fg); border:0; border-radius:4px; padding:6px 10px;
-           cursor:pointer; font-size:12px; }
+           cursor:pointer; font-size:12px; transition:background .15s; }
   button:hover { background:#36475a; }
+  button:active { background:var(--accent); color:#04111f; }
   button.primary { background:var(--accent); color:#04111f; font-weight:600; }
+  /* Toggle state: Start lights up green while running, Stop lights up red while stopped. */
+  button.active-on  { background:var(--good); color:#04111f; font-weight:600; }
+  button.active-off { background:var(--bad);  color:#04111f; font-weight:600; }
   .controls { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
   .param { margin-bottom:9px; }
   .param label { display:flex; justify-content:space-between; color:var(--muted); margin-bottom:2px; }
@@ -65,13 +69,25 @@
 const $ = id => document.getElementById(id);
 
 // ── Controls ────────────────────────────────────────────────────────────────
-const post = path => fetch(path, { method:"POST" });
-$("btnStart").onclick  = () => post("/api/start");
-$("btnStop").onclick   = () => post("/api/stop");
-$("btnStep").onclick   = () => post("/api/step");
-$("btnReset").onclick  = () => post("/api/reset");
-$("btnRandom").onclick = () => post("/api/randomize").then(loadParams);
-$("btnReport").onclick = () => window.location = "/api/report";
+// Brief tactile flash so the user always sees the click was received, even
+// when the resulting state change (e.g. running -> stopped) takes a tick to
+// propagate over the WebSocket.
+function flash(btn) {
+  btn.style.transition = "none";
+  btn.style.background = "#fff";
+  btn.style.color = "#000";
+  setTimeout(() => { btn.style.transition = ""; btn.style.background = ""; btn.style.color = ""; }, 120);
+}
+async function post(path, btn) {
+  if (btn) flash(btn);
+  return fetch(path, { method:"POST" });
+}
+$("btnStart").onclick  = e => post("/api/start", e.currentTarget);
+$("btnStop").onclick   = e => post("/api/stop",  e.currentTarget);
+$("btnStep").onclick   = e => post("/api/step",  e.currentTarget);
+$("btnReset").onclick  = e => { post("/api/reset", e.currentTarget); nodeActivity.clear(); edgeActivity.clear(); };
+$("btnRandom").onclick = e => post("/api/randomize", e.currentTarget).then(loadParams);
+$("btnReport").onclick = e => { flash(e.currentTarget); window.location = "/api/report"; };
 
 // ── Parameter sliders (auto-generated from /api/init) ───────────────────────
 async function loadParams() {
@@ -104,8 +120,8 @@ function paramRow(p) {
   show(p.current);
   range.oninput  = () => show(range.value);
   range.onchange = () => post(`/api/param/${p.id}?value=${range.value}`);
-  wrap.querySelector(".dice").onclick = () =>
-    post(`/api/randomize/${p.id}`).then(loadParams);
+  wrap.querySelector(".dice").onclick = (e) =>
+    post(`/api/randomize/${p.id}`, e.currentTarget).then(loadParams);
   return wrap;
 }
 
@@ -117,97 +133,165 @@ function renderMetrics(s) {
     ["Sim time",       (s.simTimeMs / 1000).toFixed(1) + "s"],
     ["Nodes",          m.nodeCount],
     ["Edges",          m.edgeCount],
-    ["Msgs this tick", m.totalMsgsThisTick],
+    ["Msgs / tick",    m.totalMsgsThisTick],
+    ["Msgs total",     m.totalMessages],
     ["Total dropped",  m.totalDropped],
     ["Heap",           m.heapUsedMb + " / " + m.heapMaxMb + " MB"],
     ["Partitioned",    s.edges.filter(e => e.partitioned).length],
   ];
   $("metrics").innerHTML = rows
     .map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
+
+  // Reflect running state on the buttons so it's obvious whether Start/Stop
+  // had any effect — the user complaint was "I click Stop and nothing happens".
+  $("btnStart").classList.toggle("active-on",  s.running);
+  $("btnStop").classList.toggle("active-off", !s.running);
 }
 
-// ── Canvas force-directed graph ─────────────────────────────────────────────
+// ── Canvas: static layout + activity pulses ─────────────────────────────────
+//
+// No force simulation. Nodes are placed once on a fixed lattice the first
+// time we see them and never move. Activity is shown via:
+//   - node ring pulse when its messagesProcessed counter advances
+//   - edge flash for ~600ms after it carried a message
+// This keeps the layout legible and makes Start/Stop visibly do something
+// (with no inertia, the moment we stop receiving WS updates everything freezes).
 const canvas = $("graph"), ctx = canvas.getContext("2d");
-let nodes = [], edges = [], layout = new Map();
+let nodes = [], edges = [];
+const layout = new Map();              // node index -> {x, y}
+const nodeActivity = new Map();        // node index -> { lastProcessed, lastSeenAt }
+const edgeActivity = new Map();        // "from-to"  -> wall-clock ms of last activity
+const EDGE_FLASH_MS = 600;
+const NODE_PULSE_MS = 500;
 
 function resize() {
   canvas.width  = canvas.clientWidth;
   canvas.height = canvas.clientHeight;
+  // Force a re-layout on resize so positions still make sense.
+  layout.clear();
 }
 window.addEventListener("resize", resize);
 resize();
 
-function syncLayout(state) {
-  nodes = state.nodes; edges = state.edges;
+function layoutNodes(list) {
+  // Concentric rings: inner ring up to 12, then expanding rings of ~1.6× capacity.
+  // Stable, deterministic positions based on index — no jitter, no movement.
   const w = canvas.width, h = canvas.height;
-  for (const n of nodes) {
-    if (!layout.has(n.index)) {
-      const a = Math.random() * Math.PI * 2, r = Math.min(w, h) * 0.3;
-      layout.set(n.index, { x: w/2 + Math.cos(a)*r, y: h/2 + Math.sin(a)*r, vx:0, vy:0 });
+  const cx = w / 2, cy = h / 2;
+  const maxR = Math.min(w, h) * 0.42;
+  const n = list.length;
+  if (n === 0) return;
+  // Compute ring sizes so total capacity >= n.
+  const rings = [];
+  let cap = 0, ringIdx = 0;
+  while (cap < n) {
+    const size = ringIdx === 0 ? Math.min(12, n) : Math.floor(12 * Math.pow(1.6, ringIdx));
+    rings.push(size);
+    cap += size;
+    ringIdx++;
+  }
+  // Place nodes ring by ring in index order.
+  let placed = 0;
+  for (let r = 0; r < rings.length; r++) {
+    const ringR = (rings.length === 1) ? maxR * 0.6 : maxR * (0.25 + 0.75 * r / (rings.length - 1));
+    const inThis = Math.min(rings[r], n - placed);
+    for (let i = 0; i < inThis; i++) {
+      const a = (i / inThis) * Math.PI * 2 - Math.PI / 2;
+      const node = list[placed++];
+      layout.set(node.index, { x: cx + Math.cos(a) * ringR, y: cy + Math.sin(a) * ringR });
     }
   }
-  for (const k of [...layout.keys()])
-    if (!nodes.find(n => n.index === k)) layout.delete(k);
 }
 
-function stepForces() {
-  const w = canvas.width, h = canvas.height;
-  // Repulsion between every pair.
-  for (const a of nodes) for (const b of nodes) {
-    if (a.index >= b.index) continue;
-    const pa = layout.get(a.index), pb = layout.get(b.index);
-    let dx = pa.x - pb.x, dy = pa.y - pb.y;
-    let d2 = dx*dx + dy*dy || 1;
-    const f = 2200 / d2;
-    const d = Math.sqrt(d2);
-    pa.vx += (dx/d)*f; pa.vy += (dy/d)*f;
-    pb.vx -= (dx/d)*f; pb.vy -= (dy/d)*f;
+function syncState(state) {
+  nodes = state.nodes; edges = state.edges;
+  // Re-layout if the node set changed (count or membership).
+  const needLayout = nodes.length !== layout.size ||
+                     nodes.some(n => !layout.has(n.index));
+  if (needLayout) {
+    layout.clear();
+    layoutNodes(nodes);
   }
-  // Spring along edges.
+  // Detect per-node activity: messagesProcessed went up since last frame.
+  const now = performance.now();
+  for (const n of nodes) {
+    const prev = nodeActivity.get(n.index);
+    if (prev && n.messagesProcessed > prev.lastProcessed) {
+      prev.lastSeenAt = now;
+    }
+    nodeActivity.set(n.index, {
+      lastProcessed: n.messagesProcessed,
+      lastSeenAt: prev?.lastSeenAt ?? -Infinity,
+    });
+  }
+  // Edge activity: server tells us when each edge last carried traffic.
+  // We translate sim-time activity into wall-clock flash windows.
   for (const e of edges) {
-    const pa = layout.get(e.from), pb = layout.get(e.to);
-    if (!pa || !pb) continue;
-    const dx = pb.x - pa.x, dy = pb.y - pa.y;
-    const d = Math.sqrt(dx*dx + dy*dy) || 1;
-    const f = (d - 90) * 0.01;
-    pa.vx += (dx/d)*f; pa.vy += (dy/d)*f;
-    pb.vx -= (dx/d)*f; pb.vy -= (dy/d)*f;
-  }
-  // Integrate + centering pull + damping.
-  for (const p of layout.values()) {
-    p.vx += (w/2 - p.x) * 0.0008;
-    p.vy += (h/2 - p.y) * 0.0008;
-    p.vx *= 0.82; p.vy *= 0.82;
-    p.x += p.vx; p.y += p.vy;
-    p.x = Math.max(12, Math.min(w-12, p.x));
-    p.y = Math.max(12, Math.min(h-12, p.y));
+    if (e.lastActiveAtMs >= 0) {
+      const key = e.from + "-" + e.to;
+      const prevSimTime = edgeActivity.get(key)?.simTime ?? -1;
+      if (e.lastActiveAtMs > prevSimTime) {
+        edgeActivity.set(key, { simTime: e.lastActiveAtMs, wallTime: now });
+      }
+    }
   }
 }
 
 function draw() {
-  stepForces();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  // Edges: red when congested or partitioned, otherwise faint grey.
+  const now = performance.now();
+
+  // Edges
   for (const e of edges) {
     const pa = layout.get(e.from), pb = layout.get(e.to);
     if (!pa || !pb) continue;
+    const key = e.from + "-" + e.to;
+    const act = edgeActivity.get(key);
+    const sinceActive = act ? (now - act.wallTime) : Infinity;
+    const flashing = sinceActive < EDGE_FLASH_MS;
+
     ctx.beginPath();
     ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
-    if (e.partitioned)      { ctx.strokeStyle = "#3a3f47"; ctx.setLineDash([4,4]); }
-    else if (e.congested)   { ctx.strokeStyle = "#ff5d5d"; ctx.setLineDash([]); ctx.lineWidth = 2; }
-    else                    { ctx.strokeStyle = "#2c3744"; ctx.setLineDash([]); ctx.lineWidth = 1; }
+    if (e.partitioned) {
+      ctx.strokeStyle = "#3a3f47"; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+    } else if (e.congested) {
+      ctx.strokeStyle = "#ff5d5d"; ctx.setLineDash([]); ctx.lineWidth = 2;
+    } else if (flashing) {
+      const t = 1 - sinceActive / EDGE_FLASH_MS;
+      ctx.strokeStyle = `rgba(78,161,255,${0.3 + 0.7 * t})`;
+      ctx.setLineDash([]); ctx.lineWidth = 1 + t * 1.5;
+    } else {
+      ctx.strokeStyle = "#2c3744"; ctx.setLineDash([]); ctx.lineWidth = 1;
+    }
     ctx.stroke();
     ctx.setLineDash([]); ctx.lineWidth = 1;
   }
-  // Nodes: size by queue depth, colour by dup-drop pressure.
+
+  // Nodes
   for (const n of nodes) {
     const p = layout.get(n.index);
     if (!p) continue;
-    const r = 4 + Math.min(10, n.queueDepth / 8);
+    const baseR = 5;
+    const fill = n.queueDepth > 50 ? "#ff5d5d"
+               : n.queueDepth > 15 ? "#ffb454" : "#4ea1ff";
+
+    // Pulse ring if processed a message recently.
+    const act = nodeActivity.get(n.index);
+    const sinceActive = act ? (now - act.lastSeenAt) : Infinity;
+    if (sinceActive < NODE_PULSE_MS) {
+      const t = sinceActive / NODE_PULSE_MS;
+      const ringR = baseR + 4 + t * 10;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, ringR, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(78,199,127,${1 - t})`;
+      ctx.lineWidth = 2 * (1 - t);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+
     ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI*2);
-    ctx.fillStyle = n.queueDepth > 50 ? "#ff5d5d"
-                  : n.queueDepth > 15 ? "#ffb454" : "#4ea1ff";
+    ctx.arc(p.x, p.y, baseR, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
     ctx.fill();
   }
   requestAnimationFrame(draw);
@@ -228,7 +312,7 @@ function connect() {
   };
   ws.onmessage = ev => {
     const state = JSON.parse(ev.data);
-    syncLayout(state);
+    syncState(state);
     renderMetrics(state);
   };
 }

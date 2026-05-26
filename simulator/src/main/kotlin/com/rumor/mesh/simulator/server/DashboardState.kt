@@ -23,6 +23,7 @@ data class MetricsDto(
     val nodeCount: Int,
     val edgeCount: Int,
     val totalMsgsThisTick: Long,
+    val totalMessages: Long,
     val totalDropped: Long,
     val simTimeMs: Long,
     val heapUsedMb: Long,
@@ -47,6 +48,8 @@ data class EdgeDto(
     val partitioned: Boolean,
     /** True when this edge is carrying heavy traffic that isn't draining — drawn red. */
     val congested: Boolean,
+    /** Sim-time ms when this edge last carried any message. -1 if never. Used for flash hints. */
+    val lastActiveAtMs: Long,
 )
 
 /** Initial payload sent once on connect: the param descriptors for slider generation. */
@@ -66,7 +69,7 @@ fun SimWorld.dashboardState(): DashboardState {
         simTimeMs = simTimeMs.value,
         metrics   = metrics.value.let {
             MetricsDto(
-                it.nodeCount, it.edgeCount, it.totalMsgsThisTick,
+                it.nodeCount, it.edgeCount, it.totalMsgsThisTick, it.totalMessages,
                 it.totalDropped, it.simTimeMs, it.heapUsedMb, it.heapMaxMb,
             )
         },
@@ -76,6 +79,7 @@ fun SimWorld.dashboardState(): DashboardState {
                 from = it.from, to = it.to,
                 latencyMs = it.latencyMs, lossRate = it.lossRate, partitioned = it.partitioned,
                 congested = (deepQueue[it.from] == true || deepQueue[it.to] == true),
+                lastActiveAtMs = it.lastActiveAtMs,
             )
         },
     )
