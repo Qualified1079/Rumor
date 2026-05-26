@@ -204,7 +204,7 @@ class SimWorld(val params: SimParamRegistry) {
                     edge.conditioner.partitioned = false
                 }
             }
-            val m = edge.exchange()
+            val m = edge.exchange(rng)
             totalMsgs    += m.totalMessages
             totalDropped += m.dropped
             if (m.hasTraffic) _edgeActivity[edge.edgeKey] = _simTimeMs.value

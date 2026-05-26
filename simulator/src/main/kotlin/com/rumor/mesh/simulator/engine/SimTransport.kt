@@ -2,7 +2,6 @@ package com.rumor.mesh.simulator.engine
 
 import com.rumor.mesh.core.protocol.PeerExchangeResult
 import com.rumor.mesh.core.model.RumorMessage
-import kotlinx.coroutines.delay
 import kotlin.random.Random
 
 /**
@@ -26,10 +25,15 @@ class SimTransport(
      */
     val tags: Set<String> = emptySet(),
 ) {
-    private val rng = Random.Default
-
-    /** Perform a bidirectional exchange between [nodeA] and [nodeB]. Returns edge metrics. */
-    suspend fun exchange(): ExchangeMetrics {
+    /**
+     * Perform a bidirectional exchange between [nodeA] and [nodeB].
+     *
+     * [rng] must be the tick's seeded RNG so that packet-loss decisions are
+     * deterministic across replay runs. Real wall-clock delays are NOT applied
+     * — this is a tick-based sim; latency is implicitly modelled by the tick
+     * granularity, not by actual sleeps which would defeat speedMultiplier.
+     */
+    suspend fun exchange(rng: Random): ExchangeMetrics {
         val start = System.currentTimeMillis()
         var messagesAtoB = 0
         var messagesBtoA = 0
@@ -41,9 +45,7 @@ class SimTransport(
         val toSendA   = outboundA.filter { it.id !in knownB }
         val deliveredA = mutableListOf<RumorMessage>()
         for (msg in toSendA) {
-            val delayMs = conditioner.simulate(estimatedBytes(msg), rng)
-            if (delayMs == null) { dropped++; continue }
-            if (delayMs > 0) delay(delayMs)
+            if (conditioner.simulate(estimatedBytes(msg), rng) == null) { dropped++; continue }
             deliveredA.add(msg)
             messagesAtoB++
         }
@@ -63,9 +65,7 @@ class SimTransport(
         val toSendB   = outboundB.filter { it.id !in knownA }
         val deliveredB = mutableListOf<RumorMessage>()
         for (msg in toSendB) {
-            val delayMs = conditioner.simulate(estimatedBytes(msg), rng)
-            if (delayMs == null) { dropped++; continue }
-            if (delayMs > 0) delay(delayMs)
+            if (conditioner.simulate(estimatedBytes(msg), rng) == null) { dropped++; continue }
             deliveredB.add(msg)
             messagesBtoA++
         }
