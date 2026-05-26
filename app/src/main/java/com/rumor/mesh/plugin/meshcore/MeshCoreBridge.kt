@@ -153,10 +153,10 @@ class MeshCoreBridge(
             sequenceNumber  = msg.timestampSec,            // radio timestamp = monotonic-ish per sender
             sentAtMs        = msg.timestampSec * 1000L,
             type            = MessageType.BROADCAST,
-            // ttl=1: bridged traffic must not propagate further into the mesh.
+            // hopsToLive=1: bridged traffic must not propagate further into the mesh.
             // The engine independently enforces BRIDGED trust → no re-relay,
-            // but ttl=1 makes it impossible to misread the intent.
-            ttl             = 1,
+            // but hopsToLive=1 makes it impossible to misread the intent.
+            hopsToLive             = 1,
             payload         = MessagePayload(ContentType.TEXT, "[${msg.senderName}] ${msg.text}"),
             signature       = PluginContext.BRIDGE_UNSIGNED,
         )

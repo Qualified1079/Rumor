@@ -32,10 +32,10 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "GossipEngine"
-private const val DEFAULT_BROADCAST_TTL = 7
-private const val DEFAULT_DIRECT_TTL = 15
-private const val MAX_BROADCAST_TTL = DEFAULT_BROADCAST_TTL
-private const val MAX_DIRECT_TTL = DEFAULT_DIRECT_TTL
+private const val DEFAULT_BROADCAST_HOPS = 7
+private const val DEFAULT_DIRECT_HOPS = 15
+private const val MAX_BROADCAST_HOPS = DEFAULT_BROADCAST_HOPS
+private const val MAX_DIRECT_HOPS = DEFAULT_DIRECT_HOPS
 
 /**
  * Core protocol logic. No radio code. No transport types.
@@ -222,7 +222,7 @@ class GossipEngine(
             sequenceNumber   = System.currentTimeMillis(),
             sentAtMs         = System.currentTimeMillis(),
             type             = MessageType.DIRECT,
-            ttl              = 1,  // BRIDGED trust prevents relay; ttl=1 is belt-and-suspenders
+            hopsToLive              = 1,  // BRIDGED trust prevents relay; hopsToLive=1 is belt-and-suspenders
             encryptedPayload = encPayload,
             recipientId      = recipientUserId,
             signature        = BRIDGE_UNSIGNED,  // → LOCAL_BRIDGE source → TrustLevel.BRIDGED
@@ -240,7 +240,7 @@ class GossipEngine(
         val msg = buildMessage(
             identity = identity,
             type = MessageType.BROADCAST,
-            ttl = DEFAULT_BROADCAST_TTL,
+            hopsToLive = DEFAULT_BROADCAST_HOPS,
             payload = MessagePayload(ContentType.TEXT, text),
         )
         enqueueImmediate(msg)
@@ -266,7 +266,7 @@ class GossipEngine(
         val msg = buildMessage(
             identity = identity,
             type = MessageType.DIRECT,
-            ttl = DEFAULT_DIRECT_TTL,
+            hopsToLive = DEFAULT_DIRECT_HOPS,
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
@@ -285,7 +285,7 @@ class GossipEngine(
     }
 
     fun manualRelay(msg: RumorMessage) {
-        enqueueImmediate(messageStore.boostTtlForManualRelay(msg))
+        enqueueImmediate(messageStore.boostHopsForManualRelay(msg))
         scope.launch { messageStore.markRelayed(msg.id) }
     }
 
@@ -299,7 +299,7 @@ class GossipEngine(
         val msg = buildMessage(
             identity = identity,
             type = MessageType.CHUNK_REQUEST,
-            ttl = DEFAULT_DIRECT_TTL,
+            hopsToLive = DEFAULT_DIRECT_HOPS,
             payload = MessagePayload(ContentType.CONTROL, body),
             recipientId = originalSenderId,
         )
@@ -313,15 +313,15 @@ class GossipEngine(
         recipientId: String? = null,
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
-        val ttl = if (type == MessageType.BROADCAST || recipientId == null) {
-            DEFAULT_BROADCAST_TTL
+        val hopsToLive = if (type == MessageType.BROADCAST || recipientId == null) {
+            DEFAULT_BROADCAST_HOPS
         } else {
-            DEFAULT_DIRECT_TTL
+            DEFAULT_DIRECT_HOPS
         }
         val msg = buildMessage(
             identity = identity,
             type = type,
-            ttl = ttl,
+            hopsToLive = hopsToLive,
             payload = payload,
             recipientId = recipientId,
         )
@@ -339,7 +339,7 @@ class GossipEngine(
         val msg = buildMessage(
             identity = identity,
             type = MessageType.PRIORITY_LINK_REQUEST,
-            ttl = DEFAULT_DIRECT_TTL,
+            hopsToLive = DEFAULT_DIRECT_HOPS,
             payload = MessagePayload(ContentType.CONTROL, ""),
             recipientId = recipientId,
         )
@@ -362,7 +362,7 @@ class GossipEngine(
         val reply = buildMessage(
             identity = identity,
             type = MessageType.PRIORITY_LINK_ACCEPT,
-            ttl = DEFAULT_DIRECT_TTL,
+            hopsToLive = DEFAULT_DIRECT_HOPS,
             payload = MessagePayload(ContentType.CONTROL, ""),
             recipientId = request.senderId,
         )
@@ -453,43 +453,43 @@ class GossipEngine(
         if (msg.trustLevel == TrustLevel.BRIDGED) return
         when (msg.type) {
             MessageType.BROADCAST -> {
-                val forwarded = messageStore.decrementTtl(msg) ?: return
+                val forwarded = messageStore.decrementHops(msg) ?: return
                 val boosted = if (msg.senderId in autoRelayIds) {
-                    messageStore.boostTtlForManualRelay(forwarded)
+                    messageStore.boostHopsForManualRelay(forwarded)
                 } else forwarded
                 enqueueRelayed(boosted)
             }
             MessageType.DIRECT -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
-                val forwarded = messageStore.decrementTtl(msg) ?: return
+                val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
             MessageType.PING -> {
-                val forwarded = msg.copy(ttl = (msg.ttl - 1).coerceAtLeast(0))
-                if (forwarded.ttl > 0) enqueueRelayed(forwarded)
+                val forwarded = msg.copy(hopsToLive = (msg.hopsToLive - 1).coerceAtLeast(0))
+                if (forwarded.hopsToLive > 0) enqueueRelayed(forwarded)
             }
             MessageType.PONG -> { /* handled by routing */ }
             MessageType.TRANSFER_METADATA, MessageType.CHUNK -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == null || msg.recipientId == localId) return
-                val forwarded = messageStore.decrementTtl(msg) ?: return
+                val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
             MessageType.CHUNK_REQUEST -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
-                val forwarded = messageStore.decrementTtl(msg) ?: return
+                val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF -> {
-                val forwarded = messageStore.decrementTtl(msg) ?: return
+                val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
             MessageType.PRIORITY_LINK_REQUEST, MessageType.PRIORITY_LINK_ACCEPT -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
-                val forwarded = messageStore.decrementTtl(msg) ?: return
+                val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
         }
@@ -498,13 +498,13 @@ class GossipEngine(
     private fun clampTtl(msg: RumorMessage): RumorMessage {
         val ceiling = when (msg.type) {
             MessageType.BROADCAST, MessageType.PING, MessageType.PONG,
-            MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF -> MAX_BROADCAST_TTL
+            MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,
             MessageType.PRIORITY_LINK_REQUEST,
-            MessageType.PRIORITY_LINK_ACCEPT -> MAX_DIRECT_TTL
+            MessageType.PRIORITY_LINK_ACCEPT -> MAX_DIRECT_HOPS
         }
-        return if (msg.ttl > ceiling) msg.copy(ttl = ceiling) else msg
+        return if (msg.hopsToLive > ceiling) msg.copy(hopsToLive = ceiling) else msg
     }
 
     /** Locally-composed messages bypass the batcher — no jitter for the sender. */
@@ -522,7 +522,7 @@ class GossipEngine(
     private fun buildMessage(
         identity: LocalIdentity,
         type: MessageType,
-        ttl: Int,
+        hopsToLive: Int,
         payload: MessagePayload? = null,
         encryptedPayload: String? = null,
         recipientId: String? = null,
@@ -534,7 +534,7 @@ class GossipEngine(
             sequenceNumber = sequenceCounter.getAndIncrement(),
             sentAtMs = System.currentTimeMillis(),
             type = type,
-            ttl = ttl,
+            hopsToLive = hopsToLive,
             payload = payload,
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,

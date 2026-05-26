@@ -33,7 +33,7 @@ class MessageRepositoryAdapter(private val dao: MessageDao) : MessageRepository 
 
 private fun RumorMessage.toEntity() = MessageEntity(
     id = id, senderId = senderId, senderPublicKey = senderPublicKey,
-    sequenceNumber = sequenceNumber, sentAtMs = sentAtMs, type = type, ttl = ttl,
+    sequenceNumber = sequenceNumber, sentAtMs = sentAtMs, type = type, hopsToLive = hopsToLive,
     contentType = payload?.contentType, content = payload?.content,
     filename = payload?.filename, mimeType = payload?.mimeType,
     sizeBytes = payload?.sizeBytes ?: 0, encryptedPayload = encryptedPayload,
@@ -43,7 +43,7 @@ private fun RumorMessage.toEntity() = MessageEntity(
 
 private fun MessageEntity.toMessage() = RumorMessage(
     id = id, senderId = senderId, senderPublicKey = senderPublicKey,
-    sequenceNumber = sequenceNumber, sentAtMs = sentAtMs, type = type, ttl = ttl,
+    sequenceNumber = sequenceNumber, sentAtMs = sentAtMs, type = type, hopsToLive = hopsToLive,
     payload = if (content != null && contentType != null)
         MessagePayload(contentType, content, filename, mimeType, sizeBytes) else null,
     encryptedPayload = encryptedPayload, recipientId = recipientId,

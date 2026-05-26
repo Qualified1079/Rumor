@@ -18,7 +18,7 @@ data class RumorMessage(
     val sentAtMs: Long,
     val type: MessageType,
     /** Remaining hops. Decremented at each relay; message dies at zero. Applies to BROADCAST and DIRECT. */
-    val ttl: Int,
+    val hopsToLive: Int,
     /** Plaintext for BROADCAST; absent for DIRECT (use [encryptedPayload]). */
     val payload: MessagePayload? = null,
     /** AES-256-GCM ciphertext for DIRECT messages. */
@@ -40,7 +40,7 @@ data class RumorMessage(
     /** Whether the local user has read this message. Not propagated. */
     @kotlinx.serialization.Transient
     val isRead: Boolean = false,
-    /** Whether the local user manually relayed this (reset TTL). Not propagated. */
+    /** Whether the local user manually relayed this (reset hops-to-live). Not propagated. */
     @kotlinx.serialization.Transient
     val wasRelayed: Boolean = false,
 )

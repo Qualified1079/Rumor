@@ -1,5 +1,6 @@
 package com.rumor.mesh.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -22,7 +23,7 @@ data class MessageEntity(
     val sequenceNumber: Long,
     val sentAtMs: Long,
     val type: MessageType,
-    val ttl: Int,
+    @ColumnInfo(name = "ttl") val hopsToLive: Int,
     val contentType: ContentType?,
     val content: String?,
     val filename: String?,

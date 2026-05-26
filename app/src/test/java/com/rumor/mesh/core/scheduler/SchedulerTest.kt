@@ -24,7 +24,7 @@ class SchedulerTest {
         sequenceNumber = 0,
         sentAtMs = System.currentTimeMillis(),
         type = MessageType.BROADCAST,
-        ttl = 5,
+        hopsToLive = 5,
         payload = MessagePayload(ContentType.TEXT, "x".repeat(contentLength)),
         signature = "sig",
     )

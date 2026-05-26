@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "MessageStore"
-private const val DEFAULT_BROADCAST_TTL = 7
+private const val DEFAULT_BROADCAST_HOPS = 7
 private const val MANUAL_RELAY_BOOST = 2
 private const val MAX_MESSAGES = 50_000
 private const val EVICT_BATCH = 500
@@ -61,14 +61,14 @@ class MessageStore(
         return true
     }
 
-    fun decrementTtl(msg: RumorMessage): RumorMessage? {
-        if (msg.ttl <= 0) return null
-        return msg.copy(ttl = msg.ttl - 1)
+    fun decrementHops(msg: RumorMessage): RumorMessage? {
+        if (msg.hopsToLive <= 0) return null
+        return msg.copy(hopsToLive = msg.hopsToLive - 1)
     }
 
-    fun boostTtlForManualRelay(msg: RumorMessage): RumorMessage =
+    fun boostHopsForManualRelay(msg: RumorMessage): RumorMessage =
         msg.copy(
-            ttl = minOf(DEFAULT_BROADCAST_TTL, msg.ttl + MANUAL_RELAY_BOOST),
+            hopsToLive = minOf(DEFAULT_BROADCAST_HOPS, msg.hopsToLive + MANUAL_RELAY_BOOST),
             wasRelayed = true,
         )
 
@@ -112,7 +112,7 @@ class MessageStore(
         append(msg.sequenceNumber)
         append(msg.sentAtMs)
         append(msg.type.name)
-        append(msg.ttl)
+        append(msg.hopsToLive)
         append(msg.payload?.content ?: "")
         append(msg.encryptedPayload ?: "")
         append(msg.recipientId ?: "")

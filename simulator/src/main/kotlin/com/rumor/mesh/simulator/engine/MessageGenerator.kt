@@ -37,7 +37,7 @@ class MessageGenerator(
             sequenceNumber   = seq.getAndIncrement(),
             sentAtMs         = System.currentTimeMillis(),
             type             = MessageType.BROADCAST,
-            ttl              = 7,
+            hopsToLive              = 7,
             payload          = MessagePayload(contentType, content),
             signature        = "",
         )
@@ -48,7 +48,7 @@ class MessageGenerator(
     private fun signableBytes(msg: RumorMessage): ByteArray = buildString {
         append(msg.id); append(msg.senderId); append(msg.senderPublicKey)
         append(msg.sequenceNumber); append(msg.sentAtMs); append(msg.type.name)
-        append(msg.ttl); append(msg.payload?.content ?: "")
+        append(msg.hopsToLive); append(msg.payload?.content ?: "")
         append(msg.encryptedPayload ?: ""); append(msg.recipientId ?: "")
     }.toByteArray(Charsets.UTF_8)
 }

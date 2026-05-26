@@ -131,7 +131,7 @@ class MeshtasticBridge(
             sequenceNumber  = (packet.id.toLong() and 0xFFFFFFFFL),
             sentAtMs        = System.currentTimeMillis(),
             type            = MessageType.BROADCAST,
-            ttl             = 1,  // bridged traffic never relays; see MeshCoreBridge note
+            hopsToLive             = 1,  // bridged traffic never relays; see MeshCoreBridge note
             payload         = MessagePayload(ContentType.TEXT, text),
             signature       = PluginContext.BRIDGE_UNSIGNED,
         )

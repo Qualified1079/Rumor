@@ -125,7 +125,7 @@ class SimParamRegistry {
         randomFn = { rng -> rng.nextInt(2, 7) })
 
     // ── Protocol ─────────────────────────────────────────────────────────────
-    val ttl = SimParam("ttl", "Message TTL",
+    val hopsToLive = SimParam("hops_to_live", "Hops to live",
         ParamCategory.PROTOCOL, 1, 15, 7,
         randomFn = { rng -> rng.nextInt(6, 11) })
 
@@ -151,7 +151,7 @@ class SimParamRegistry {
         linkLatencyMs, linkJitterMs, lossRate, bandwidthKbps, partitionProbability, partitionDurationSec,
         nodeCount, connectionsPerNode, churnRatePerMinute,
         msgPerSecondPerNode, minPayloadBytes, maxPayloadBytes, burstProbability, burstMultiplier,
-        ttl, schedulerQuantumKb, gossipIntervalMs,
+        hopsToLive, schedulerQuantumKb, gossipIntervalMs,
         speedMultiplier, seed,
     )
 

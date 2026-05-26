@@ -91,7 +91,7 @@ private fun BroadcastCard(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "TTL ${message.ttl}",
+                        text = "Hops ${message.hopsToLive}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                     )
