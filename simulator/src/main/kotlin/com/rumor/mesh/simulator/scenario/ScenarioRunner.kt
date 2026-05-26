@@ -73,13 +73,17 @@ class ScenarioRunner {
         }
         world.stop()
 
-        // Snapshot final metrics for assertion evaluation.
+        // Snapshot final metrics + per-node message data for assertion evaluation.
         val finalMetrics = world.metrics.value
-        val nodeMessagesProcessed = world.nodes.value.associate { it.index to it.messagesProcessed.value }
-        val nodeKnownIds = world.nodes.value.associate { it.index to it.knownIds() }
+        val nodes = world.nodes.value
+        val nodeUserId = nodes.associate { it.index to it.userId }
+        // Per node: (msgId -> RumorMessage) snapshot. Enables filtering by senderId/trustLevel.
+        val nodeMessages = nodes.associate { n -> n.index to n.knownMessages().associateBy { it.id } }
+        // userId -> nodeIndex; used to map a message's senderId back to its origin cluster.
+        val userIdToIndex = nodeUserId.entries.associate { (idx, uid) -> uid to idx }
 
         val assertionResults = scenario.assertions.map { a ->
-            evaluateAssertion(a, scenario, build.metadata, finalMetrics, nodeMessagesProcessed, nodeKnownIds, params)
+            evaluateAssertion(a, scenario, build.metadata, finalMetrics, nodeMessages, nodeUserId, userIdToIndex)
         }
 
         ScenarioResult(
@@ -119,9 +123,9 @@ class ScenarioRunner {
         scenario: Scenario,
         meta: TopologyMetadata,
         finalMetrics: WorldMetrics,
-        nodeMessagesProcessed: Map<Int, Long>,
-        nodeKnownIds: Map<Int, Set<String>>,
-        params: SimParamRegistry,
+        nodeMessages: Map<Int, Map<String, com.rumor.mesh.core.model.RumorMessage>>,
+        nodeUserId: Map<Int, String>,
+        userIdToIndex: Map<String, Int>,
     ): AssertionResult = when (assertion) {
         is Assertion.DeterministicReplay -> {
             // Re-run a fresh copy from scratch and compare cumulative metrics.
@@ -164,22 +168,53 @@ class ScenarioRunner {
                         "Available: ${meta.groups.keys}",
                 )
             } else {
-                // Count messages originated in `from` that are known to ANY node in `to`.
-                val originated = nodeMessagesProcessed.filterKeys { it in from }.values.sum()
-                // Approximation: count distinct message IDs held by `to` nodes — gives a delivery
-                // floor without per-message origin tracking (would require GossipEngine hooks).
-                val deliveredSet = mutableSetOf<String>()
-                for (idx in to) nodeKnownIds[idx]?.let { deliveredSet.addAll(it) }
-                val delivered = deliveredSet.size.toLong()
-                val ratio = if (originated == 0L) 0.0 else delivered.toDouble() / originated.toDouble()
+                val fromUserIds = from.mapNotNull { nodeUserId[it] }.toSet()
+                // 1. Find every message ID anyone in `from` ever originated. A message is
+                //    "from `from`" iff its senderId belongs to a node in that cluster.
+                val originated = mutableSetOf<String>()
+                for (idx in from) {
+                    val msgs = nodeMessages[idx] ?: continue
+                    for ((id, m) in msgs) if (m.senderId in fromUserIds) originated.add(id)
+                }
+                // 2. Of those, how many are known to at least one node in `to`?
+                val delivered = mutableSetOf<String>()
+                for (idx in to) {
+                    val msgs = nodeMessages[idx] ?: continue
+                    for (id in originated) if (id in msgs) delivered.add(id)
+                }
+                val ratio = if (originated.isEmpty()) 0.0 else delivered.size.toDouble() / originated.size
                 AssertionResult(
                     type = "cross-cluster-delivery",
                     passed = ratio >= assertion.minRatio,
-                    detail = "from=${assertion.fromCluster}(origin=$originated) " +
-                        "to=${assertion.toCluster}(delivered≥$delivered) ratio=${"%.2f".format(ratio)} " +
-                        "min=${assertion.minRatio}",
+                    detail = "from=${assertion.fromCluster}(originated=${originated.size}) " +
+                        "to=${assertion.toCluster}(delivered=${delivered.size}) " +
+                        "ratio=${"%.2f".format(ratio)} min=${assertion.minRatio}",
                 )
             }
+        }
+
+        is Assertion.NoBridgedRerelay -> {
+            // Walk every node's stored messages; any BRIDGED-trust message whose
+            // recipientId doesn't match this node's own userId is a violation.
+            // Bridged DMs should only ever live on the addressed recipient.
+            val violations = mutableListOf<String>()
+            for ((idx, msgs) in nodeMessages) {
+                val myUserId = nodeUserId[idx] ?: continue
+                for ((id, m) in msgs) {
+                    if (m.trustLevel != com.rumor.mesh.core.model.TrustLevel.BRIDGED) continue
+                    if (m.recipientId != myUserId) {
+                        val originIdx = userIdToIndex[m.senderId] ?: -1
+                        violations.add("node=$idx msg=$id sender=node$originIdx recipient=${m.recipientId}")
+                        if (violations.size >= 20) break
+                    }
+                }
+                if (violations.size >= 20) break
+            }
+            AssertionResult(
+                type = "no-bridged-rerelay",
+                passed = violations.isEmpty(),
+                detail = if (violations.isEmpty()) "0 violations" else "${violations.size}+ violations: ${violations.joinToString("; ")}",
+            )
         }
     }
 

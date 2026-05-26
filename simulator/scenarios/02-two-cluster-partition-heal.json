@@ -15,6 +15,7 @@
   "assertions": [
     { "kind": "min-total-messages", "min": 1000 },
     { "kind": "cross-cluster-delivery", "fromCluster": "left", "toCluster": "right", "minRatio": 0.3 },
+    { "kind": "no-bridged-rerelay" },
     { "kind": "deterministic-replay" }
   ]
 }

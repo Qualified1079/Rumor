@@ -82,4 +82,20 @@ sealed class Assertion {
 
     @Serializable @SerialName("heap-bounded")
     data class HeapBounded(val maxMb: Long) : Assertion()
+
+    /**
+     * Invariant: no BRIDGED-trust message should ever appear on a node that
+     * isn't its addressed recipient. Implemented as a post-hoc snapshot scan
+     * (walk every node's stored messages, flag any BRIDGED whose recipientId
+     * doesn't match this node's userId).
+     *
+     * Limitation: only catches violations whose evidence still exists in
+     * the stored set at the end of the scenario. A message that was relayed
+     * and then evicted would slip through. Stored messages are not evicted
+     * during the in-memory sim's lifetime so this is reliable for now, but
+     * may need to escalate to a live relay observer (added to GossipEngine)
+     * if message stores ever start trimming during a run. See CLAUDE.md.
+     */
+    @Serializable @SerialName("no-bridged-rerelay")
+    object NoBridgedRerelay : Assertion()
 }

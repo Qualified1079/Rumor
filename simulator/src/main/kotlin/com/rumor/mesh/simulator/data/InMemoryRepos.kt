@@ -30,6 +30,9 @@ class InMemoryMessageRepository : MessageRepository {
     private val messages = ConcurrentHashMap<String, RumorMessage>()
     private val _flow = MutableStateFlow<List<RumorMessage>>(emptyList())
 
+    /** Sim/test-only snapshot: every message currently stored. Not part of the interface. */
+    fun snapshot(): List<RumorMessage> = messages.values.toList()
+
     override suspend fun insert(msg: RumorMessage) {
         messages[msg.id] = msg
         _flow.value = messages.values.toList()

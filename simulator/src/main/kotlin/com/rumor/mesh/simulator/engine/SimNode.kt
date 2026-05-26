@@ -36,7 +36,7 @@ class SimNode(
     val userId: String get() = identityProvider.identity.value!!.userId
 
     private val contactRepo     = InMemoryContactRepository()
-    private val messageRepo     = InMemoryMessageRepository()
+    internal val messageRepo    = InMemoryMessageRepository()
     private val routeRepo       = InMemoryRouteRepository()
     private val breadcrumbRepo  = InMemoryBreadcrumbRepository()
     private val transferRepo    = InMemoryTransferRepository()
@@ -90,4 +90,7 @@ class SimNode(
     fun takeOutbound(peerUserId: String, max: Int = 50) =
         gossipEngine.messagesForExchange(peerUserId).take(max)
     fun knownIds(): Set<String> = gossipEngine.knownMessageIds()
+
+    /** All messages currently stored on this node, with full metadata. Sim assertions only. */
+    fun knownMessages(): List<com.rumor.mesh.core.model.RumorMessage> = messageRepo.snapshot()
 }
