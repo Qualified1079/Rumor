@@ -127,7 +127,7 @@ class SimNode(
      * for broadcast relay). This bridge makes locally composed messages visible to the
      * exchange mechanism without disturbing the relay-path duplicate-filter logic.
      */
-    fun flushSchedulerToRepo() {
+    suspend fun flushSchedulerToRepo() {
         val msgs = scheduler.take(500)
         for (msg in msgs) {
             if (duplicateFilter.recordAndCheck(msg.id)) {
