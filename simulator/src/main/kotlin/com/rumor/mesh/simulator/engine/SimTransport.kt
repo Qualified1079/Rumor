@@ -1,6 +1,7 @@
 package com.rumor.mesh.simulator.engine
 
 import com.rumor.mesh.core.protocol.PeerExchangeResult
+import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.transport.wifidirect.BloomFilterData
 import kotlin.random.Random
@@ -57,7 +58,10 @@ class SimTransport(
         // too-small expectedItems will starve propagation. That's exactly the
         // class of bug worth catching here.
 
+        // Sort so TRANSFER_METADATA precedes CHUNK — TransferAssembler drops chunks
+        // that arrive before their metadata record is registered.
         val deliveredA = exchangeOneDirection(nodeA, nodeB, rng) { dropped++ }
+            .sortedBy { if (it.type == MessageType.TRANSFER_METADATA) 0 else 1 }
         messagesAtoB = deliveredA.size
         if (deliveredA.isNotEmpty()) {
             nodeB.deliverExchange(PeerExchangeResult(
@@ -70,6 +74,7 @@ class SimTransport(
         }
 
         val deliveredB = exchangeOneDirection(nodeB, nodeA, rng) { dropped++ }
+            .sortedBy { if (it.type == MessageType.TRANSFER_METADATA) 0 else 1 }
         messagesBtoA = deliveredB.size
         if (deliveredB.isNotEmpty()) {
             nodeA.deliverExchange(PeerExchangeResult(

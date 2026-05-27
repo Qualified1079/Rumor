@@ -117,4 +117,22 @@ class SimNode(
 
     /** All messages currently stored on this node, with full metadata. Sim assertions only. */
     fun knownMessages(): List<com.rumor.mesh.core.model.RumorMessage> = messageRepo.snapshot()
+
+    /**
+     * Drain the scheduler (outbound queue for locally composed messages: DMs, chunks)
+     * into messageRepo so SimTransport's bloom-filter exchange can find them.
+     *
+     * In the real app the transport drains the scheduler during each session. In the
+     * sim, SimTransport reads messageRepo directly (to avoid the destructive-take problem
+     * for broadcast relay). This bridge makes locally composed messages visible to the
+     * exchange mechanism without disturbing the relay-path duplicate-filter logic.
+     */
+    fun flushSchedulerToRepo() {
+        val msgs = scheduler.take(500)
+        for (msg in msgs) {
+            if (duplicateFilter.recordAndCheck(msg.id)) {
+                messageRepo.insert(msg)
+            }
+        }
+    }
 }

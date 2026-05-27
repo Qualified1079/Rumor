@@ -165,19 +165,19 @@ class SimWorld(val params: SimParamRegistry) {
      * is sized to force >1 chunk through [com.rumor.mesh.core.transfer.Chunker]
      * and reassembled on every receiver via their [SimNode.transferAssembler].
      */
-    private fun emitLarge(src: SimNode, profile: TrafficProfile, rng: Random) {
+    private suspend fun emitLarge(src: SimNode, profile: TrafficProfile, rng: Random) {
         // 1.5–2× the default 60 KB chunk size so each transfer is 2–3 chunks.
         val sizeBytes = com.rumor.mesh.core.transfer.DEFAULT_CHUNK_SIZE * (3 + rng.nextInt(2)) / 2
         val data = ByteArray(sizeBytes) { (rng.nextInt(256)).toByte() }
-        scope.launch {
-            src.transferSender.sendFile(
-                recipientId = null,
-                contentType = com.rumor.mesh.core.model.ContentType.FILE,
-                data        = data,
-                mimeType    = "application/octet-stream",
-                title       = "sim-transfer",
-            )
-        }
+        // Called inline (not scope.launch) so chunks land in the scheduler before
+        // flushSchedulerToRepo() runs later in the same tick.
+        src.transferSender.sendFile(
+            recipientId = null,
+            contentType = com.rumor.mesh.core.model.ContentType.FILE,
+            data        = data,
+            mimeType    = "application/octet-stream",
+            title       = "sim-transfer",
+        )
         src.recordProcessed()
     }
 
@@ -232,7 +232,7 @@ class SimWorld(val params: SimParamRegistry) {
             val gen = MessageGenerator(identity, profile)
             val base = gen.messagesThisTick(rng, simSecondsPerTick)
             val burstMult = if (rng.nextDouble() < profile.burstProbability) profile.burstMultiplier else 1
-            repeat(base * burstMult) {
+            for (i in 0 until base * burstMult) {
                 when {
                     dmFraction > 0 && rng.nextDouble() < dmFraction -> emitDm(node, aliveNodes, rng)
                     largeFraction > 0 && rng.nextDouble() < largeFraction -> emitLarge(node, profile, rng)
@@ -244,6 +244,11 @@ class SimWorld(val params: SimParamRegistry) {
                 }
             }
         }
+
+        // 1b. Flush scheduler (DMs, chunks) into messageRepo so exchange can find them.
+        // composeDirect and TransferSender.sendFile enqueue into the scheduler; the sim
+        // reads messageRepo for exchange offers (avoids destructive-take for broadcasts).
+        for (node in aliveNodes) node.flushSchedulerToRepo()
 
         // 2. Run gossip exchanges on each edge (skip if either endpoint is killed).
         var totalMsgs = 0L
