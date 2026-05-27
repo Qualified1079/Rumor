@@ -78,6 +78,14 @@ data class TrafficProfile(
     @Volatile var minPayloadBytes: Int = 50,
     @Volatile var maxPayloadBytes: Int = 500,
     @Volatile var hopsToLive:      Int = 7,
+    /** Fraction (0..1) of generated traffic that's DM rather than BROADCAST. */
+    @Volatile var dmFraction:      Double = 0.0,
+    /**
+     * Fraction (0..1) of broadcasts that should exceed the chunk threshold.
+     * Large messages are split by the real Chunker on the sender and reassembled
+     * by the recipient's [ChunkManager] — same code path as the app.
+     */
+    @Volatile var largeMessageFraction: Double = 0.0,
     /** Probability of a burst this tick — generates [burstMultiplier] messages at once. */
     @Volatile var burstProbability: Double = 0.01,
     @Volatile var burstMultiplier:  Int    = 5,

@@ -10,6 +10,9 @@ import com.rumor.mesh.core.routing.BreadcrumbCache
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.scheduler.Scheduler
+import com.rumor.mesh.core.transfer.AssembledTransfer
+import com.rumor.mesh.core.transfer.TransferAssembler
+import com.rumor.mesh.core.transfer.TransferSender
 import com.rumor.mesh.simulator.data.InMemoryBlockEntryRepository
 import com.rumor.mesh.simulator.data.InMemoryBlocklistEntryRepository
 import com.rumor.mesh.simulator.data.InMemoryBreadcrumbRepository
@@ -23,6 +26,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * One simulated Rumor node. Wires together the real protocol stack with
@@ -30,7 +34,7 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class SimNode(
     val index: Int,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
 ) {
     val identityProvider = SimIdentityProvider(index)
     val userId: String get() = identityProvider.identity.value!!.userId
@@ -70,6 +74,22 @@ class SimNode(
         relayBatchMinWindowMs = 1L,
         relayBatchSpreadMs    = 1L,
     )
+
+    val transferSender = TransferSender(gossipEngine, identityProvider, transferRepo, chunkRepo)
+    val transferAssembler = TransferAssembler(gossipEngine, transferRepo, chunkRepo)
+
+    /** Count of fully-reassembled inbound transfers, for chunked-delivery assertions. */
+    private val _reassembledTransfers = MutableStateFlow(0L)
+    val reassembledTransfers: StateFlow<Long> = _reassembledTransfers.asStateFlow()
+
+    init {
+        // Track successful reassembly events for the chunked-delivery assertion.
+        scope.launch {
+            transferAssembler.assembledTransfers.collect { _: AssembledTransfer ->
+                _reassembledTransfers.value++
+            }
+        }
+    }
 
     // ── Metrics state exposed to SimWorld / dashboard ─────────────────────────
 

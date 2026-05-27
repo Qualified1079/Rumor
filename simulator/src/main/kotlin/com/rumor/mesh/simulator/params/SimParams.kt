@@ -124,6 +124,14 @@ class SimParamRegistry {
         ParamCategory.TRAFFIC, 1, 100, 5,
         randomFn = { rng -> rng.nextInt(2, 7) })
 
+    val dmFraction = SimParam("dm_fraction", "DM fraction of traffic",
+        ParamCategory.TRAFFIC, 0.0, 1.0, 0.0, step = 0.05,
+        randomFn = { rng -> rng.nextDouble(0.0, 0.4) })
+
+    val largeMessageFraction = SimParam("large_msg_fraction", "Large-payload fraction",
+        ParamCategory.TRAFFIC, 0.0, 1.0, 0.0, step = 0.05,
+        randomFn = { rng -> rng.nextDouble(0.0, 0.1) })
+
     // ── Protocol ─────────────────────────────────────────────────────────────
     val hopsToLive = SimParam("hops_to_live", "Hops to live",
         ParamCategory.PROTOCOL, 1, 15, 7,
@@ -151,6 +159,7 @@ class SimParamRegistry {
         linkLatencyMs, linkJitterMs, lossRate, bandwidthKbps, partitionProbability, partitionDurationSec,
         nodeCount, connectionsPerNode, churnRatePerMinute,
         msgPerSecondPerNode, minPayloadBytes, maxPayloadBytes, burstProbability, burstMultiplier,
+        dmFraction, largeMessageFraction,
         hopsToLive, schedulerQuantumKb, gossipIntervalMs,
         speedMultiplier, seed,
     )

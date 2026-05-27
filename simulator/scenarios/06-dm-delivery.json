@@ -1,0 +1,17 @@
+{
+  "name": "dm-delivery",
+  "durationSec": 120,
+  "seed": 42,
+  "speedMult": 10.0,
+  "topology": { "kind": "mesh", "nodes": 20, "connectionsPerNode": 4 },
+  "params": {
+    "msg_per_sec": "1.0",
+    "hops_to_live": "10",
+    "dm_fraction": "0.4"
+  },
+  "events": [],
+  "assertions": [
+    { "kind": "min-total-messages", "min": 1500 },
+    { "kind": "dm-delivery", "minRatio": 0.5 }
+  ]
+}

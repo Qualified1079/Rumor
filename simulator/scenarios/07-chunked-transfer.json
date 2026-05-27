@@ -1,0 +1,16 @@
+{
+  "name": "chunked-transfer",
+  "durationSec": 90,
+  "seed": 42,
+  "speedMult": 5.0,
+  "topology": { "kind": "mesh", "nodes": 12, "connectionsPerNode": 3 },
+  "params": {
+    "msg_per_sec": "0.3",
+    "hops_to_live": "8",
+    "large_msg_fraction": "0.4"
+  },
+  "events": [],
+  "assertions": [
+    { "kind": "chunk-reassembly", "minReassembled": 5 }
+  ]
+}

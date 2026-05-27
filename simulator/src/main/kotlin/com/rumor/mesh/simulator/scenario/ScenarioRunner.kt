@@ -82,8 +82,9 @@ class ScenarioRunner {
         // userId -> nodeIndex; used to map a message's senderId back to its origin cluster.
         val userIdToIndex = nodeUserId.entries.associate { (idx, uid) -> uid to idx }
 
+        val reassembledTotal = nodes.sumOf { it.reassembledTransfers.value }
         val assertionResults = scenario.assertions.map { a ->
-            evaluateAssertion(a, scenario, build.metadata, finalMetrics, nodeMessages, nodeUserId, userIdToIndex)
+            evaluateAssertion(a, scenario, build.metadata, finalMetrics, nodeMessages, nodeUserId, userIdToIndex, reassembledTotal)
         }
 
         ScenarioResult(
@@ -126,6 +127,7 @@ class ScenarioRunner {
         nodeMessages: Map<Int, Map<String, com.rumor.mesh.core.model.RumorMessage>>,
         nodeUserId: Map<Int, String>,
         userIdToIndex: Map<String, Int>,
+        reassembledTotal: Long,
     ): AssertionResult = when (assertion) {
         is Assertion.DeterministicReplay -> {
             // Re-run a fresh copy from scratch and compare cumulative metrics.
@@ -222,6 +224,37 @@ class ScenarioRunner {
                 detail = if (violations.isEmpty()) "0 violations" else "${violations.size}+ violations: ${violations.joinToString("; ")}",
             )
         }
+
+        is Assertion.DmDelivery -> {
+            // Originated DMs: any DIRECT message present on its sender's own node.
+            // Delivered: that same id present on the addressed recipient's node.
+            val originated = mutableMapOf<String, String>()  // msgId -> recipientUserId
+            for ((idx, msgs) in nodeMessages) {
+                val myUserId = nodeUserId[idx] ?: continue
+                for ((id, m) in msgs) {
+                    if (m.type != com.rumor.mesh.core.model.MessageType.DIRECT) continue
+                    if (m.senderId != myUserId) continue
+                    val recipient = m.recipientId ?: continue
+                    originated[id] = recipient
+                }
+            }
+            val delivered = originated.count { (id, recipientUserId) ->
+                val recipientIdx = userIdToIndex[recipientUserId] ?: return@count false
+                nodeMessages[recipientIdx]?.containsKey(id) == true
+            }
+            val ratio = if (originated.isEmpty()) 0.0 else delivered.toDouble() / originated.size
+            AssertionResult(
+                type = "dm-delivery",
+                passed = originated.isNotEmpty() && ratio >= assertion.minRatio,
+                detail = "originated=${originated.size} delivered=$delivered ratio=${"%.2f".format(ratio)} min=${assertion.minRatio}",
+            )
+        }
+
+        is Assertion.ChunkReassembly -> AssertionResult(
+            type = "chunk-reassembly",
+            passed = reassembledTotal >= assertion.minReassembled,
+            detail = "reassembled=$reassembledTotal min=${assertion.minReassembled}",
+        )
     }
 
     private fun WorldMetrics.toSample() = TraceSample(

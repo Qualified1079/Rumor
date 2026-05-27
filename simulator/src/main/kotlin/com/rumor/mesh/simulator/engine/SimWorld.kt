@@ -140,6 +140,47 @@ class SimWorld(val params: SimParamRegistry) {
         return matching.size
     }
 
+    /**
+     * Originate a synthetic DM from [src] to a random other alive node, using the
+     * real [com.rumor.mesh.core.protocol.GossipEngine.composeDirect] code path
+     * (X25519 ECDH + AES-GCM). Recipient pubkey is looked up from the target
+     * node's identity — in real Rumor this comes from ContactRepository after
+     * a HELLO exchange; the sim has the luxury of direct access.
+     */
+    private fun emitDm(src: SimNode, aliveNodes: List<SimNode>, rng: Random) {
+        val candidates = aliveNodes.filter { it.index != src.index }
+        if (candidates.isEmpty()) return
+        val recipient = candidates[rng.nextInt(candidates.size)]
+        val recipientIdentity = recipient.identityProvider.identity.value ?: return
+        src.gossipEngine.composeDirect(
+            recipientId         = recipient.userId,
+            recipientPublicKey  = recipientIdentity.publicKeyBytes,
+            text                = "sim-dm-${rng.nextInt(100_000)}",
+        ) ?: return
+        src.recordProcessed()
+    }
+
+    /**
+     * Originate a chunked transfer from [src] (broadcast — no recipient). Payload
+     * is sized to force >1 chunk through [com.rumor.mesh.core.transfer.Chunker]
+     * and reassembled on every receiver via their [SimNode.transferAssembler].
+     */
+    private fun emitLarge(src: SimNode, profile: TrafficProfile, rng: Random) {
+        // 1.5–2× the default 60 KB chunk size so each transfer is 2–3 chunks.
+        val sizeBytes = com.rumor.mesh.core.transfer.DEFAULT_CHUNK_SIZE * (3 + rng.nextInt(2)) / 2
+        val data = ByteArray(sizeBytes) { (rng.nextInt(256)).toByte() }
+        scope.launch {
+            src.transferSender.sendFile(
+                recipientId = null,
+                contentType = com.rumor.mesh.core.model.ContentType.FILE,
+                data        = data,
+                mimeType    = "application/octet-stream",
+                title       = "sim-transfer",
+            )
+        }
+        src.recordProcessed()
+    }
+
     /** Per-edge conditioner: ±25% jitter around the global mean so edges aren't all identical. */
     private fun buildConditioner(rng: Random) = NetworkConditioner().also {
         fun wobble(mean: Double) = mean * (0.75 + rng.nextDouble() * 0.5)
@@ -173,24 +214,34 @@ class SimWorld(val params: SimParamRegistry) {
 
         // 1. Generate traffic from each node (skip killed ones — scenario events).
         val simSecondsPerTick = tickDurationMs / 1000.0
-        for (node in nodes) {
-            if (node.index in killedNodes) continue
+        val aliveNodes = nodes.filter { it.index !in killedNodes }
+        val dmFraction = params.dmFraction.value
+        val largeFraction = params.largeMessageFraction.value
+        for (node in aliveNodes) {
             val profile = TrafficProfile(
-                msgPerSecond     = params.msgPerSecondPerNode.value,
-                minPayloadBytes  = params.minPayloadBytes.value,
-                maxPayloadBytes  = params.maxPayloadBytes.value,
-                hopsToLive       = params.hopsToLive.value,
-                burstProbability = params.burstProbability.value,
-                burstMultiplier  = params.burstMultiplier.value,
+                msgPerSecond         = params.msgPerSecondPerNode.value,
+                minPayloadBytes      = params.minPayloadBytes.value,
+                maxPayloadBytes      = params.maxPayloadBytes.value,
+                hopsToLive           = params.hopsToLive.value,
+                dmFraction           = dmFraction,
+                largeMessageFraction = largeFraction,
+                burstProbability     = params.burstProbability.value,
+                burstMultiplier      = params.burstMultiplier.value,
             )
             val identity = node.identityProvider.identity.value ?: continue
             val gen = MessageGenerator(identity, profile)
             val base = gen.messagesThisTick(rng, simSecondsPerTick)
             val burstMult = if (rng.nextDouble() < profile.burstProbability) profile.burstMultiplier else 1
             repeat(base * burstMult) {
-                val msg = gen.generate(rng)
-                node.gossipEngine.injectFromPlugin(msg, "sim-generator")
-                node.recordProcessed()
+                when {
+                    dmFraction > 0 && rng.nextDouble() < dmFraction -> emitDm(node, aliveNodes, rng)
+                    largeFraction > 0 && rng.nextDouble() < largeFraction -> emitLarge(node, profile, rng)
+                    else -> {
+                        val msg = gen.generate(rng)
+                        node.gossipEngine.injectFromPlugin(msg, "sim-generator")
+                        node.recordProcessed()
+                    }
+                }
             }
         }
 

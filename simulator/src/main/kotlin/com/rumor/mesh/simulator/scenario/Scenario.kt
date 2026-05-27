@@ -98,4 +98,19 @@ sealed class Assertion {
      */
     @Serializable @SerialName("no-bridged-rerelay")
     object NoBridgedRerelay : Assertion()
+
+    /**
+     * Of all DMs originated during the run, what fraction reached their addressed
+     * recipient node's store. Exercises the X25519+AES-GCM compose/decrypt path
+     * end to end via the real GossipEngine.
+     */
+    @Serializable @SerialName("dm-delivery")
+    data class DmDelivery(val minRatio: Double) : Assertion()
+
+    /**
+     * Sum of [SimNode.reassembledTransfers] across all nodes at end of run.
+     * Exercises [Chunker], [TransferSender], [TransferAssembler] end-to-end.
+     */
+    @Serializable @SerialName("chunk-reassembly")
+    data class ChunkReassembly(val minReassembled: Int) : Assertion()
 }
