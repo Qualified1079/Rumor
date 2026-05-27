@@ -65,6 +65,10 @@ class SimNode(
         scheduler       = scheduler,
         inboxFilter     = inboxFilter,
         scope           = scope,
+        // Flush relayed messages immediately — real wall-clock delay (100–500 ms)
+        // would equal 1–5 sim-seconds at speedMult=10, breaking multi-hop propagation.
+        relayBatchMinWindowMs = 1L,
+        relayBatchSpreadMs    = 1L,
     )
 
     // ── Metrics state exposed to SimWorld / dashboard ─────────────────────────

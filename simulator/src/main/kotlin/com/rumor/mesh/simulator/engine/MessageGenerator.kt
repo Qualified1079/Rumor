@@ -23,9 +23,21 @@ class MessageGenerator(
 ) {
     private val seq = AtomicLong(System.currentTimeMillis())
 
-    fun generate(rng: Random): RumorMessage? {
-        if (rng.nextDouble() >= profile.msgPerSecond / profile.ticksPerSecond) return null
+    /**
+     * Returns how many messages this node should originate on a tick that
+     * represents [simSecondsPerTick] of sim time. The integer part is emitted
+     * deterministically; the fractional part is a coin toss. This lets the
+     * caller stay correct as sim speed changes — at speedMult=10 a tick is
+     * 1.0 sim-sec, so msgPerSecond=2.0 means 2 messages per tick on average.
+     */
+    fun messagesThisTick(rng: Random, simSecondsPerTick: Double): Int {
+        val expected = profile.msgPerSecond * simSecondsPerTick
+        val whole = expected.toInt()
+        val frac = expected - whole
+        return whole + (if (rng.nextDouble() < frac) 1 else 0)
+    }
 
+    fun generate(rng: Random): RumorMessage {
         val payloadBytes = profile.samplePayloadSize(rng)
         val contentType  = profile.sampleContentType(rng)
         val content      = "x".repeat(payloadBytes)   // synthetic body
@@ -37,7 +49,7 @@ class MessageGenerator(
             sequenceNumber   = seq.getAndIncrement(),
             sentAtMs         = System.currentTimeMillis(),
             type             = MessageType.BROADCAST,
-            hopsToLive              = 7,
+            hopsToLive       = profile.hopsToLive,
             payload          = MessagePayload(contentType, content),
             signature        = "",
         )
@@ -62,11 +74,10 @@ class MessageGenerator(
 data class TrafficProfile(
     /** Average messages generated per second per node. */
     @Volatile var msgPerSecond:   Double = 0.5,
-    /** Sim ticks per second (controls granularity of the Poisson check). */
-    val ticksPerSecond:           Int    = 10,
     /** Payload size distribution bounds in bytes. */
     @Volatile var minPayloadBytes: Int = 50,
     @Volatile var maxPayloadBytes: Int = 500,
+    @Volatile var hopsToLive:      Int = 7,
     /** Probability of a burst this tick — generates [burstMultiplier] messages at once. */
     @Volatile var burstProbability: Double = 0.01,
     @Volatile var burstMultiplier:  Int    = 5,

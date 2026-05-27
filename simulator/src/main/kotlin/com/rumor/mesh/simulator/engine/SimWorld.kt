@@ -172,20 +172,23 @@ class SimWorld(val params: SimParamRegistry) {
         val rng   = Random(_simTimeMs.value xor params.seed.value)
 
         // 1. Generate traffic from each node (skip killed ones — scenario events).
+        val simSecondsPerTick = tickDurationMs / 1000.0
         for (node in nodes) {
             if (node.index in killedNodes) continue
             val profile = TrafficProfile(
                 msgPerSecond     = params.msgPerSecondPerNode.value,
                 minPayloadBytes  = params.minPayloadBytes.value,
                 maxPayloadBytes  = params.maxPayloadBytes.value,
+                hopsToLive       = params.hopsToLive.value,
                 burstProbability = params.burstProbability.value,
                 burstMultiplier  = params.burstMultiplier.value,
             )
             val identity = node.identityProvider.identity.value ?: continue
             val gen = MessageGenerator(identity, profile)
-            val count = if (rng.nextDouble() < profile.burstProbability) profile.burstMultiplier else 1
-            repeat(count) {
-                val msg = gen.generate(rng) ?: return@repeat
+            val base = gen.messagesThisTick(rng, simSecondsPerTick)
+            val burstMult = if (rng.nextDouble() < profile.burstProbability) profile.burstMultiplier else 1
+            repeat(base * burstMult) {
+                val msg = gen.generate(rng)
                 node.gossipEngine.injectFromPlugin(msg, "sim-generator")
                 node.recordProcessed()
             }

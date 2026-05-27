@@ -79,6 +79,14 @@ class GossipEngine(
     val canaryMetrics: CanaryMetrics = CanaryMetrics(),
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
     private val dmEnvelopeRegistry: DmEnvelopeRegistry = DmEnvelopeRegistry(),
+    /**
+     * Relay-batcher window. Defaults to 100-500ms wall-clock for timing-correlation
+     * resistance. The simulator overrides this to a near-zero window because its
+     * sim-time runs ~100× wall-time at speedMult=10 and a 100ms wall delay turns
+     * into 10 sim-seconds — long enough to break 2-hop propagation in scenarios.
+     */
+    private val relayBatchMinWindowMs: Long = RelayBatcher.MIN_WINDOW_MS,
+    private val relayBatchSpreadMs: Long = RelayBatcher.SPREAD_MS,
 ) {
     private val sequenceCounter = AtomicLong(System.currentTimeMillis())
 
@@ -113,7 +121,11 @@ class GossipEngine(
     private val bridgedSenderPins = ConcurrentHashMap<String, ByteArray>()
 
     /** Relayed messages are buffered here before being committed to the scheduler. */
-    private val relayBatcher = RelayBatcher(scope) { batch ->
+    private val relayBatcher = RelayBatcher(
+        scope = scope,
+        minWindowMs = relayBatchMinWindowMs,
+        spreadMs = relayBatchSpreadMs,
+    ) { batch ->
         batch.forEach { scheduler.enqueue(it) }
         canaryMetrics.publish(scheduler.queueDepth)
     }
