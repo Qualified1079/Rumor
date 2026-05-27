@@ -7,6 +7,11 @@ import kotlin.math.ln
 /**
  * Minimal Bloom filter for gossip message ID exchange.
  * Uses double hashing (two independent hash functions derived from one).
+ *
+ * Lives in :core so both the Android transport (GossipSession) and the
+ * simulator (SimTransport) exercise the same code path. False positives are
+ * the protocol's primary failure mode at scale — a peer that thinks it has
+ * a message it doesn't will silently miss it forever.
  */
 class BloomFilterData(
     expectedItems: Int,

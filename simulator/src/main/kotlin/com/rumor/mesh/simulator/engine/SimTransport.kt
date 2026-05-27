@@ -2,7 +2,17 @@ package com.rumor.mesh.simulator.engine
 
 import com.rumor.mesh.core.protocol.PeerExchangeResult
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.transport.wifidirect.BloomFilterData
 import kotlin.random.Random
+
+/**
+ * Mirrors the on-wire exchange: A serializes a Bloom of its known IDs, sends
+ * it to B; B picks the messages A "might not have" and sends them back. False
+ * positives in the bloom mean B never offers some messages — over many
+ * exchanges they propagate via different paths, but a poorly-chosen
+ * falsePositiveRate is exactly the kind of bug worth catching here.
+ */
+private const val BLOOM_FALSE_POSITIVE_RATE = 0.01
 
 /**
  * In-process transport between two [SimNode]s. Applies [NetworkConditioner]
@@ -39,26 +49,16 @@ class SimTransport(
         var messagesBtoA = 0
         var dropped = 0
 
-        // Offer from messageRepo, not from the scheduler.
-        //
-        // The scheduler's destructive take (remove-on-read) means messages offered
-        // to peer A are gone before peer B can receive them. For a sim where every
-        // edge exchanges every tick, that breaks multi-hop propagation entirely.
-        // Using the repo snapshot instead mirrors the actual gossip intent: "offer
-        // what I know; you filter what you already have." The scheduler remains in
-        // use by the real GossipEngine relay pipeline, just not for sim exchange offers.
+        // Bloom-filter offer/request, mirroring GossipSession on the wire.
+        // Each side builds a bloom of its known IDs, the peer offers messages
+        // the bloom says "mightContain == false". Bloom false positives mean
+        // some messages are silently skipped this exchange — over many edges
+        // they reach via other paths, but a too-loose falsePositiveRate or a
+        // too-small expectedItems will starve propagation. That's exactly the
+        // class of bug worth catching here.
 
-        // A → B
-        val knownB  = nodeB.knownIds()
-        val toSendA = nodeA.knownMessages()
-            .filter { it.id !in knownB }
-            .take(MAX_OFFER_PER_EXCHANGE)
-        val deliveredA = mutableListOf<RumorMessage>()
-        for (msg in toSendA) {
-            if (conditioner.simulate(estimatedBytes(msg), rng) == null) { dropped++; continue }
-            deliveredA.add(msg)
-            messagesAtoB++
-        }
+        val deliveredA = exchangeOneDirection(nodeA, nodeB, rng) { dropped++ }
+        messagesAtoB = deliveredA.size
         if (deliveredA.isNotEmpty()) {
             nodeB.deliverExchange(PeerExchangeResult(
                 peerUserId       = nodeA.userId,
@@ -69,17 +69,8 @@ class SimTransport(
             ))
         }
 
-        // B → A
-        val knownA  = nodeA.knownIds()
-        val toSendB = nodeB.knownMessages()
-            .filter { it.id !in knownA }
-            .take(MAX_OFFER_PER_EXCHANGE)
-        val deliveredB = mutableListOf<RumorMessage>()
-        for (msg in toSendB) {
-            if (conditioner.simulate(estimatedBytes(msg), rng) == null) { dropped++; continue }
-            deliveredB.add(msg)
-            messagesBtoA++
-        }
+        val deliveredB = exchangeOneDirection(nodeB, nodeA, rng) { dropped++ }
+        messagesBtoA = deliveredB.size
         if (deliveredB.isNotEmpty()) {
             nodeA.deliverExchange(PeerExchangeResult(
                 peerUserId       = nodeB.userId,
@@ -91,6 +82,43 @@ class SimTransport(
         }
 
         return ExchangeMetrics(messagesAtoB, messagesBtoA, dropped, System.currentTimeMillis() - start)
+    }
+
+    /**
+     * Sender [src] offers messages [dst] doesn't (per [dst]'s bloom filter)
+     * up to [MAX_OFFER_PER_EXCHANGE]. Returns the messages that survived the
+     * network conditioner; calls [onDrop] once per dropped message.
+     */
+    private fun exchangeOneDirection(
+        src: SimNode,
+        dst: SimNode,
+        rng: Random,
+        onDrop: () -> Unit,
+    ): List<RumorMessage> {
+        val dstKnownIds = dst.knownIds()
+        if (dstKnownIds.isEmpty()) {
+            // First exchange — no bloom needed, send everything (capped).
+            return src.knownMessages().take(MAX_OFFER_PER_EXCHANGE).filter { msg ->
+                conditioner.simulate(estimatedBytes(msg), rng).also { if (it == null) onDrop() } != null
+            }
+        }
+        // Build a real Bloom from dst's known IDs, serialize+deserialize so
+        // the same code path runs as on the wire (catches encoding bugs).
+        val bloom = BloomFilterData(
+            expectedItems = dstKnownIds.size.coerceAtLeast(64),
+            falsePositiveRate = BLOOM_FALSE_POSITIVE_RATE,
+        )
+        for (id in dstKnownIds) bloom.add(id)
+        val onWire = BloomFilterData.deserialize(bloom.serialize(), dstKnownIds.size.coerceAtLeast(64))
+
+        return src.knownMessages()
+            .asSequence()
+            .filter { !onWire.mightContain(it.id) }
+            .take(MAX_OFFER_PER_EXCHANGE)
+            .filter { msg ->
+                conditioner.simulate(estimatedBytes(msg), rng).also { if (it == null) onDrop() } != null
+            }
+            .toList()
     }
 
     companion object {
