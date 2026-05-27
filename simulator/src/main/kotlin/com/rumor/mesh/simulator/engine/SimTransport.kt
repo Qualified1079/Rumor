@@ -39,10 +39,20 @@ class SimTransport(
         var messagesBtoA = 0
         var dropped = 0
 
+        // Offer from messageRepo, not from the scheduler.
+        //
+        // The scheduler's destructive take (remove-on-read) means messages offered
+        // to peer A are gone before peer B can receive them. For a sim where every
+        // edge exchanges every tick, that breaks multi-hop propagation entirely.
+        // Using the repo snapshot instead mirrors the actual gossip intent: "offer
+        // what I know; you filter what you already have." The scheduler remains in
+        // use by the real GossipEngine relay pipeline, just not for sim exchange offers.
+
         // A → B
-        val outboundA = nodeA.takeOutbound(nodeB.userId)
-        val knownB    = nodeB.knownIds()
-        val toSendA   = outboundA.filter { it.id !in knownB }
+        val knownB  = nodeB.knownIds()
+        val toSendA = nodeA.knownMessages()
+            .filter { it.id !in knownB }
+            .take(MAX_OFFER_PER_EXCHANGE)
         val deliveredA = mutableListOf<RumorMessage>()
         for (msg in toSendA) {
             if (conditioner.simulate(estimatedBytes(msg), rng) == null) { dropped++; continue }
@@ -51,18 +61,19 @@ class SimTransport(
         }
         if (deliveredA.isNotEmpty()) {
             nodeB.deliverExchange(PeerExchangeResult(
-                peerUserId      = nodeA.userId,
+                peerUserId       = nodeA.userId,
                 messagesReceived = deliveredA,
-                ackedByPeer     = emptyList(),
-                peerOnlineUsers = mapOf(nodeA.userId to System.currentTimeMillis()),
-                durationMs      = System.currentTimeMillis() - start,
+                ackedByPeer      = emptyList(),
+                peerOnlineUsers  = mapOf(nodeA.userId to System.currentTimeMillis()),
+                durationMs       = System.currentTimeMillis() - start,
             ))
         }
 
         // B → A
-        val outboundB = nodeB.takeOutbound(nodeA.userId)
-        val knownA    = nodeA.knownIds()
-        val toSendB   = outboundB.filter { it.id !in knownA }
+        val knownA  = nodeA.knownIds()
+        val toSendB = nodeB.knownMessages()
+            .filter { it.id !in knownA }
+            .take(MAX_OFFER_PER_EXCHANGE)
         val deliveredB = mutableListOf<RumorMessage>()
         for (msg in toSendB) {
             if (conditioner.simulate(estimatedBytes(msg), rng) == null) { dropped++; continue }
@@ -82,14 +93,17 @@ class SimTransport(
         return ExchangeMetrics(messagesAtoB, messagesBtoA, dropped, System.currentTimeMillis() - start)
     }
 
+    companion object {
+        /** Per-exchange offer cap. Limits snapshot scanning on large scenarios. */
+        const val MAX_OFFER_PER_EXCHANGE = 200
+
+        fun edgeKey(a: Int, b: Int) = "${minOf(a, b)}-${maxOf(a, b)}"
+    }
+
     private fun estimatedBytes(msg: RumorMessage): Int =
         256 + (msg.payload?.content?.length ?: 0) + (msg.encryptedPayload?.length ?: 0)
 
     val edgeKey: String = edgeKey(nodeA.index, nodeB.index)
-
-    companion object {
-        fun edgeKey(a: Int, b: Int) = "${minOf(a, b)}-${maxOf(a, b)}"
-    }
 }
 
 data class ExchangeMetrics(
