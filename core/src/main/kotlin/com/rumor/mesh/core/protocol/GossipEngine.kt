@@ -26,10 +26,10 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_HOPS = 7
@@ -307,7 +307,7 @@ class GossipEngine(
         originalSenderId: String,
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
-        val body = Json.encodeToString(ChunkRequest(transferId, missingIndices))
+        val body = WireJson.encodeToString(ChunkRequest(transferId, missingIndices))
         val msg = buildMessage(
             identity = identity,
             type = MessageType.CHUNK_REQUEST,

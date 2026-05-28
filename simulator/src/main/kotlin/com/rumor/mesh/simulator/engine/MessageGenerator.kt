@@ -59,7 +59,9 @@ class MessageGenerator(
 
     // Must match MessageStore.signableBytes — hopsToLive is excluded because
     // it mutates on every relay and would invalidate the signature otherwise.
+    // The `rumor-msg-v1:` domain tag matches MessageStore.signableBytes (O37).
     private fun signableBytes(msg: RumorMessage): ByteArray = buildString {
+        append("rumor-msg-v1:")
         append(msg.id); append(msg.senderId); append(msg.senderPublicKey)
         append(msg.sequenceNumber); append(msg.sentAtMs); append(msg.type.name)
         append(msg.payload?.content ?: "")

@@ -19,8 +19,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.util.Base64
+import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "TransferSender"
 
@@ -45,7 +45,7 @@ class TransferSender(
                 val localId = identityProvider.identity.value?.userId ?: return@collect
                 if (msg.recipientId != localId) return@collect
                 val req = runCatching {
-                    Json.decodeFromString<ChunkRequest>(msg.payload?.content ?: return@collect)
+                    WireJson.decodeFromString<ChunkRequest>(msg.payload?.content ?: return@collect)
                 }.getOrNull() ?: return@collect
                 handleChunkRequest(req, requesterId = msg.senderId)
             }
@@ -94,13 +94,13 @@ class TransferSender(
 
         gossipEngine.composeOutbound(
             type = MessageType.TRANSFER_METADATA,
-            payload = MessagePayload(ContentType.CONTROL, Json.encodeToString(metadata)),
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(metadata)),
             recipientId = recipientId,
         )
         for (chunk in chunks) {
             gossipEngine.composeOutbound(
                 type = MessageType.CHUNK,
-                payload = MessagePayload(ContentType.CONTROL, Json.encodeToString(chunk)),
+                payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(chunk)),
                 recipientId = recipientId,
             )
         }
@@ -128,7 +128,7 @@ class TransferSender(
             )
             gossipEngine.composeOutbound(
                 type = MessageType.CHUNK,
-                payload = MessagePayload(ContentType.CONTROL, Json.encodeToString(chunk)),
+                payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(chunk)),
                 recipientId = transfer.recipientId,
             )
         }

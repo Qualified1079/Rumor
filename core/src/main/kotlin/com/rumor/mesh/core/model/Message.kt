@@ -2,6 +2,7 @@ package com.rumor.mesh.core.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /** Wire-format message — exactly what travels between nodes. */
 @Serializable
@@ -27,6 +28,14 @@ data class RumorMessage(
     val recipientId: String? = null,
     /** Ed25519 signature over all other fields (Base64). */
     val signature: String,
+    /**
+     * Reserved forward-compat carrier. v0.1 ignores; v0.2+ uses for additive
+     * fields without bumping `protocolVersion`. NOT covered by [signature] —
+     * any security-relevant value placed here must self-authenticate. Survives
+     * relay because `data class.copy()` preserves it through `decrementHops`.
+     */
+    @SerialName("_ext")
+    val ext: Map<String, JsonElement>? = null,
     /**
      * How this node established trust in the message. Set by [GossipEngine] from
      * the ingress transport — never travels on the wire, so a peer cannot assert

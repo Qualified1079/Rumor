@@ -2,6 +2,7 @@ package com.rumor.mesh.core.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /**
  * Payload for a TRANSFER_METADATA message. Sent first to announce a chunked transfer.
@@ -23,6 +24,8 @@ data class TransferMetadata(
     val contentHash: String,
     /** Non-null for a direct (targeted) transfer; null for a broadcast transfer. */
     val recipientId: String? = null,
+    /** Reserved forward-compat carrier. See [RumorMessage.ext]. */
+    @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
 )
 
 /**
@@ -37,6 +40,8 @@ data class Chunk(
     val totalChunks: Int,
     /** Base64-encoded raw bytes for this slice of the original payload. */
     val data: String,
+    /** Reserved forward-compat carrier. See [RumorMessage.ext]. */
+    @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
 )
 
 /**
@@ -48,6 +53,8 @@ data class ChunkRequest(
     val transferId: String,
     /** Indices the receiver still needs. Sender retransmits only these. */
     val missingIndices: List<Int>,
+    /** Reserved forward-compat carrier. See [RumorMessage.ext]. */
+    @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
 )
 
 /** Lifecycle state of a chunked transfer tracked in local storage. */

@@ -2,6 +2,7 @@ package com.rumor.mesh.core.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /**
  * Wire-format types for blocklist publishing and subscription.
@@ -23,6 +24,8 @@ data class Blocklist(
     val entries: List<String>,
     /** Ed25519 signature over (publisherId || version || sorted entries) with domain tag "rumor-blocklist-v1:". */
     val signature: String,
+    /** Reserved forward-compat carrier. Not covered by [signature]. See [RumorMessage.ext]. */
+    @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
 )
 
 /**
@@ -40,6 +43,8 @@ data class BlocklistDiff(
     val removed: List<String>,
     /** Ed25519 signature over (publisherId || fromVersion || toVersion || sorted added || sorted removed) with domain tag "rumor-blocklist-diff-v1:". */
     val signature: String,
+    /** Reserved forward-compat carrier. Not covered by [signature]. See [RumorMessage.ext]. */
+    @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
 )
 
 /** Subscription mode for an external blocklist. */

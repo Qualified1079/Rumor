@@ -19,9 +19,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
+import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "TransferAssembler"
 private const val NACK_INITIAL_DELAY_MS = 60_000L
@@ -50,13 +50,13 @@ class TransferAssembler(
                 when (msg.type) {
                     MessageType.TRANSFER_METADATA -> {
                         val meta = runCatching {
-                            Json.decodeFromString<TransferMetadata>(msg.payload?.content ?: return@collect)
+                            WireJson.decodeFromString<TransferMetadata>(msg.payload?.content ?: return@collect)
                         }.getOrNull() ?: return@collect
                         handleMetadata(meta, senderUserId = msg.senderId)
                     }
                     MessageType.CHUNK -> {
                         val chunk = runCatching {
-                            Json.decodeFromString<Chunk>(msg.payload?.content ?: return@collect)
+                            WireJson.decodeFromString<Chunk>(msg.payload?.content ?: return@collect)
                         }.getOrNull() ?: return@collect
                         handleChunk(chunk)
                     }

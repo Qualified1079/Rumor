@@ -109,9 +109,15 @@ class MessageStore(
      * every relay via decrementHops — if it were in the signed set, the
      * signature would become invalid after one hop and the message would
      * be dropped at every downstream node). Also excludes the signature
-     * field itself.
+     * field itself and the forward-compat `_ext` map (see [RumorMessage.ext]).
+     *
+     * Prefixed with the `rumor-msg-v1:` domain tag so a sig produced here can
+     * never be replayed as a sig in another protocol context (HELLO challenge,
+     * blocklist record, future message-v2 envelope). Bump the tag only when
+     * the canonical-byte layout itself changes, never for additive fields.
      */
     fun signableBytes(msg: RumorMessage): ByteArray = buildString {
+        append("rumor-msg-v1:")
         append(msg.id)
         append(msg.senderId)
         append(msg.senderPublicKey)

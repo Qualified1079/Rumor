@@ -8,8 +8,8 @@ import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.helloChallengeBytes
 import com.rumor.mesh.core.logging.RumorLog
 import kotlinx.coroutines.withTimeout
+import com.rumor.mesh.core.wire.WireJson
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.Socket
@@ -60,10 +60,19 @@ class GossipSession(
      */
     private val BLOOM_THRESHOLD = 500
 
-    private val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = true
-        classDiscriminator = "type"
+    private val json get() = WireJson
+
+    companion object {
+        /** Wire-format version this build emits. */
+        const val LOCAL_PROTOCOL_VERSION: Int = 1
+        /** Highest wire-format version this build can parse. Session uses `min(mine, theirs)`. */
+        const val LOCAL_MAX_PROTOCOL_VERSION: Int = 1
+        /**
+         * Capability flags this build advertises. Empty for v0.1. Future builds
+         * advertise feature names (e.g. `"negentropy-v1"`, `"sealed-sender-v1"`)
+         * and gate optional behavior on presence in the peer's set.
+         */
+        val LOCAL_SUPPORTED_FEATURES: List<String> = emptyList()
     }
 
     data class SessionResult(
@@ -91,9 +100,17 @@ class GossipSession(
             val out = DataOutputStream(socket.getOutputStream().buffered())
             val inp = DataInputStream(socket.getInputStream().buffered())
 
-            // Phase 1: HELLO — exchange identities + challenge nonces
+            // Phase 1: HELLO — exchange identities + challenge nonces + version bits
             val ourNonce = ByteArray(32).also { SecureRandom().nextBytes(it) }.toBase64()
-            send(out, GossipPacket.Hello(localUserId, localPublicKey, ourNonce))
+            val ourHello = GossipPacket.Hello(
+                userId = localUserId,
+                publicKey = localPublicKey,
+                nonce = ourNonce,
+                protocolVersion = LOCAL_PROTOCOL_VERSION,
+                maxProtocolVersion = LOCAL_MAX_PROTOCOL_VERSION,
+                supportedFeatures = LOCAL_SUPPORTED_FEATURES,
+            )
+            send(out, ourHello)
             val hello = receive(inp) as? GossipPacket.Hello
                 ?: run { RumorLog.w(TAG, "Expected HELLO, got something else"); return@withTimeout null }
             RumorLog.d(TAG, "Handshake with ${hello.userId.take(16)}…")
@@ -108,15 +125,29 @@ class GossipSession(
                 return@withTimeout null
             }
 
-            // Phase 1b: HELLO_PROOF — each side signs the other's nonce
-            val ourProof = signer(helloChallengeBytes(hello.nonce))
+            // Phase 1b: HELLO_PROOF — each side signs the other's nonce bound to
+            // that side's claimed version bits. A downgrade-MITM that strips the
+            // peer's supportedFeatures would invalidate the proof we verify below.
+            val ourChallenge = helloChallengeBytes(
+                nonceBase64 = hello.nonce,
+                protocolVersion = ourHello.protocolVersion,
+                maxProtocolVersion = ourHello.maxProtocolVersion,
+                supportedFeatures = ourHello.supportedFeatures,
+            )
+            val ourProof = signer(ourChallenge)
                 ?: run { RumorLog.w(TAG, "Local signer unavailable"); return@withTimeout null }
             send(out, GossipPacket.HelloProof(ourProof.toBase64()))
             val proof = receive(inp) as? GossipPacket.HelloProof
                 ?: run { RumorLog.w(TAG, "Expected HELLO_PROOF"); return@withTimeout null }
             val proofBytes = try { proof.signature.fromBase64() }
                 catch (e: Exception) { RumorLog.w(TAG, "Bad proof encoding"); return@withTimeout null }
-            if (!CryptoManager.verify(helloChallengeBytes(ourNonce), proofBytes, peerPubKeyBytes)) {
+            val peerChallenge = helloChallengeBytes(
+                nonceBase64 = ourNonce,
+                protocolVersion = hello.protocolVersion,
+                maxProtocolVersion = hello.maxProtocolVersion,
+                supportedFeatures = hello.supportedFeatures,
+            )
+            if (!CryptoManager.verify(peerChallenge, proofBytes, peerPubKeyBytes)) {
                 RumorLog.w(TAG, "Peer ${hello.userId.take(16)}… failed challenge — aborting")
                 return@withTimeout null
             }

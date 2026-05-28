@@ -7,12 +7,12 @@ import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.protocol.GossipEngine
+import com.rumor.mesh.core.wire.WireJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
 private const val TAG = "BlocklistGossipBridge"
 
@@ -37,7 +37,7 @@ class BlocklistGossipBridge(
     }
 
     private suspend fun handleSnapshot(json: String) {
-        val snapshot = runCatching { Json.decodeFromString<Blocklist>(json) }.getOrNull() ?: return
+        val snapshot = runCatching { WireJson.decodeFromString<Blocklist>(json) }.getOrNull() ?: return
         if (subscriber.applySnapshot(snapshot)) {
             RumorLog.i(TAG, "Applied snapshot v${snapshot.version} from ${snapshot.publisherId.take(16)}…")
             blockManager.refreshExternal()
@@ -45,7 +45,7 @@ class BlocklistGossipBridge(
     }
 
     private suspend fun handleDiff(json: String) {
-        val diff = runCatching { Json.decodeFromString<BlocklistDiff>(json) }.getOrNull() ?: return
+        val diff = runCatching { WireJson.decodeFromString<BlocklistDiff>(json) }.getOrNull() ?: return
         if (subscriber.applyDiff(diff)) {
             RumorLog.i(TAG, "Applied diff ${diff.fromVersion}→${diff.toVersion} from ${diff.publisherId.take(16)}…")
             blockManager.refreshExternal()
@@ -56,7 +56,7 @@ class BlocklistGossipBridge(
         val snapshot = publisher.publish() ?: return
         gossipEngine.composeOutbound(
             type = MessageType.BLOCKLIST_PUBLISH,
-            payload = MessagePayload(ContentType.CONTROL, Json.encodeToString(snapshot)),
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(snapshot)),
         )
         RumorLog.i(TAG, "Published snapshot v${snapshot.version} (${snapshot.entries.size} entries)")
     }
@@ -65,7 +65,7 @@ class BlocklistGossipBridge(
         val diff = publisher.publishDiff(fromVersion, previousEntries) ?: return
         gossipEngine.composeOutbound(
             type = MessageType.BLOCKLIST_DIFF,
-            payload = MessagePayload(ContentType.CONTROL, Json.encodeToString(diff)),
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(diff)),
         )
         RumorLog.i(TAG, "Published diff ${diff.fromVersion}→${diff.toVersion}")
     }
