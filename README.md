@@ -539,9 +539,10 @@ These work well alongside Rumor on the same device:
 
 ## Known limitations
 
-- **DM decryption in UI:** Encrypted DMs currently display as `[encrypted]` in the Messages list and Thread screen. The wire format is correct and the encrypted payload is stored; a decrypt helper needs to be wired from `CryptoManager` through `MessageStore` into `ThreadViewModel`.
-- **Priority link persistent connection:** The `isPriorityPeer` flag, message types, and handshake are fully implemented. The transport-layer behaviour (skipping `removeGroup()` for priority peers to hold the Wi-Fi Direct connection between gossip rounds) is not yet wired in `WifiDirectTransport`.
-- **LoRa bridges:** `MeshtasticBridge` and `MeshCoreBridge` are intentional stubs. Frame parsing and protobuf encode/decode are marked with `// TODO` comments throughout both files.
+- **Persistent priority-link connection at transport layer:** The `isPriorityPeer` flag, compose/accept messages, and reconnect watcher are wired (priority peers are tracked and rediscovered with exponential backoff after a Wi-Fi Direct disconnect). What's not yet done is holding the Wi-Fi Direct group open *across* gossip-session boundaries — sessions today are still one-off exchanges, just with priority-peer-aware reconnection.
+- **LoRa bridges — DM bridging and USB transport:** `MeshtasticBridge` and `MeshCoreBridge` ship working BLE codecs (Meshtastic via `MeshPacket.decoded`, MeshCore via v3 BLE-NUS opcodes) and bridge `TEXT_MESSAGE_APP` / channel broadcasts. Not yet implemented: USB serial/CDC transport, DM bridging via PKC (framework in place via the pluggable `DmEnvelope` registry), multi-channel selection UI, device picker for multi-radio setups, MeshCore v1/v2 firmware fallback.
+- **Threat model and overclaims:** Rumor is not Tor and not Signal. It provides better privacy than centralized messengers (no server, no phone number, end-to-end encrypted) but weaker anonymity than Tor (a co-located observer with multiple radios can correlate traffic; userId is on the wire for signature verification). A formal threat-model page is pending (CLAUDE.md O34); until then, do not use Rumor as a sole defence against a state-level adversary targeting you specifically.
+- **Backlog:** Living list of open items, design decisions, and completed gaps lives in `CLAUDE.md`. Notable open work: receiver-side forward secrecy (currently sender-FS only), DM breadcrumb routing (today's DMs are flooded with bounded TTL), pre-crisis contact onboarding flow, identity backup/recovery, plugin runtime loader.
 
 ---
 
