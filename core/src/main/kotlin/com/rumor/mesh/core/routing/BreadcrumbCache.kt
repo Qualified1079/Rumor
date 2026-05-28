@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Tier-1 routing substrate (O29). Records "I received a message from
@@ -25,7 +26,24 @@ class BreadcrumbCache(
     private val TAG = "BreadcrumbCache"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    /**
+     * In-memory mirror of the persistent breadcrumb store, keyed by target
+     * userId → ordered list of recent peer userIds (freshest first, capped).
+     * Lets non-suspend callers (`messagesForExchange`, scheduler bias logic)
+     * consult breadcrumbs synchronously. Updated on every [record]; survives
+     * the lifetime of this process. Cold-start after app launch: empty until
+     * something arrives.
+     */
+    private val snapshot = ConcurrentHashMap<String, List<String>>()
+    private val SNAPSHOT_LIMIT = 5
+
     fun record(targetUserId: String, fromPeerId: String, hopCount: Int = 1) {
+        // Update the synchronous snapshot first so callers see the change
+        // immediately, even before the persistent upsert finishes.
+        snapshot.compute(targetUserId) { _, existing ->
+            val deduped = (listOf(fromPeerId) + (existing ?: emptyList()).filter { it != fromPeerId })
+            deduped.take(SNAPSHOT_LIMIT)
+        }
         scope.launch {
             val crumb = Breadcrumb(
                 targetUserId = targetUserId,
@@ -38,6 +56,16 @@ class BreadcrumbCache(
             RumorLog.d(TAG, "Crumb: ${targetUserId.take(8)}… ← ${fromPeerId.take(8)}…")
         }
     }
+
+    /**
+     * Synchronous non-suspend candidates lookup against the in-memory
+     * [snapshot]. For use from hot non-suspend code paths like
+     * [com.rumor.mesh.core.protocol.GossipEngine.messagesForExchange]. Cold
+     * cache returns empty list. The persistent [candidatePeers] is the
+     * ground truth across restarts.
+     */
+    fun candidatePeersSync(targetUserId: String, limit: Int = 3): List<String> =
+        snapshot[targetUserId]?.take(limit) ?: emptyList()
 
     suspend fun nextHop(targetUserId: String): String? =
         breadcrumbRepo.getLatest(targetUserId)?.arrivedFromPeerId

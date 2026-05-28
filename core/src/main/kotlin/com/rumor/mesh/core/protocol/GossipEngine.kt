@@ -449,7 +449,21 @@ class GossipEngine(
             overlap >= 0.5f -> 100
             else            -> 200   // novel peer or unknown — send the full batch
         }
-        return scheduler.take(cap)
+        val batch = scheduler.take(cap)
+
+        // O29 routing bias: DMs whose breadcrumb candidates include this peer
+        // float to the front of the batch. Stable-partition preserves scheduler
+        // order within each class. Non-DMs and DMs with no breadcrumb match
+        // keep their original ordering. Ordering bias only — does NOT exclude
+        // messages from any peer (a stale breadcrumb shouldn't strand a DM).
+        // Skip if no breadcrumbs wired (preserves baseline behaviour).
+        if (breadcrumbs == null) return batch
+        val (preferred, rest) = batch.partition { msg ->
+            msg.type == MessageType.DIRECT &&
+                msg.recipientId != null &&
+                peerUserId in breadcrumbs.candidatePeersSync(msg.recipientId)
+        }
+        return preferred + rest
     }
     fun knownMessageIds(): Set<String> = duplicateFilter.knownIds()
     val queueDepth: Int get() = scheduler.queueDepth
