@@ -106,6 +106,21 @@ class InMemoryContactRepository : ContactRepository {
         contacts[userId]?.let { contacts[userId] = it.copy(isPriorityPeer = enabled) }
     }
     override suspend fun getPriorityPeers(): List<Contact> = contacts.values.filter { it.isPriorityPeer }
+
+    override suspend fun rebindIdentity(
+        oldUserId: String,
+        newUserId: String,
+        newPublicKey: String,
+    ): Boolean {
+        val existing = contacts.remove(oldUserId) ?: return false
+        contacts[newUserId] = existing.copy(
+            userId = newUserId,
+            publicKey = newPublicKey,
+            lastSeenMs = System.currentTimeMillis(),
+        )
+        _flow.value = contacts.values.toList()
+        return true
+    }
 }
 
 // ── RouteRepository ───────────────────────────────────────────────────────────

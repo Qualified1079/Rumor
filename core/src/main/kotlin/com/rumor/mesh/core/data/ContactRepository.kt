@@ -19,4 +19,12 @@ interface ContactRepository {
     suspend fun getAutoRelayContacts(): List<Contact>
     suspend fun setPriorityPeer(userId: String, enabled: Boolean)
     suspend fun getPriorityPeers(): List<Contact>
+    /**
+     * Atomically rebind a contact's identity to a new userId / publicKey pair
+     * after an [com.rumor.mesh.core.model.MessageType.IDENTITY_ROTATION] has
+     * verified. Preserves all per-contact state (display name, autorelay,
+     * priority-peer, etc.). Returns true if the contact existed and was
+     * rebound; false if no contact with [oldUserId] was on file. See O41.
+     */
+    suspend fun rebindIdentity(oldUserId: String, newUserId: String, newPublicKey: String): Boolean
 }
