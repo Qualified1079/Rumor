@@ -96,6 +96,15 @@ enum class MessageType {
      * new userId locally. See O41.
      */
     @SerialName("identity_rotation") IDENTITY_ROTATION,
+    /**
+     * Self-presence beacon (O30 + O57). Sender declares its current [UserMode]
+     * to the mesh — entry-pulse on mode-up (going Static/Free), exit-pulse on
+     * mode-down (back to Mobile). Mesh peers consume this to weight the sender
+     * as a routing anchor (Static, Free) or drop the anchor weight immediately
+     * (exit pulse). Self-only: a node beacons its OWN mode; never relays
+     * someone else's mode for them.
+     */
+    @SerialName("self_presence") SELF_PRESENCE,
 }
 
 @Serializable
@@ -178,7 +187,8 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.BLOCKLIST_DIFF,
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT,
-            MessageType.IDENTITY_ROTATION -> TrafficClass.INFRASTRUCTURE
+            MessageType.IDENTITY_ROTATION,
+            MessageType.SELF_PRESENCE -> TrafficClass.INFRASTRUCTURE
             // A full blocklist snapshot is bulky sync data, not handshake-tier
             // traffic — only the small incremental diff stays INFRASTRUCTURE.
             MessageType.TRANSFER_METADATA,

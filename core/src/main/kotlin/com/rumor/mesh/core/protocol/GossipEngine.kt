@@ -5,6 +5,8 @@ import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
 import com.rumor.mesh.core.model.IdentityRotationPayload
+import com.rumor.mesh.core.model.SelfPresencePayload
+import com.rumor.mesh.core.model.UserMode
 import com.rumor.mesh.core.model.identityRotationSignableBytes
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.identity.IdentityProvider
@@ -432,6 +434,40 @@ class GossipEngine(
         return msg
     }
 
+    /**
+     * Compose and broadcast a [MessageType.SELF_PRESENCE] beacon (O30 + O57).
+     * The sender declares its current [mode] to the mesh. Used both as the
+     * entry pulse when going Static or Free, and as the symmetric exit pulse
+     * (mode = MOBILE) when leaving a higher mode — without the exit pulse,
+     * peers continue to route through a ghost anchor for the full presence-
+     * decay window.
+     *
+     * [recentlyExchangedWith] is the optional O31 route advertisement payload;
+     * pass an empty list (the default) unless the user has opted into Tier-3
+     * broadcast routing-visibility for their own visibility (typically Free
+     * mode). The receiver decides how to weight this list given its own
+     * O58 visibility settings.
+     */
+    fun composeSelfPresence(
+        mode: UserMode,
+        recentlyExchangedWith: List<String> = emptyList(),
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val payload = SelfPresencePayload(
+            mode = mode,
+            authorizedAtMs = System.currentTimeMillis(),
+            recentlyExchangedWith = recentlyExchangedWith,
+        )
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.SELF_PRESENCE,
+            hopsToLive = DEFAULT_BROADCAST_HOPS,
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(payload)),
+        )
+        enqueueImmediate(msg)
+        return msg
+    }
+
     // ── Transport supply ──────────────────────────────────────────────────────
 
     /**
@@ -632,7 +668,8 @@ class GossipEngine(
                 enqueueRelayed(forwarded)
             }
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
-            MessageType.IDENTITY_ROTATION -> {
+            MessageType.IDENTITY_ROTATION,
+            MessageType.SELF_PRESENCE -> {
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
@@ -649,7 +686,7 @@ class GossipEngine(
         val ceiling = when (msg.type) {
             MessageType.BROADCAST, MessageType.PING, MessageType.PONG,
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
-            MessageType.IDENTITY_ROTATION -> MAX_BROADCAST_HOPS
+            MessageType.IDENTITY_ROTATION, MessageType.SELF_PRESENCE -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,
             MessageType.PRIORITY_LINK_REQUEST,
