@@ -163,6 +163,8 @@ class InMemoryBreadcrumbRepository : BreadcrumbRepository {
     }
     override suspend fun getLatest(targetUserId: String): Breadcrumb? =
         crumbs[targetUserId]?.maxByOrNull { it.recordedAtMs }
+    override suspend fun getCandidates(targetUserId: String, limit: Int): List<Breadcrumb> =
+        crumbs[targetUserId]?.sortedByDescending { it.recordedAtMs }?.take(limit) ?: emptyList()
     override suspend fun pruneForTarget(targetUserId: String) {
         crumbs[targetUserId]?.let { list ->
             if (list.size > 5) {

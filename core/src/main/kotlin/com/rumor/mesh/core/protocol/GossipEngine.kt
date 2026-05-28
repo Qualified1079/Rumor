@@ -17,6 +17,7 @@ import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.TrustLevel
 import com.rumor.mesh.core.policy.InboxFilter
+import com.rumor.mesh.core.routing.BreadcrumbCache
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.scheduler.Scheduler
@@ -79,6 +80,14 @@ class GossipEngine(
      * never on the relay path — same architectural rule as [blockManager].
      */
     private val inboxFilter: InboxFilter,
+    /**
+     * Optional Tier-1 routing substrate (O29). When non-null, records a
+     * breadcrumb per inbound signed message so future DMs to that sender
+     * can prefer the peer that just delivered. The routing-decision side
+     * (handing DMs to candidatePeers vs flooding) lands in a follow-up
+     * commit. Null disables recording — preserves baseline flood behaviour.
+     */
+    private val breadcrumbs: BreadcrumbCache? = null,
     val canaryMetrics: CanaryMetrics = CanaryMetrics(),
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
     private val dmEnvelopeRegistry: DmEnvelopeRegistry = DmEnvelopeRegistry(),
@@ -157,7 +166,7 @@ class GossipEngine(
 
             for (msg in result.messagesReceived) {
                 val adjusted = msg.copy(receivedAtMs = System.currentTimeMillis())
-                processIncoming(adjusted, MessageSource.PEER, autoRelayIds)
+                processIncoming(adjusted, MessageSource.PEER, autoRelayIds, fromPeerId = result.peerUserId)
             }
         }
     }
@@ -451,6 +460,13 @@ class GossipEngine(
         rawMsg: RumorMessage,
         source: MessageSource,
         autoRelayIds: Set<String>,
+        /**
+         * The peer userId that handed us this message, when known. Used to
+         * record a breadcrumb (O29 Tier 1) — "messages to sender X are
+         * reachable via peer P." Null for locally-composed messages and
+         * for bridge-injected traffic where the concept doesn't apply.
+         */
+        fromPeerId: String? = null,
     ) {
         val clamped = clampTtl(rawMsg)
         // Per-transport trust gate. The BRIDGE_UNSIGNED sentinel is honored only
@@ -472,6 +488,19 @@ class GossipEngine(
         val msg = clamped.copy(
             trustLevel = if (bridged) TrustLevel.BRIDGED else TrustLevel.VERIFIED,
         )
+
+        // O29 Tier 1: record a breadcrumb pointing back through the peer that
+        // delivered this message. Bridged messages are skipped because the
+        // synthetic senderId doesn't map to a Rumor-mesh path. The cost of
+        // recording every signed inbound is one upsert + prune per message —
+        // dwarfed by signature verification already done in MessageStore.ingest.
+        if (!bridged && fromPeerId != null && fromPeerId != msg.senderId) {
+            breadcrumbs?.record(
+                targetUserId = msg.senderId,
+                fromPeerId = fromPeerId,
+                hopCount = (DEFAULT_BROADCAST_HOPS - msg.hopsToLive).coerceAtLeast(1),
+            )
+        }
 
         // Auto-accept incoming priority link acceptance: mark the sender as priority peer.
         if (msg.type == MessageType.PRIORITY_LINK_ACCEPT &&

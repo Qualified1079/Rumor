@@ -23,6 +23,8 @@ class RouteRepositoryAdapter(private val dao: RouteDao) : RouteRepository {
 class BreadcrumbRepositoryAdapter(private val dao: BreadcrumbDao) : BreadcrumbRepository {
     override suspend fun upsert(crumb: Breadcrumb) = dao.upsert(crumb.toEntity())
     override suspend fun getLatest(targetUserId: String): Breadcrumb? = dao.getLatest(targetUserId)?.toModel()
+    override suspend fun getCandidates(targetUserId: String, limit: Int): List<Breadcrumb> =
+        dao.getRecent(targetUserId, limit).map(BreadcrumbEntity::toModel)
     override suspend fun pruneForTarget(targetUserId: String) = dao.pruneForTarget(targetUserId)
     override suspend fun pruneOld(olderThanMs: Long) = dao.pruneOld(olderThanMs)
 }

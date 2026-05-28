@@ -9,9 +9,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * Tracks which peer a ping for a given target User ID arrived from.
- * Used to route return messages toward a target without carrying the full path.
- * Capped at 5 hops per target; backed by persistent storage.
+ * Tier-1 routing substrate (O29). Records "I received a message from
+ * [targetUserId] via this peer recently, so for future messages addressed
+ * TO [targetUserId], this peer is a plausible next-hop." Purely local —
+ * never gossiped, no marginal privacy cost beyond the gossip baseline.
+ *
+ * Capped at 5 entries per target (the freshest crumbs); pruned at 24h
+ * of inactivity. Backed by persistent storage so breadcrumbs survive an
+ * app restart — important for the long-term-collapse threat model where
+ * an offline-for-days return path is still useful.
  */
 class BreadcrumbCache(
     private val breadcrumbRepo: BreadcrumbRepository,
@@ -35,6 +41,16 @@ class BreadcrumbCache(
 
     suspend fun nextHop(targetUserId: String): String? =
         breadcrumbRepo.getLatest(targetUserId)?.arrivedFromPeerId
+
+    /**
+     * Up to [limit] candidate peers to prefer when handing off a DM
+     * addressed to [targetUserId], freshest first. Returns empty when we
+     * have no breadcrumbs for the target — signals the caller to fall back
+     * to flood. Top-K (default 3) is more robust than top-1 against any
+     * single peer being temporarily unreachable.
+     */
+    suspend fun candidatePeers(targetUserId: String, limit: Int = 3): List<String> =
+        breadcrumbRepo.getCandidates(targetUserId, limit).map { it.arrivedFromPeerId }
 
     fun pruneOld() {
         scope.launch {

@@ -53,7 +53,7 @@ class SimNode(
     private val messageStore    = MessageStore(messageRepo, contactRepo, duplicateFilter)
     private val onlineTracker   = OnlineStatusTracker()
     private val topoTracker     = TopologyTracker(routeRepo)
-    private val breadcrumbs     = BreadcrumbCache(breadcrumbRepo)
+    internal val breadcrumbs    = BreadcrumbCache(breadcrumbRepo)
     private val scheduler       = Scheduler()
     private val blockManager    = BlockManager(blockEntryRepo, subscribedRepo, blocklistRepo)
     private val inboxFilter     = PermissiveInboxFilter()
@@ -68,6 +68,7 @@ class SimNode(
         blockManager    = blockManager,
         scheduler       = scheduler,
         inboxFilter     = inboxFilter,
+        breadcrumbs     = breadcrumbs,
         scope           = scope,
         // Flush relayed messages immediately — real wall-clock delay (100–500 ms)
         // would equal 1–5 sim-seconds at speedMult=10, breaking multi-hop propagation.
