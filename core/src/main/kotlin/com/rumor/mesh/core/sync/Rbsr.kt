@@ -51,6 +51,9 @@ data class RbsrBound(val timestamp: Long, val id: String) : Comparable<RbsrBound
 }
 
 /** Storage interface the algorithm queries against. Implementations are responsible for sort order. */
+/** Maximum bisection rounds before falling through with whatever diffs we have. */
+const val MAX_RBSR_ROUNDS: Int = 5
+
 interface RbsrStorage {
     /** Items in `[lower, upper)` in ascending order. */
     fun items(lower: RbsrBound, upper: RbsrBound): List<RbsrItem>

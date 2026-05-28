@@ -3,6 +3,10 @@ package com.rumor.mesh.simulator.engine
 import com.rumor.mesh.core.protocol.PeerExchangeResult
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.sync.MAX_RBSR_ROUNDS
+import com.rumor.mesh.core.sync.Rbsr
+import com.rumor.mesh.core.sync.RbsrItem
+import com.rumor.mesh.core.sync.SortedListRbsrStorage
 import com.rumor.mesh.core.transport.wifidirect.BloomFilterData
 import kotlin.random.Random
 
@@ -35,6 +39,13 @@ class SimTransport(
      * path leaves this empty; topology builders attach tags explicitly.
      */
     val tags: Set<String> = emptySet(),
+    /**
+     * If true, the summary phase uses Range-Based Set Reconciliation (O42)
+     * instead of the bloom filter. Both sides run the same algorithm in
+     * lock-step (single-process, no wire serialization needed at this layer).
+     * Scenarios flip this to compare bloom-vs-RBSR bandwidth and convergence.
+     */
+    val useRbsr: Boolean = false,
 ) {
     /**
      * Perform a bidirectional exchange between [nodeA] and [nodeB].
@@ -58,10 +69,17 @@ class SimTransport(
         // too-small expectedItems will starve propagation. That's exactly the
         // class of bug worth catching here.
 
+        val (aToB, bToA) = if (useRbsr) {
+            rbsrExchange(rng) { dropped++ }
+        } else {
+            val a = exchangeOneDirection(nodeA, nodeB, rng) { dropped++ }
+            val b = exchangeOneDirection(nodeB, nodeA, rng) { dropped++ }
+            a to b
+        }
+
         // Sort so TRANSFER_METADATA precedes CHUNK — TransferAssembler drops chunks
         // that arrive before their metadata record is registered.
-        val deliveredA = exchangeOneDirection(nodeA, nodeB, rng) { dropped++ }
-            .sortedBy { if (it.type == MessageType.TRANSFER_METADATA) 0 else 1 }
+        val deliveredA = aToB.sortedBy { if (it.type == MessageType.TRANSFER_METADATA) 0 else 1 }
         messagesAtoB = deliveredA.size
         if (deliveredA.isNotEmpty()) {
             nodeB.deliverExchange(PeerExchangeResult(
@@ -73,8 +91,7 @@ class SimTransport(
             ))
         }
 
-        val deliveredB = exchangeOneDirection(nodeB, nodeA, rng) { dropped++ }
-            .sortedBy { if (it.type == MessageType.TRANSFER_METADATA) 0 else 1 }
+        val deliveredB = bToA.sortedBy { if (it.type == MessageType.TRANSFER_METADATA) 0 else 1 }
         messagesBtoA = deliveredB.size
         if (deliveredB.isNotEmpty()) {
             nodeA.deliverExchange(PeerExchangeResult(
@@ -87,6 +104,49 @@ class SimTransport(
         }
 
         return ExchangeMetrics(messagesAtoB, messagesBtoA, dropped, System.currentTimeMillis() - start)
+    }
+
+    /**
+     * Bidirectional RBSR exchange. Runs the algorithm in lock-step in-process —
+     * each side's [Rbsr.respond] consumes the other's outgoing frames. Bounded
+     * by [MAX_RBSR_ROUNDS]; leftover diffs after the bound are dropped (will
+     * resolve in a subsequent exchange). After convergence, A sends to B
+     * exactly the message IDs B didn't have, and vice versa.
+     */
+    private fun rbsrExchange(rng: Random, onDrop: () -> Unit): Pair<List<RumorMessage>, List<RumorMessage>> {
+        val itemsA = nodeA.knownMessages().map { RbsrItem(it.sentAtMs, it.id) }
+        val itemsB = nodeB.knownMessages().map { RbsrItem(it.sentAtMs, it.id) }
+        val rbsrA = Rbsr(SortedListRbsrStorage(itemsA))
+        val rbsrB = Rbsr(SortedListRbsrStorage(itemsB))
+
+        val aPeerNeeds = HashSet<String>()  // messages A has that B doesn't
+        val bPeerNeeds = HashSet<String>()  // messages B has that A doesn't
+
+        var framesA = rbsrA.initiate()
+        var framesB = rbsrB.initiate()
+        for (round in 0 until MAX_RBSR_ROUNDS) {
+            val responseA = rbsrA.respond(framesB)
+            aPeerNeeds.addAll(responseA.peerNeeds)
+            val responseB = rbsrB.respond(framesA)
+            bPeerNeeds.addAll(responseB.peerNeeds)
+            if (framesA.isEmpty() && framesB.isEmpty()) break
+            framesA = responseA.outgoing
+            framesB = responseB.outgoing
+        }
+
+        val aToB = nodeA.knownMessages()
+            .asSequence()
+            .filter { it.id in aPeerNeeds }
+            .take(MAX_OFFER_PER_EXCHANGE)
+            .filter { conditioner.simulate(estimatedBytes(it), rng).also { if (it == null) onDrop() } != null }
+            .toList()
+        val bToA = nodeB.knownMessages()
+            .asSequence()
+            .filter { it.id in bPeerNeeds }
+            .take(MAX_OFFER_PER_EXCHANGE)
+            .filter { conditioner.simulate(estimatedBytes(it), rng).also { if (it == null) onDrop() } != null }
+            .toList()
+        return aToB to bToA
     }
 
     /**

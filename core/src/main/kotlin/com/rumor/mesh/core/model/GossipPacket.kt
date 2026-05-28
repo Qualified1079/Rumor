@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.model
 
+import com.rumor.mesh.core.sync.RbsrFrameWire
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -138,6 +139,20 @@ sealed class GossipPacket {
     data class NeighborDigest(
         val filter: String,
         val expectedItems: Int,
+        @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
+    ) : GossipPacket()
+
+    /**
+     * Range-Based Set Reconciliation exchange frame batch (O42). Replaces
+     * [Bloom] / [IdList] when both peers advertise `rbsr-v1` in HELLO's
+     * `supportedFeatures`. A single [Rbsr] packet carries one round of
+     * frames; the protocol iterates until both sides send an empty list
+     * (or [com.rumor.mesh.core.sync.MAX_RBSR_ROUNDS] is hit). Empty list
+     * also signals "I'm done for now" — see GossipSession.
+     */
+    @Serializable @SerialName("rbsr")
+    data class Rbsr(
+        val frames: List<RbsrFrameWire>,
         @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
     ) : GossipPacket()
 }
