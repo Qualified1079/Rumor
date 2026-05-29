@@ -45,15 +45,23 @@ class ScenarioRunnerState(
     val currentJob: JobRecord? get() = jobRef.get()
 
     /**
+     * Flag flipped on cancel. ScenarioBundle.runAll polls this between
+     * scenarios; on true it writes whatever results it has and exits.
+     * Reset to false at the start of every new run.
+     */
+    private val cancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
      * Cancel the currently-running job, if any. The currently-executing
-     * scenario will run to completion (no clean way to interrupt
-     * ScenarioBundle mid-scenario from outside), but no further scenarios
-     * will start and the partial zip is finalised on disk.
+     * scenario will finish (no clean interrupt available from outside), but
+     * the cancellation flag prevents any further scenarios from starting and
+     * ScenarioBundle.runAll writes the partial zip on the way out so the
+     * Download button is usable.
      */
     fun cancelCurrent(): Boolean {
         val record = jobRef.get() ?: return false
         if (record.status != JobStatus.RUNNING) return false
-        record.coroutineJob?.cancel()
+        cancelFlag.set(true)
         jobRef.set(record.copy(
             status = JobStatus.CANCELLED,
             finishedAtMs = System.currentTimeMillis(),
@@ -148,10 +156,11 @@ class ScenarioRunnerState(
             error = null,
         )
         jobRef.set(record)
+        cancelFlag.set(false)
 
         val coroutineJob = scope.launch {
             try {
-                val allPassed = ScenarioBundle.runAll(staging, outZip)
+                val allPassed = ScenarioBundle.runAll(staging, outZip, isCancelled = { cancelFlag.get() })
                 jobRef.updateAndGet { cur ->
                     if (cur?.id != jobId) cur  // someone cancelled / replaced — leave it
                     else cur.copy(

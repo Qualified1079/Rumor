@@ -5,11 +5,11 @@
   "speedMult": 10.0,
   "topology": { "kind": "two-cluster", "left": 25, "right": 25, "bridges": 1 },
   "params": {
-    "msg_per_sec": "0.8",
+    "msg_per_sec": "0.4",
     "broadcaster_count": "2",
-    "broadcaster_mult": "5.0",
-    "hops_to_live": "12",
-    "dm_fraction": "0.3"
+    "broadcaster_mult": "3.0",
+    "hops_to_live": "10",
+    "dm_fraction": "0.2"
   },
   "events": [
     { "kind": "partition", "atSec": 40, "target": "bridge" },

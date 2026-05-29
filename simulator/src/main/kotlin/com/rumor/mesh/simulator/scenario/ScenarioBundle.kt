@@ -32,7 +32,18 @@ object ScenarioBundle {
         classDiscriminator = "kind"
     }
 
-    fun runAll(scenariosDir: File, outputZip: File): Boolean {
+    fun runAll(
+        scenariosDir: File,
+        outputZip: File,
+        /**
+         * Polled between scenarios. When true, the loop exits early and the
+         * partial bundle (results collected so far) is written to disk so the
+         * dashboard's Cancel button produces a usable download instead of a
+         * never-written zip. Default is "never cancel" which preserves
+         * original CLI behaviour.
+         */
+        isCancelled: () -> Boolean = { false },
+    ): Boolean {
         require(scenariosDir.isDirectory) { "not a directory: $scenariosDir" }
         val scenarioFiles = scenariosDir.listFiles { f -> f.isFile && f.extension == "json" }
             ?.sortedBy { it.name }
@@ -43,6 +54,10 @@ object ScenarioBundle {
         val results = mutableListOf<RunRecord>()
 
         for (file in scenarioFiles) {
+            if (isCancelled()) {
+                RumorLog.i(TAG, "cancelled before ${file.name} — writing partial bundle")
+                break
+            }
             RumorLog.i(TAG, "── running ${file.name} ──")
             val (scenario, parseError) = runCatching {
                 json.decodeFromString<Scenario>(file.readText())

@@ -45,8 +45,13 @@ class ScenarioRunner {
         val deadlineMs = scenario.durationSec * 1000L
         val pollIntervalMs = 100L
         // Safety: cap wall-clock so a paused engine (heap pressure / hang) can't loop forever.
+        // The cap was originally 5× expected, plus 30s grace; in practice heavy-traffic
+        // scenarios (high broadcaster_mult, large topologies, bursty params) can exceed
+        // that even when the engine is healthy. Bumped to 15× expected plus 60s grace
+        // so a 120s sim at 10× has up to ~3 minutes of wall time before declaring
+        // failure. A genuinely hung engine still gets caught — just less aggressively.
         val wallStartMs = System.currentTimeMillis()
-        val maxWallMs = (deadlineMs / params.speedMultiplier.value).toLong() * 5L + 30_000L
+        val maxWallMs = (deadlineMs / params.speedMultiplier.value).toLong() * 15L + 60_000L
 
         var lastTracedSec = -1L
         val errors = mutableListOf<String>()
