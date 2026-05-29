@@ -132,6 +132,21 @@ class SimParamRegistry {
         ParamCategory.TRAFFIC, 0.0, 1.0, 0.0, step = 0.05,
         randomFn = { rng -> rng.nextDouble(0.0, 0.1) })
 
+    /**
+     * Number of "broadcaster" nodes (the first N by index) that send traffic
+     * at [broadcasterMultiplier] times the baseline rate. Models the realistic
+     * disaster-comms pattern where a small fraction of nodes (organizers,
+     * news-spreaders) originates most of the traffic. Set to 0 to keep traffic
+     * symmetric. Default 0 — preserves prior scenario behaviour.
+     */
+    val broadcasterCount = SimParam("broadcaster_count", "Broadcaster nodes",
+        ParamCategory.TRAFFIC, 0, 100, 0,
+        randomFn = { rng -> rng.nextInt(0, 6) })
+
+    val broadcasterMultiplier = SimParam("broadcaster_mult", "Broadcaster rate ×",
+        ParamCategory.TRAFFIC, 1.0, 20.0, 5.0, step = 0.5,
+        randomFn = { rng -> rng.nextDouble(2.0, 8.0) })
+
     // ── Protocol ─────────────────────────────────────────────────────────────
     val hopsToLive = SimParam("hops_to_live", "Hops to live",
         ParamCategory.PROTOCOL, 1, 15, 7,

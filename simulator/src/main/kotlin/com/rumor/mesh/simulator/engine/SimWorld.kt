@@ -217,9 +217,21 @@ class SimWorld(val params: SimParamRegistry) {
         val aliveNodes = nodes.filter { it.index !in killedNodes }
         val dmFraction = params.dmFraction.value
         val largeFraction = params.largeMessageFraction.value
+        // O58 efficiency-testing knobs: first N nodes act as "broadcasters"
+        // (organizers, news-spreaders) at a multiplier of the baseline rate.
+        // Models the realistic skewed-load case where a small fraction of
+        // nodes originates most traffic. broadcasterCount=0 keeps symmetry.
+        val broadcasterCount = params.broadcasterCount.value
+        val broadcasterMult = params.broadcasterMultiplier.value
+        val baseRate = params.msgPerSecondPerNode.value
         for (node in aliveNodes) {
+            val rate = if (broadcasterCount > 0 && node.index < broadcasterCount) {
+                baseRate * broadcasterMult
+            } else {
+                baseRate
+            }
             val profile = TrafficProfile(
-                msgPerSecond         = params.msgPerSecondPerNode.value,
+                msgPerSecond         = rate,
                 minPayloadBytes      = params.minPayloadBytes.value,
                 maxPayloadBytes      = params.maxPayloadBytes.value,
                 hopsToLive           = params.hopsToLive.value,
