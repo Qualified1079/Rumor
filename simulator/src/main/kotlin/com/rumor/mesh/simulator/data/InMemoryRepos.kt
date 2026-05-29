@@ -8,6 +8,7 @@ import com.rumor.mesh.core.data.ChunkRepository
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.data.MessageRepository
 import com.rumor.mesh.core.data.RouteRepository
+import com.rumor.mesh.core.data.ScheduledMessageRepository
 import com.rumor.mesh.core.data.SubscribedBlocklistRepository
 import com.rumor.mesh.core.data.TransferRecord
 import com.rumor.mesh.core.data.TransferRepository
@@ -18,6 +19,7 @@ import com.rumor.mesh.core.model.Breadcrumb
 import com.rumor.mesh.core.model.Contact
 import com.rumor.mesh.core.model.Route
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.model.ScheduledMessage
 import com.rumor.mesh.core.model.TransferStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -259,4 +261,22 @@ class InMemoryChunkRepository : ChunkRepository {
         forTransfer(transferId)[chunkIndex]?.let { forTransfer(transferId)[chunkIndex] = it.copy(ackedAtMs = ackedAtMs) }
     }
     override suspend fun deleteAllForTransfer(transferId: String) { chunks.remove(transferId) }
+}
+
+class InMemoryScheduledMessageRepository : ScheduledMessageRepository {
+    private val items = ConcurrentHashMap<String, ScheduledMessage>()
+    private val _flow = MutableStateFlow<List<ScheduledMessage>>(emptyList())
+
+    override suspend fun upsert(message: ScheduledMessage) {
+        items[message.id] = message
+        _flow.value = items.values.toList()
+    }
+    override suspend fun delete(id: String) {
+        items.remove(id)
+        _flow.value = items.values.toList()
+    }
+    override suspend fun dueAt(nowMs: Long, limit: Int): List<ScheduledMessage> =
+        items.values.filter { it.fireAtMs <= nowMs }.sortedBy { it.fireAtMs }.take(limit)
+    override suspend fun getById(id: String): ScheduledMessage? = items[id]
+    override fun observeAll(): Flow<List<ScheduledMessage>> = _flow
 }
