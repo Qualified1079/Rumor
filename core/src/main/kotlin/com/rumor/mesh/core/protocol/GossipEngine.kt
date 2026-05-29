@@ -16,8 +16,12 @@ import com.rumor.mesh.core.model.ChunkRequest
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
+import com.rumor.mesh.core.model.MAX_TOTAL_HOPS
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.TrustLevel
+import com.rumor.mesh.core.model.floodedHops
+import com.rumor.mesh.core.model.routedHops
+import com.rumor.mesh.core.model.withTtlSplit
 import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.routing.BreadcrumbCache
 import com.rumor.mesh.core.routing.OnlineStatusTracker
@@ -487,15 +491,26 @@ class GossipEngine(
         }
         val batch = scheduler.take(cap)
 
-        // O29 routing bias: DMs whose breadcrumb candidates include this peer
-        // float to the front of the batch. Stable-partition preserves scheduler
-        // order within each class. Non-DMs and DMs with no breadcrumb match
-        // keep their original ordering. Ordering bias only — does NOT exclude
-        // messages from any peer (a stale breadcrumb shouldn't strand a DM).
-        // Skip if no breadcrumbs wired (preserves baseline behaviour).
-        if (breadcrumbs == null) return batch
-        val (preferred, rest) = batch.partition { msg ->
-            msg.type == MessageType.DIRECT &&
+        // O29 per-peer routing filter. A relayed DM marked with intendedPeers
+        // (set at relay time when breadcrumbs named candidates) is only
+        // offered to peers in that set — other peers see the batch without
+        // it. Locally-composed DMs and broadcasts have null intendedPeers and
+        // are offered to everyone. This is hard exclusion, not bias: the
+        // hard ceiling on routedHops+floodedHops in relay() bounds worst-case
+        // loops if a breadcrumb is stale.
+        val routedFiltered = batch.filter { msg ->
+            val intended = msg.intendedPeers ?: return@filter true
+            peerUserId in intended
+        }
+        if (breadcrumbs == null) return routedFiltered
+
+        // O29 ordering bias for messages that haven't been pre-routed
+        // (locally-composed DMs and intended-peer-null relays): DMs whose
+        // breadcrumbs include this peer float to the front of the batch.
+        // Stable-partition preserves scheduler order within each class.
+        val (preferred, rest) = routedFiltered.partition { msg ->
+            msg.intendedPeers == null &&
+                msg.type == MessageType.DIRECT &&
                 msg.recipientId != null &&
                 peerUserId in breadcrumbs.candidatePeersSync(msg.recipientId)
         }
@@ -648,7 +663,37 @@ class GossipEngine(
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
                 val forwarded = messageStore.decrementHops(msg) ?: return
-                enqueueRelayed(forwarded)
+
+                // O29 per-peer routing decision. If breadcrumbs name candidate
+                // peers for the recipient, mark this relay as routed-to-those-
+                // peers and increment routedHops (NOT floodedHops). Otherwise
+                // fall back to flood: leave intendedPeers null and decrement
+                // floodedHops via the legacy hopsToLive path. Hard ceiling at
+                // MAX_TOTAL_HOPS regardless of split.
+                val recipientId = forwarded.recipientId
+                val candidates = if (breadcrumbs != null && recipientId != null) {
+                    breadcrumbs.candidatePeersSync(recipientId).toSet().takeIf { it.isNotEmpty() }
+                } else null
+
+                val withSplit = if (candidates != null) {
+                    // Routed hop: increment routedHops, leave floodedHops at
+                    // the inherited value (don't decrement). intendedPeers
+                    // restricts the next offer batch to the matched peers.
+                    val newRouted = (forwarded.routedHops + 1).coerceAtMost(MAX_TOTAL_HOPS)
+                    forwarded.withTtlSplit(
+                        routedHops = newRouted,
+                        floodedHops = forwarded.floodedHops,
+                    ).copy(intendedPeers = candidates)
+                } else {
+                    // Flood fallback: floodedHops decrements via the existing
+                    // hopsToLive path already done by decrementHops.
+                    forwarded.withTtlSplit(
+                        routedHops = forwarded.routedHops,
+                        floodedHops = forwarded.hopsToLive,
+                    )
+                }
+                if (withSplit.routedHops + withSplit.floodedHops > MAX_TOTAL_HOPS) return
+                enqueueRelayed(withSplit)
             }
             MessageType.PING -> {
                 val forwarded = msg.copy(hopsToLive = (msg.hopsToLive - 1).coerceAtLeast(0))

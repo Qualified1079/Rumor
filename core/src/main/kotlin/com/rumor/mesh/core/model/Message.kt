@@ -52,7 +52,47 @@ data class RumorMessage(
     /** Whether the local user manually relayed this (reset hops-to-live). Not propagated. */
     @kotlinx.serialization.Transient
     val wasRelayed: Boolean = false,
+    /**
+     * O29 per-peer routing marker. When non-null, this message is targeted to
+     * specific peers (chosen by breadcrumb match at relay time) and the
+     * transport's `messagesForExchange(peerUserId)` filters out peers not in
+     * this set. Null means "broadcast, offer to anyone" (the default for
+     * non-DMs and for DMs without a breadcrumb match). Transient on purpose —
+     * intended peers are a local routing decision, not part of the wire frame,
+     * and would leak the routing graph to in-mesh observers if shipped.
+     */
+    @kotlinx.serialization.Transient
+    val intendedPeers: Set<String>? = null,
 )
+
+/**
+ * O32 split-TTL helpers. `floodedHops` decrements only when the relay falls
+ * back to flood (no breadcrumb match for this hop); `routedHops` counts
+ * confirmed-route hops separately for diagnostics and the hard ceiling.
+ * Stored inside the O37-reserved `_ext` map so v0.1 ignores them gracefully.
+ *
+ * Default reads when `_ext` is absent: `floodedHops = hopsToLive` (legacy
+ * behaviour), `routedHops = 0`. This preserves bit-exact compatibility for
+ * any pre-O32 message that hits a post-O32 node.
+ */
+val RumorMessage.routedHops: Int
+    get() = (ext?.get("routedHops") as? kotlinx.serialization.json.JsonPrimitive)
+        ?.content?.toIntOrNull() ?: 0
+
+val RumorMessage.floodedHops: Int
+    get() = (ext?.get("floodedHops") as? kotlinx.serialization.json.JsonPrimitive)
+        ?.content?.toIntOrNull() ?: hopsToLive
+
+/** Hard ceiling on total path length regardless of routed/flooded split (O32). */
+const val MAX_TOTAL_HOPS: Int = 30
+
+fun RumorMessage.withTtlSplit(routedHops: Int, floodedHops: Int): RumorMessage {
+    val updated = (ext ?: emptyMap()).toMutableMap().apply {
+        this["routedHops"] = kotlinx.serialization.json.JsonPrimitive(routedHops)
+        this["floodedHops"] = kotlinx.serialization.json.JsonPrimitive(floodedHops)
+    }
+    return copy(ext = updated)
+}
 
 /**
  * Per-hop trust in a message, decided locally from the transport it arrived on.
