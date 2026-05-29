@@ -66,12 +66,16 @@
     <input id="uploadInput" type="file" accept=".json" multiple style="display:none;">
   </div>
   <div id="scenarioList" style="max-height:200px;overflow-y:auto;border:1px solid var(--line);border-radius:4px;padding:6px;font-size:12px;"></div>
+  <div id="scenarioEstimate" style="font-size:11px;color:var(--muted);margin-top:4px;"></div>
   <div class="controls" style="margin-top:6px;">
     <button id="btnRunSelected">Run selected</button>
     <button id="btnCancelRun" disabled>Cancel</button>
     <button id="btnDownloadZip" disabled>Download bundle</button>
   </div>
-  <div id="scenarioStatus" style="margin-top:6px;font-size:12px;color:var(--muted);"></div>
+  <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:var(--muted);">
+    <input id="autoDownload" type="checkbox" checked> Auto-download when ready
+  </label>
+  <div id="scenarioStatus" style="margin-top:6px;font-size:12px;color:var(--fg);min-height:18px;"></div>
 </div>
 <div id="main">
   <canvas id="graph"></canvas>
@@ -332,12 +336,16 @@ function connect() {
 }
 
 // ── Scenario runner ─────────────────────────────────────────────────────────
+// Cache scenario metadata so we can estimate runtime from durationSec + speedMult.
+const scenarioMeta = new Map();
+
 async function loadScenarios() {
   const list = await fetch("/api/scenarios").then(r => r.json());
   const root = $("scenarioList");
   root.innerHTML = "";
   if (list.length === 0) {
     root.textContent = "(no scenarios — upload some .json files)";
+    updateEstimate();
     return;
   }
   list.forEach(entry => {
@@ -347,6 +355,7 @@ async function loadScenarios() {
     cb.type = "checkbox";
     cb.value = entry.name;
     cb.dataset.source = entry.source;
+    cb.onchange = updateEstimate;
     row.appendChild(cb);
     const label = document.createElement("span");
     label.textContent = entry.name;
@@ -357,6 +366,38 @@ async function loadScenarios() {
     row.appendChild(label);
     root.appendChild(row);
   });
+  // Best-effort fetch of durationSec for each scenario (small files, parallel).
+  await Promise.all(list.map(async entry => {
+    if (scenarioMeta.has(entry.name)) return;
+    try {
+      const j = await fetch("/api/scenarios/preview?name=" + encodeURIComponent(entry.name))
+        .then(r => r.ok ? r.json() : null);
+      if (j) scenarioMeta.set(entry.name, j);
+    } catch { /* preview is best-effort */ }
+  }));
+  updateEstimate();
+}
+
+function updateEstimate() {
+  const selected = Array.from(document.querySelectorAll("#scenarioList input:checked")).map(cb => cb.value);
+  if (selected.length === 0) {
+    $("scenarioEstimate").textContent = "select scenarios to run";
+    return;
+  }
+  let totalSimSec = 0;
+  let unknown = 0;
+  for (const name of selected) {
+    const meta = scenarioMeta.get(name);
+    if (meta && meta.durationSec && meta.speedMult) {
+      totalSimSec += meta.durationSec / meta.speedMult;
+    } else {
+      unknown++;
+    }
+  }
+  const wallSec = Math.ceil(totalSimSec);
+  const suffix = unknown > 0 ? ` (+${unknown} unknown)` : "";
+  $("scenarioEstimate").textContent =
+    `${selected.length} selected — est. ${wallSec}s wall-clock${suffix}`;
 }
 $("btnRefreshScenarios").onclick = e => { flash(e.currentTarget); loadScenarios(); };
 
@@ -383,15 +424,18 @@ $("btnRunSelected").onclick = async e => {
   }
   $("btnDownloadZip").disabled = true;
   $("btnCancelRun").disabled = false;
+  $("scenarioStatus").textContent = `submitting ${selected.length} scenario(s)…`;
   const res = await fetch("/api/scenarios/run?names=" + encodeURIComponent(selected.join(",")), { method: "POST" });
   if (!res.ok) {
-    $("scenarioStatus").textContent = "error: " + await res.text();
+    $("scenarioStatus").textContent = "submit failed: " + (await res.text());
     $("btnCancelRun").disabled = true;
     return;
   }
   const { id } = await res.json();
-  $("scenarioStatus").textContent = `running ${selected.length} scenario(s) — job ${id}`;
+  $("scenarioStatus").textContent = `job ${id} started — polling for progress…`;
   if (pollHandle) clearInterval(pollHandle);
+  // Fire the first poll immediately so the user sees movement; then schedule.
+  pollJob();
   pollHandle = setInterval(pollJob, 750);
 };
 
@@ -419,6 +463,10 @@ async function pollJob() {
     })[r.status] ?? r.status;
     $("scenarioStatus").textContent = `${tag} in ${elapsed.toFixed(1)}s` + (r.error ? ` — ${r.error}` : "");
     $("btnDownloadZip").disabled = !r.hasZip;
+    if (r.hasZip && $("autoDownload").checked) {
+      // Stagger by a tick so the status line renders before the download UI
+      setTimeout(() => $("btnDownloadZip").click(), 50);
+    }
   }
 }
 

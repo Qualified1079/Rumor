@@ -76,6 +76,28 @@ class ScenarioRunnerState(
     }
 
     /**
+     * Parse [name]'s scenario file just far enough to expose `durationSec`
+     * and `speedMult`, for the dashboard's wall-clock-time estimate. Returns
+     * null if the scenario doesn't exist or fails to parse. Errors are
+     * intentionally swallowed: the estimate is best-effort UI, not validation.
+     */
+    fun preview(name: String): ScenarioPreview? {
+        val available = listScenarios().associateBy { it.name }
+        val entry = available[name] ?: return null
+        val src = when (entry.source) {
+            ScenarioSource.BUNDLED  -> File(bundledRoot, name)
+            ScenarioSource.UPLOADED -> File(uploadedRoot, name)
+        }
+        return runCatching {
+            val parsed = kotlinx.serialization.json.Json {
+                ignoreUnknownKeys = true
+                classDiscriminator = "kind"
+            }.decodeFromString<com.rumor.mesh.simulator.scenario.Scenario>(src.readText())
+            ScenarioPreview(parsed.name, parsed.durationSec, parsed.speedMult)
+        }.getOrNull()
+    }
+
+    /**
      * Persist an uploaded scenario file under [filename] (basename only — any
      * path components are stripped). Overwrites any prior upload with the same
      * name. Bundled scenarios are NOT overwritten on disk; uploads shadow them
@@ -165,6 +187,9 @@ enum class ScenarioSource { BUNDLED, UPLOADED }
 
 @Serializable
 data class ScenarioEntry(val name: String, val source: ScenarioSource)
+
+@Serializable
+data class ScenarioPreview(val name: String, val durationSec: Int, val speedMult: Double)
 
 enum class JobStatus { RUNNING, PASSED, FAILED, ERROR, CANCELLED }
 

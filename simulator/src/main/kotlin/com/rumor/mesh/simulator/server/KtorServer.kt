@@ -125,6 +125,16 @@ class DashboardServer(
                     )
                 }
 
+                get("/api/scenarios/preview") {
+                    val name = call.request.queryParameters["name"].orEmpty()
+                    val preview = scenarioRunner.preview(name)
+                    if (preview == null) {
+                        call.respondText("unknown scenario", status = HttpStatusCode.NotFound)
+                    } else {
+                        call.respondText(json.encodeToString(preview), ContentType.Application.Json)
+                    }
+                }
+
                 post("/api/scenarios/upload") {
                     val multipart = call.receiveMultipart()
                     val accepted = mutableListOf<String>()
