@@ -30,4 +30,16 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("io.kotest:kotest-runner-junit5:5.8.0")
     testImplementation("io.kotest:kotest-property:5.8.0")
+    // O28 wire-parser fuzzing. Jazzer-junit registers @FuzzTest methods as
+    // ordinary JUnit5 tests by default (single corpus seed run); set the env
+    // var JAZZER_FUZZ=1 to put them into in-process fuzzing mode for CI or
+    // ad-hoc bug-hunting. https://github.com/CodeIntelligenceTesting/jazzer
+    testImplementation("com.code-intelligence:jazzer-junit:0.22.1")
+}
+
+// Surface Jazzer's JUnit5 platform so the @FuzzTest methods actually run when
+// invoking `gradle :core:test`. Kotest already pulls JUnit5; Jazzer plays
+// nicely with it.
+tasks.test {
+    useJUnitPlatform()
 }
