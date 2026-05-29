@@ -41,8 +41,36 @@ class TransferAssembler(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val watchdogs = ConcurrentHashMap<String, Job>()
 
+    /**
+     * O18: transferIds the user paused locally. Incoming CHUNKs for these are
+     * dropped at ingest; the watchdog is left running so a pending transfer
+     * doesn't time out while paused. Resume re-enables ingest.
+     */
+    private val paused: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     private val _assembledTransfers = MutableSharedFlow<AssembledTransfer>(extraBufferCapacity = 32)
     val assembledTransfers: SharedFlow<AssembledTransfer> = _assembledTransfers
+
+    fun pause(transferId: String) { paused.add(transferId) }
+    fun resume(transferId: String) { paused.remove(transferId) }
+    fun isPaused(transferId: String): Boolean = transferId in paused
+
+    /**
+     * O18 receiver-initiated cancel: tells the original sender to stop
+     * queuing chunks via [GossipEngine.composeTransferCancel], drops the
+     * local transfer record, and cancels any watchdog.
+     */
+    suspend fun cancel(transferId: String) {
+        val transfer = transferRepo.getById(transferId) ?: return
+        watchdogs.remove(transferId)?.cancel()
+        paused.remove(transferId)
+        gossipEngine.composeTransferCancel(transferId, transfer.senderId)
+        transferRepo.upsert(transfer.copy(
+            status = TransferStatus.ABANDONED,
+            completedAtMs = System.currentTimeMillis(),
+        ))
+        chunkRepo.deleteAllForTransfer(transferId)
+    }
 
     init {
         scope.launch {
@@ -58,6 +86,9 @@ class TransferAssembler(
                         val chunk = runCatching {
                             WireJson.decodeFromString<Chunk>(msg.payload?.content ?: return@collect)
                         }.getOrNull() ?: return@collect
+                        // O18: paused transfers drop chunks at ingest. Watchdog
+                        // keeps running so the transfer doesn't time out while paused.
+                        if (chunk.transferId in paused) return@collect
                         handleChunk(chunk)
                     }
                     else -> {}

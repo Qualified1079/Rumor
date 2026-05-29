@@ -38,17 +38,53 @@ class TransferSender(
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    /**
+     * O18: transferIds the receiver explicitly cancelled. Inbound chunk-
+     * requests for these are ignored — sender stops queuing retransmits
+     * and marks the transfer ABANDONED on the next chunk-request that
+     * would otherwise have fired.
+     */
+    private val cancelledByReceiver = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     init {
         scope.launch {
             gossipEngine.incomingMessages.collect { msg ->
-                if (msg.type != MessageType.CHUNK_REQUEST) return@collect
                 val localId = identityProvider.identity.value?.userId ?: return@collect
                 if (msg.recipientId != localId) return@collect
-                val req = runCatching {
-                    WireJson.decodeFromString<ChunkRequest>(msg.payload?.content ?: return@collect)
-                }.getOrNull() ?: return@collect
-                handleChunkRequest(req, requesterId = msg.senderId)
+                when (msg.type) {
+                    MessageType.CHUNK_REQUEST -> {
+                        val req = runCatching {
+                            WireJson.decodeFromString<ChunkRequest>(msg.payload?.content ?: return@collect)
+                        }.getOrNull() ?: return@collect
+                        if (req.transferId in cancelledByReceiver) {
+                            // Receiver cancelled — silently drop; sender is the one
+                            // already-cancelled side from its own UI's perspective.
+                            return@collect
+                        }
+                        handleChunkRequest(req, requesterId = msg.senderId)
+                    }
+                    MessageType.TRANSFER_CANCEL -> {
+                        val cancel = runCatching {
+                            WireJson.decodeFromString<com.rumor.mesh.core.model.TransferCancel>(
+                                msg.payload?.content ?: return@collect
+                            )
+                        }.getOrNull() ?: return@collect
+                        cancelledByReceiver.add(cancel.transferId)
+                        markAbandoned(cancel.transferId)
+                    }
+                    else -> {}
+                }
             }
+        }
+    }
+
+    private suspend fun markAbandoned(transferId: String) {
+        val existing = transferRepo.getById(transferId) ?: return
+        if (existing.status == com.rumor.mesh.core.model.TransferStatus.IN_PROGRESS) {
+            transferRepo.upsert(existing.copy(
+                status = com.rumor.mesh.core.model.TransferStatus.ABANDONED,
+                completedAtMs = System.currentTimeMillis(),
+            ))
         }
     }
 

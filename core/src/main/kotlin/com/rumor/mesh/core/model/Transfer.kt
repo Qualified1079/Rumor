@@ -57,6 +57,18 @@ data class ChunkRequest(
     @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
 )
 
+/**
+ * Body of a [com.rumor.mesh.core.model.MessageType.TRANSFER_CANCEL] message (O18).
+ * Sent receiver→sender to abort an in-flight chunked transfer. Sender stops
+ * responding to chunk-requests for [transferId] on receipt.
+ */
+@Serializable
+data class TransferCancel(
+    val transferId: String,
+    /** Reserved forward-compat carrier. See [RumorMessage.ext]. */
+    @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
+)
+
 /** Lifecycle state of a chunked transfer tracked in local storage. */
 @Serializable
 enum class TransferStatus {

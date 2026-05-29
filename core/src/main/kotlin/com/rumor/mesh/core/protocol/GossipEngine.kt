@@ -337,6 +337,30 @@ class GossipEngine(
         return msg
     }
 
+    /**
+     * O18: tell the original sender of a chunked transfer to abandon it.
+     * The receiver calls this when the user hits Cancel; the sender stops
+     * responding to chunk-requests for [transferId] on receipt.
+     */
+    fun composeTransferCancel(
+        transferId: String,
+        originalSenderId: String,
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val body = WireJson.encodeToString(
+            com.rumor.mesh.core.model.TransferCancel(transferId = transferId)
+        )
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.TRANSFER_CANCEL,
+            hopsToLive = DEFAULT_DIRECT_HOPS,
+            payload = MessagePayload(ContentType.CONTROL, body),
+            recipientId = originalSenderId,
+        )
+        enqueueImmediate(msg)
+        return msg
+    }
+
     fun composeOutbound(
         type: MessageType,
         payload: MessagePayload,
@@ -758,7 +782,8 @@ class GossipEngine(
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
-            MessageType.CHUNK_REQUEST -> {
+            MessageType.CHUNK_REQUEST,
+            MessageType.TRANSFER_CANCEL -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
                 val forwarded = messageStore.decrementHops(msg) ?: return
@@ -787,6 +812,7 @@ class GossipEngine(
             MessageType.BRIDGE_VOUCHED -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,
+            MessageType.TRANSFER_CANCEL,
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT -> MAX_DIRECT_HOPS
         }

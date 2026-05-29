@@ -169,6 +169,13 @@ enum class MessageType {
      * Payload is a [BridgeVouchedPayload].
      */
     @SerialName("bridge_vouched") BRIDGE_VOUCHED,
+    /**
+     * Receiver-originated cancel for an in-flight chunked transfer (O18).
+     * Routed as a DM to the original sender; on receipt the sender stops
+     * responding to chunk-requests for the named transferId and the
+     * transfer record is marked ABANDONED on both sides.
+     */
+    @SerialName("transfer_cancel") TRANSFER_CANCEL,
 }
 
 @Serializable
@@ -248,6 +255,7 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.PING,
             MessageType.PONG,
             MessageType.CHUNK_REQUEST,
+            MessageType.TRANSFER_CANCEL,
             MessageType.BLOCKLIST_DIFF,
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT,
