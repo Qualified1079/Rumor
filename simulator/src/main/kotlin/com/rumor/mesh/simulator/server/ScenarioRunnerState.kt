@@ -44,6 +44,23 @@ class ScenarioRunnerState(
     private val jobRef = AtomicReference<JobRecord?>(null)
     val currentJob: JobRecord? get() = jobRef.get()
 
+    /**
+     * Cancel the currently-running job, if any. The currently-executing
+     * scenario will run to completion (no clean way to interrupt
+     * ScenarioBundle mid-scenario from outside), but no further scenarios
+     * will start and the partial zip is finalised on disk.
+     */
+    fun cancelCurrent(): Boolean {
+        val record = jobRef.get() ?: return false
+        if (record.status != JobStatus.RUNNING) return false
+        record.coroutineJob?.cancel()
+        jobRef.set(record.copy(
+            status = JobStatus.CANCELLED,
+            finishedAtMs = System.currentTimeMillis(),
+        ))
+        return true
+    }
+
     /** Bundled + uploaded scenario filenames, sorted, uploads shadow bundled. */
     fun listScenarios(): List<ScenarioEntry> {
         val bundled = bundledRoot.takeIf { it.isDirectory }?.listFiles { f ->
@@ -110,22 +127,34 @@ class ScenarioRunnerState(
         )
         jobRef.set(record)
 
-        scope.launch {
+        val coroutineJob = scope.launch {
             try {
                 val allPassed = ScenarioBundle.runAll(staging, outZip)
-                jobRef.set(record.copy(
-                    status = if (allPassed) JobStatus.PASSED else JobStatus.FAILED,
-                    finishedAtMs = System.currentTimeMillis(),
-                ))
+                jobRef.updateAndGet { cur ->
+                    if (cur?.id != jobId) cur  // someone cancelled / replaced — leave it
+                    else cur.copy(
+                        status = if (allPassed) JobStatus.PASSED else JobStatus.FAILED,
+                        finishedAtMs = System.currentTimeMillis(),
+                    )
+                }
                 RumorLog.i(TAG, "$jobId finished: allPassed=$allPassed")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                RumorLog.i(TAG, "$jobId cancelled")
+                throw e
             } catch (e: Throwable) {
-                jobRef.set(record.copy(
-                    status = JobStatus.ERROR,
-                    finishedAtMs = System.currentTimeMillis(),
-                    error = "${e::class.simpleName}: ${e.message}",
-                ))
+                jobRef.updateAndGet { cur ->
+                    if (cur?.id != jobId) cur
+                    else cur.copy(
+                        status = JobStatus.ERROR,
+                        finishedAtMs = System.currentTimeMillis(),
+                        error = "${e::class.simpleName}: ${e.message}",
+                    )
+                }
                 RumorLog.e(TAG, "$jobId errored: ${e.message}", e)
             }
+        }
+        jobRef.updateAndGet { cur ->
+            if (cur?.id == jobId) cur.copy(coroutineJob = coroutineJob) else cur
         }
 
         return jobId
@@ -137,7 +166,7 @@ enum class ScenarioSource { BUNDLED, UPLOADED }
 @Serializable
 data class ScenarioEntry(val name: String, val source: ScenarioSource)
 
-enum class JobStatus { RUNNING, PASSED, FAILED, ERROR }
+enum class JobStatus { RUNNING, PASSED, FAILED, ERROR, CANCELLED }
 
 data class JobRecord(
     val id: String,
@@ -147,6 +176,7 @@ data class JobRecord(
     val outputZip: File,
     val finishedAtMs: Long? = null,
     val error: String? = null,
+    val coroutineJob: Job? = null,
 )
 
 @Serializable

@@ -55,7 +55,7 @@
   </div>
   <div class="controls">
     <button id="btnRandom">Randomize all</button>
-    <button id="btnReport">Download report</button>
+    <button id="btnReport" title="Snapshots the live dashboard sim (separate from scenarios)">Snapshot live sim</button>
   </div>
   <div id="params"></div>
 
@@ -68,7 +68,8 @@
   <div id="scenarioList" style="max-height:200px;overflow-y:auto;border:1px solid var(--line);border-radius:4px;padding:6px;font-size:12px;"></div>
   <div class="controls" style="margin-top:6px;">
     <button id="btnRunSelected">Run selected</button>
-    <button id="btnDownloadZip" disabled>Download zip</button>
+    <button id="btnCancelRun" disabled>Cancel</button>
+    <button id="btnDownloadZip" disabled>Download bundle</button>
   </div>
   <div id="scenarioStatus" style="margin-top:6px;font-size:12px;color:var(--muted);"></div>
 </div>
@@ -381,9 +382,11 @@ $("btnRunSelected").onclick = async e => {
     return;
   }
   $("btnDownloadZip").disabled = true;
+  $("btnCancelRun").disabled = false;
   const res = await fetch("/api/scenarios/run?names=" + encodeURIComponent(selected.join(",")), { method: "POST" });
   if (!res.ok) {
     $("scenarioStatus").textContent = "error: " + await res.text();
+    $("btnCancelRun").disabled = true;
     return;
   }
   const { id } = await res.json();
@@ -392,24 +395,64 @@ $("btnRunSelected").onclick = async e => {
   pollHandle = setInterval(pollJob, 750);
 };
 
+$("btnCancelRun").onclick = async e => {
+  flash(e.currentTarget);
+  await fetch("/api/scenarios/cancel", { method: "POST" });
+  $("scenarioStatus").textContent = "cancel requested — current scenario will finish first";
+};
+
 async function pollJob() {
   const r = await fetch("/api/scenarios/job").then(x => x.json());
   if (!r.id) return;
   const elapsed = ((r.finishedAtMs ?? Date.now()) - r.startedAtMs) / 1000;
   if (r.status === "RUNNING") {
     $("scenarioStatus").textContent = `running… ${elapsed.toFixed(1)}s elapsed (${r.selected.length} scenarios)`;
+    $("btnCancelRun").disabled = false;
   } else {
     clearInterval(pollHandle); pollHandle = null;
-    const tag = r.status === "PASSED" ? "✓ passed" : r.status === "FAILED" ? "✗ assertions failed" : "✗ error";
+    $("btnCancelRun").disabled = true;
+    const tag = ({
+      PASSED:    "✓ passed",
+      FAILED:    "✗ assertions failed",
+      ERROR:     "✗ error",
+      CANCELLED: "● cancelled (partial bundle available)",
+    })[r.status] ?? r.status;
     $("scenarioStatus").textContent = `${tag} in ${elapsed.toFixed(1)}s` + (r.error ? ` — ${r.error}` : "");
     $("btnDownloadZip").disabled = !r.hasZip;
   }
 }
 
-$("btnDownloadZip").onclick = e => {
+$("btnDownloadZip").onclick = async e => {
   flash(e.currentTarget);
-  window.location.href = "/api/scenarios/job/zip";
+  // Fetch + Blob path forces a download even if the browser would otherwise
+  // try to navigate inline; works regardless of Content-Disposition support.
+  const res = await fetch("/api/scenarios/job/zip");
+  if (!res.ok) {
+    $("scenarioStatus").textContent = "download failed: " + res.status;
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "rumor-scenarios.zip";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
 };
+
+// Recover state on page load: if a job from a prior session is finished and
+// has a downloadable zip, light up the button so the user can grab it.
+(async () => {
+  const r = await fetch("/api/scenarios/job").then(x => x.json()).catch(() => null);
+  if (r && r.id && r.status !== "RUNNING" && r.hasZip) {
+    $("btnDownloadZip").disabled = false;
+    $("scenarioStatus").textContent = `last run: ${r.status.toLowerCase()} — bundle ready`;
+  } else if (r && r.status === "RUNNING") {
+    pollHandle = setInterval(pollJob, 750);
+    $("btnCancelRun").disabled = false;
+  }
+})();
 
 loadParams();
 loadScenarios();

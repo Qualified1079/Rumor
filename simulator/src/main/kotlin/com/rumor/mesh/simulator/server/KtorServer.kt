@@ -12,9 +12,11 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.http.HttpHeaders
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
 import io.ktor.http.content.streamProvider
+import io.ktor.server.response.header
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondFile
@@ -179,8 +181,20 @@ class DashboardServer(
                     if (record == null || record.status == JobStatus.RUNNING || !record.outputZip.exists()) {
                         call.respondText("no result available", status = HttpStatusCode.NotFound)
                     } else {
+                        // Force browser download (not inline view) — some browsers
+                        // navigate to application/zip inline otherwise.
+                        call.response.header(
+                            HttpHeaders.ContentDisposition,
+                            "attachment; filename=\"${record.id}.zip\"",
+                        )
                         call.respondFile(record.outputZip)
                     }
+                }
+
+                post("/api/scenarios/cancel") {
+                    val cancelled = scenarioRunner.cancelCurrent()
+                    if (cancelled) call.ok()
+                    else call.respondText("no running job", status = HttpStatusCode.NotFound)
                 }
 
                 webSocket("/ws") {
