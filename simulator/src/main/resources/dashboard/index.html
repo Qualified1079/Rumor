@@ -58,6 +58,19 @@
     <button id="btnReport">Download report</button>
   </div>
   <div id="params"></div>
+
+  <h2>Scenarios</h2>
+  <div class="controls" style="margin-bottom:6px;">
+    <button id="btnRefreshScenarios">Refresh</button>
+    <button id="btnUpload">Upload .json</button>
+    <input id="uploadInput" type="file" accept=".json" multiple style="display:none;">
+  </div>
+  <div id="scenarioList" style="max-height:200px;overflow-y:auto;border:1px solid var(--line);border-radius:4px;padding:6px;font-size:12px;"></div>
+  <div class="controls" style="margin-top:6px;">
+    <button id="btnRunSelected">Run selected</button>
+    <button id="btnDownloadZip" disabled>Download zip</button>
+  </div>
+  <div id="scenarioStatus" style="margin-top:6px;font-size:12px;color:var(--muted);"></div>
 </div>
 <div id="main">
   <canvas id="graph"></canvas>
@@ -317,7 +330,89 @@ function connect() {
   };
 }
 
+// ── Scenario runner ─────────────────────────────────────────────────────────
+async function loadScenarios() {
+  const list = await fetch("/api/scenarios").then(r => r.json());
+  const root = $("scenarioList");
+  root.innerHTML = "";
+  if (list.length === 0) {
+    root.textContent = "(no scenarios — upload some .json files)";
+    return;
+  }
+  list.forEach(entry => {
+    const row = document.createElement("label");
+    row.style.cssText = "display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = entry.name;
+    cb.dataset.source = entry.source;
+    row.appendChild(cb);
+    const label = document.createElement("span");
+    label.textContent = entry.name;
+    if (entry.source === "UPLOADED") {
+      label.style.color = "var(--accent)";
+      label.title = "uploaded";
+    }
+    row.appendChild(label);
+    root.appendChild(row);
+  });
+}
+$("btnRefreshScenarios").onclick = e => { flash(e.currentTarget); loadScenarios(); };
+
+$("btnUpload").onclick = () => $("uploadInput").click();
+$("uploadInput").onchange = async ev => {
+  const files = Array.from(ev.target.files);
+  if (files.length === 0) return;
+  const fd = new FormData();
+  files.forEach(f => fd.append("file", f, f.name));
+  const res = await fetch("/api/scenarios/upload", { method: "POST", body: fd });
+  const body = await res.json();
+  $("scenarioStatus").textContent = `uploaded: ${body.accepted.join(", ")}`;
+  ev.target.value = "";
+  loadScenarios();
+};
+
+let pollHandle = null;
+$("btnRunSelected").onclick = async e => {
+  flash(e.currentTarget);
+  const selected = Array.from(document.querySelectorAll("#scenarioList input:checked")).map(cb => cb.value);
+  if (selected.length === 0) {
+    $("scenarioStatus").textContent = "select one or more scenarios first";
+    return;
+  }
+  $("btnDownloadZip").disabled = true;
+  const res = await fetch("/api/scenarios/run?names=" + encodeURIComponent(selected.join(",")), { method: "POST" });
+  if (!res.ok) {
+    $("scenarioStatus").textContent = "error: " + await res.text();
+    return;
+  }
+  const { id } = await res.json();
+  $("scenarioStatus").textContent = `running ${selected.length} scenario(s) — job ${id}`;
+  if (pollHandle) clearInterval(pollHandle);
+  pollHandle = setInterval(pollJob, 750);
+};
+
+async function pollJob() {
+  const r = await fetch("/api/scenarios/job").then(x => x.json());
+  if (!r.id) return;
+  const elapsed = ((r.finishedAtMs ?? Date.now()) - r.startedAtMs) / 1000;
+  if (r.status === "RUNNING") {
+    $("scenarioStatus").textContent = `running… ${elapsed.toFixed(1)}s elapsed (${r.selected.length} scenarios)`;
+  } else {
+    clearInterval(pollHandle); pollHandle = null;
+    const tag = r.status === "PASSED" ? "✓ passed" : r.status === "FAILED" ? "✗ assertions failed" : "✗ error";
+    $("scenarioStatus").textContent = `${tag} in ${elapsed.toFixed(1)}s` + (r.error ? ` — ${r.error}` : "");
+    $("btnDownloadZip").disabled = !r.hasZip;
+  }
+}
+
+$("btnDownloadZip").onclick = e => {
+  flash(e.currentTarget);
+  window.location.href = "/api/scenarios/job/zip";
+};
+
 loadParams();
+loadScenarios();
 connect();
 </script>
 </body>

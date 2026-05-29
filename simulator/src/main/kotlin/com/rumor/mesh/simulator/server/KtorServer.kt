@@ -12,7 +12,12 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.http.content.PartData
+import io.ktor.http.content.forEachPart
+import io.ktor.http.content.streamProvider
+import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respondBytes
+import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -45,6 +50,7 @@ class DashboardServer(
     private val port: Int = 8080,
     private val rumorVersion: String = "dev",
     private val pushIntervalMs: Long = 200L,
+    private val scenarioRunner: ScenarioRunnerState = ScenarioRunnerState(),
 ) {
     private val json = Json { encodeDefaults = true }
 
@@ -107,6 +113,74 @@ class DashboardServer(
                 get("/api/report") {
                     val bytes = ReportWriter.generate(world, world.params, rumorVersion)
                     call.respondBytes(bytes, ContentType.Application.Zip, HttpStatusCode.OK)
+                }
+
+                // ── Scenario runner ─────────────────────────────────────────
+                get("/api/scenarios") {
+                    call.respondText(
+                        json.encodeToString(scenarioRunner.listScenarios()),
+                        ContentType.Application.Json,
+                    )
+                }
+
+                post("/api/scenarios/upload") {
+                    val multipart = call.receiveMultipart()
+                    val accepted = mutableListOf<String>()
+                    multipart.forEachPart { part ->
+                        if (part is PartData.FileItem) {
+                            val name = part.originalFileName ?: "upload-${System.currentTimeMillis()}.json"
+                            val content = part.streamProvider().bufferedReader().readText()
+                            runCatching { scenarioRunner.acceptUpload(name, content) }
+                                .onSuccess { accepted.add(name) }
+                        }
+                        part.dispose()
+                    }
+                    call.respondText(
+                        """{"accepted":${json.encodeToString(accepted)}}""",
+                        ContentType.Application.Json,
+                    )
+                }
+
+                post("/api/scenarios/run") {
+                    val body = call.request.queryParameters["names"].orEmpty()
+                    val names = body.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    if (names.isEmpty()) {
+                        call.respondText("no scenarios selected", status = HttpStatusCode.BadRequest)
+                    } else {
+                        val id = runCatching { scenarioRunner.startRun(names) }
+                            .getOrElse { e ->
+                                call.respondText("error: ${e.message}", status = HttpStatusCode.Conflict)
+                                return@post
+                            }
+                        call.respondText("""{"id":"$id"}""", ContentType.Application.Json)
+                    }
+                }
+
+                get("/api/scenarios/job") {
+                    val record = scenarioRunner.currentJob
+                    if (record == null) {
+                        call.respondText("""{"id":null}""", ContentType.Application.Json)
+                    } else {
+                        val dto = JobStatusDto(
+                            id = record.id,
+                            status = record.status.name,
+                            selected = record.selected,
+                            startedAtMs = record.startedAtMs,
+                            finishedAtMs = record.finishedAtMs,
+                            error = record.error,
+                            hasZip = record.status != JobStatus.RUNNING && record.outputZip.exists(),
+                        )
+                        call.respondText(json.encodeToString(dto), ContentType.Application.Json)
+                    }
+                }
+
+                get("/api/scenarios/job/zip") {
+                    val record = scenarioRunner.currentJob
+                    if (record == null || record.status == JobStatus.RUNNING || !record.outputZip.exists()) {
+                        call.respondText("no result available", status = HttpStatusCode.NotFound)
+                    } else {
+                        call.respondFile(record.outputZip)
+                    }
                 }
 
                 webSocket("/ws") {
