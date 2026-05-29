@@ -472,6 +472,47 @@ class GossipEngine(
         return msg
     }
 
+    /**
+     * Compose and broadcast a [MessageType.BRIDGE_VOUCHED] envelope (O17).
+     * Called by a bridge plugin when it wants to propagate foreign-network
+     * content across the Rumor mesh beyond its direct peers. The outer message
+     * is signed by the local (bridge) Rumor key in the usual way; the
+     * [BridgeVouchedPayload] carries the foreign-network framing.
+     *
+     * Trust model: the outer Ed25519 signature certifies "this bridge
+     * received this content from {originNetwork}." It does NOT vouch for
+     * content authenticity — the foreign sender is not a Rumor user. The
+     * display layer (O47) MUST render this as "via {bridge} from
+     * {originNetwork}:{senderId}" so users don't conflate it with native
+     * Rumor authenticity.
+     */
+    fun composeBridgeVouched(
+        originNetwork: String,
+        originSenderId: String,
+        originContentType: ContentType,
+        payload: String,
+        originSignatureIfAny: String? = null,
+        receivedAtMs: Long = System.currentTimeMillis(),
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val body = BridgeVouchedPayload(
+            originNetwork = originNetwork,
+            originSenderId = originSenderId,
+            originSignatureIfAny = originSignatureIfAny,
+            originContentType = originContentType,
+            payload = payload,
+            receivedAtMs = receivedAtMs,
+        )
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.BRIDGE_VOUCHED,
+            hopsToLive = DEFAULT_BROADCAST_HOPS,
+            payload = MessagePayload(originContentType, WireJson.encodeToString(body)),
+        )
+        enqueueImmediate(msg)
+        return msg
+    }
+
     // ── Transport supply ──────────────────────────────────────────────────────
 
     /**
@@ -550,9 +591,17 @@ class GossipEngine(
         canaryMetrics.recordIncoming(isDuplicate = !isNew)
         if (!isNew) return
 
-        val msg = clamped.copy(
-            trustLevel = if (bridged) TrustLevel.BRIDGED else TrustLevel.VERIFIED,
-        )
+        // O17: BRIDGE_VOUCHED messages have a real outer Ed25519 (the bridge's)
+        // which has already been verified by messageStore.ingest above. The
+        // trust level reflects the foreign-content semantics, not the bridge's
+        // delivery signature. Display layer (O47) surfaces the via-bridge
+        // framing so users don't conflate this with native Rumor authenticity.
+        val finalTrust = when {
+            bridged -> TrustLevel.BRIDGED
+            clamped.type == MessageType.BRIDGE_VOUCHED -> TrustLevel.BRIDGE_VOUCHED
+            else -> TrustLevel.VERIFIED
+        }
+        val msg = clamped.copy(trustLevel = finalTrust)
 
         // O29 Tier 1: record a breadcrumb pointing back through the peer that
         // delivered this message. Bridged messages are skipped because the
@@ -649,10 +698,13 @@ class GossipEngine(
     private fun relay(msg: RumorMessage, autoRelayIds: Set<String>) {
         // Unsigned bridge traffic is never re-relayed onto the signed mesh: peers
         // reject unverifiable messages anyway, and re-signing here would launder a
-        // foreign message into a vouch this node never made.
+        // foreign message into a vouch this node never made. BRIDGE_VOUCHED is
+        // explicitly allowed because the bridge's outer Rumor signature certifies
+        // delivery (not content) and is checked on every hop like any other.
         if (msg.trustLevel == TrustLevel.BRIDGED) return
         when (msg.type) {
-            MessageType.BROADCAST -> {
+            MessageType.BROADCAST,
+            MessageType.BRIDGE_VOUCHED -> {
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 val boosted = if (msg.senderId in autoRelayIds) {
                     messageStore.boostHopsForManualRelay(forwarded)
@@ -731,7 +783,8 @@ class GossipEngine(
         val ceiling = when (msg.type) {
             MessageType.BROADCAST, MessageType.PING, MessageType.PONG,
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
-            MessageType.IDENTITY_ROTATION, MessageType.SELF_PRESENCE -> MAX_BROADCAST_HOPS
+            MessageType.IDENTITY_ROTATION, MessageType.SELF_PRESENCE,
+            MessageType.BRIDGE_VOUCHED -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,
             MessageType.PRIORITY_LINK_REQUEST,

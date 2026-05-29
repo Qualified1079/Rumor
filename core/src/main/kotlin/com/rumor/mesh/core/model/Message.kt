@@ -101,7 +101,23 @@ fun RumorMessage.withTtlSplit(routedHops: Int, floodedHops: Int): RumorMessage {
 enum class TrustLevel {
     /** [RumorMessage.signature] was verified against the sender's Ed25519 key. */
     VERIFIED,
-    /** Carried in from a non-Rumor network by a local bridge plugin; unsigned. */
+    /**
+     * Bridge-vouched content (O17). The OUTER Rumor signature on this message
+     * is by a bridge node's long-term key — that's verified. The INNER payload
+     * is from a foreign network (Meshtastic, MeshCore, etc.) and the bridge
+     * vouches only for *having received* it, never for content authenticity.
+     * Unlike [BRIDGED], BRIDGE_VOUCHED messages relay normally so the bridge's
+     * reach extends beyond its direct peers. The display layer must surface
+     * the via-bridge framing explicitly so users don't conflate it with
+     * native Rumor authenticity (O47).
+     */
+    BRIDGE_VOUCHED,
+    /**
+     * Carried in from a non-Rumor network by a local bridge plugin; outer
+     * signature is `BRIDGE_UNSIGNED` sentinel. Never re-relayed onto the
+     * signed mesh — a BRIDGED message reaches only its bridge's direct peers.
+     * Use [BRIDGE_VOUCHED] for cross-mesh propagation.
+     */
     BRIDGED,
 }
 
@@ -145,6 +161,14 @@ enum class MessageType {
      * someone else's mode for them.
      */
     @SerialName("self_presence") SELF_PRESENCE,
+    /**
+     * Bridge-vouched cross-network content (O17). Outer Rumor signature by a
+     * bridge node certifies "I received this content from {originNetwork}".
+     * Recipients verify the outer sig, set [TrustLevel.BRIDGE_VOUCHED], and
+     * allow normal relay so the bridge's reach extends beyond direct peers.
+     * Payload is a [BridgeVouchedPayload].
+     */
+    @SerialName("bridge_vouched") BRIDGE_VOUCHED,
 }
 
 @Serializable
@@ -235,7 +259,8 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.BLOCKLIST_PUBLISH -> TrafficClass.TRANSFER_SETUP
             MessageType.CHUNK             -> TrafficClass.BULK
             MessageType.BROADCAST,
-            MessageType.DIRECT -> when (payload?.contentType) {
+            MessageType.DIRECT,
+            MessageType.BRIDGE_VOUCHED -> when (payload?.contentType) {
                 ContentType.IMAGE, ContentType.VOICE, ContentType.FILE -> TrafficClass.BULK
                 ContentType.CONTROL                                    -> TrafficClass.INFRASTRUCTURE
                 ContentType.TEXT, null                                 -> TrafficClass.REALTIME
