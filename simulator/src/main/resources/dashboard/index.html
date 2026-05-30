@@ -55,7 +55,8 @@
   </div>
   <div class="controls">
     <button id="btnRandom">Randomize all</button>
-    <button id="btnReport" title="Snapshots the live dashboard sim (separate from scenarios)">Snapshot live sim</button>
+    <button id="btnReport" title="Point-in-time snapshot of current world state">Snapshot live sim</button>
+    <button id="btnTrace" title="Download the per-tick history of this dashboard run (last 10 sim-minutes)">Download run history</button>
   </div>
   <div id="params"></div>
 
@@ -106,6 +107,16 @@ $("btnStep").onclick   = e => post("/api/step",  e.currentTarget);
 $("btnReset").onclick  = e => { post("/api/reset", e.currentTarget); nodeActivity.clear(); edgeActivity.clear(); };
 $("btnRandom").onclick = e => post("/api/randomize", e.currentTarget).then(loadParams);
 $("btnReport").onclick = e => { flash(e.currentTarget); window.location = "/api/report"; };
+$("btnTrace").onclick = async e => {
+  flash(e.currentTarget);
+  const res = await fetch("/api/trace");
+  if (!res.ok) return;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = "rumor-live-trace.json";
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+};
 
 // ── Parameter sliders (auto-generated from /api/init) ───────────────────────
 async function loadParams() {

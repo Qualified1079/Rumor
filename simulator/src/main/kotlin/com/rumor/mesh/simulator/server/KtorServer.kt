@@ -117,6 +117,24 @@ class DashboardServer(
                     call.respondBytes(bytes, ContentType.Application.Zip, HttpStatusCode.OK)
                 }
 
+                /**
+                 * Download the per-tick trace of the live dashboard sim. This
+                 * is the recorded *history* of the run (one sample per sim-
+                 * second, latest 10 minutes kept) — distinct from /api/report
+                 * which is a point-in-time snapshot. Same shape as the
+                 * headless scenarios' trace.json so the same downstream
+                 * analysis tooling works for both.
+                 */
+                get("/api/trace") {
+                    val samples = world.snapshotTrace()
+                    val payload = json.encodeToString(samples)
+                    call.response.header(
+                        HttpHeaders.ContentDisposition,
+                        "attachment; filename=\"rumor-live-trace.json\"",
+                    )
+                    call.respondText(payload, ContentType.Application.Json)
+                }
+
                 // ── Scenario runner ─────────────────────────────────────────
                 get("/api/scenarios") {
                     call.respondText(

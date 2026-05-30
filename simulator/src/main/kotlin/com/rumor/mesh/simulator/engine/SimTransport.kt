@@ -69,11 +69,15 @@ class SimTransport(
         // too-small expectedItems will starve propagation. That's exactly the
         // class of bug worth catching here.
 
+        var bloomSkipped = 0
         val (aToB, bToA) = if (useRbsr) {
             rbsrExchange(rng) { dropped++ }
         } else {
-            val a = exchangeOneDirection(nodeA, nodeB, rng) { dropped++ }
-            val b = exchangeOneDirection(nodeB, nodeA, rng) { dropped++ }
+            // src side gets credit for the skip — it's the offerer who saved the bandwidth.
+            val a = exchangeOneDirection(nodeA, nodeB, rng, onDrop = { dropped++ },
+                onBloomSkip = { bloomSkipped += it; nodeA.recordBloomSkips(it) })
+            val b = exchangeOneDirection(nodeB, nodeA, rng, onDrop = { dropped++ },
+                onBloomSkip = { bloomSkipped += it; nodeB.recordBloomSkips(it) })
             a to b
         }
 
@@ -103,7 +107,8 @@ class SimTransport(
             ))
         }
 
-        return ExchangeMetrics(messagesAtoB, messagesBtoA, dropped, System.currentTimeMillis() - start)
+        return ExchangeMetrics(messagesAtoB, messagesBtoA, dropped,
+            System.currentTimeMillis() - start, bloomOffersSkipped = bloomSkipped)
     }
 
     /**
@@ -159,6 +164,7 @@ class SimTransport(
         dst: SimNode,
         rng: Random,
         onDrop: () -> Unit,
+        onBloomSkip: (Int) -> Unit = {},
     ): List<RumorMessage> {
         val dstKnownIds = dst.knownIds()
         if (dstKnownIds.isEmpty()) {
@@ -176,14 +182,18 @@ class SimTransport(
         for (id in dstKnownIds) bloom.add(id)
         val onWire = BloomFilterData.deserialize(bloom.serialize(), dstKnownIds.size.coerceAtLeast(64))
 
-        return src.knownMessages()
-            .asSequence()
-            .filter { !onWire.mightContain(it.id) }
-            .take(MAX_OFFER_PER_EXCHANGE)
-            .filter { msg ->
-                conditioner.simulate(estimatedBytes(msg), rng).also { if (it == null) onDrop() } != null
-            }
-            .toList()
+        val all = src.knownMessages()
+        val candidates = all.asSequence().filter { !onWire.mightContain(it.id) }
+            .take(MAX_OFFER_PER_EXCHANGE).toList()
+        // Bloom efficiency measure: how many messages we DIDN'T offer because
+        // the peer's bloom indicated they already had them. This is the real
+        // bandwidth saving the bloom buys. Counts both true-positives (peer
+        // really has it) and false-positives (bloom said yes but peer doesn't).
+        onBloomSkip(all.size - candidates.size)
+
+        return candidates.filter { msg ->
+            conditioner.simulate(estimatedBytes(msg), rng).also { if (it == null) onDrop() } != null
+        }
     }
 
     companion object {
@@ -204,6 +214,14 @@ data class ExchangeMetrics(
     val messagesBtoA: Int,
     val dropped: Int,
     val durationMs: Long,
+    /**
+     * Number of messages NOT offered across this exchange because the peer's
+     * bloom filter indicated they already had them. The real measure of
+     * bloom-filter bandwidth saving. Always 0 in the RBSR path because RBSR
+     * doesn't speculate — it exchanges fingerprints to know exactly what's
+     * missing, so there's no "we would have offered this but…" measure.
+     */
+    val bloomOffersSkipped: Int = 0,
 ) {
     val totalMessages get() = messagesAtoB + messagesBtoA
     val hasTraffic get() = totalMessages > 0

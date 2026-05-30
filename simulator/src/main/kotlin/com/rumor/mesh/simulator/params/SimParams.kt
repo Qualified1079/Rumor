@@ -156,6 +156,18 @@ class SimParamRegistry {
         ParamCategory.PROTOCOL, 10, 500, 60,
         randomFn = { rng -> rng.nextInt(10, 181) })
 
+    /**
+     * O29/O42 A/B-comparison toggles. Default 1 = on. Set to 0 to disable for
+     * side-by-side runs. Slider snaps to 0 or 1; not randomized.
+     */
+    val useBreadcrumbs = SimParam("use_breadcrumbs", "Breadcrumb routing (0/1)",
+        ParamCategory.PROTOCOL, 0, 1, 1, step = 1,
+        randomFn = { _ -> 1 })
+
+    val useRbsr = SimParam("use_rbsr", "RBSR sync (0/1)",
+        ParamCategory.PROTOCOL, 0, 1, 0, step = 1,
+        randomFn = { _ -> 0 })
+
     val gossipIntervalMs = SimParam("gossip_interval_ms", "Gossip interval (ms)",
         ParamCategory.PROTOCOL, 500L, 60_000L, 5_000L,
         randomFn = { rng -> rng.nextLong(1_000, 15_001) })

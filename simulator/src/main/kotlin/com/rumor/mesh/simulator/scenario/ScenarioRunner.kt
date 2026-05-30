@@ -70,7 +70,16 @@ class ScenarioRunner {
             if (scenario.trace) {
                 val curSec = world.simTimeMs.value / 1000L
                 if (curSec != lastTracedSec) {
-                    trace.add(world.metrics.value.toSample())
+                    val perNode = world.nodes.value.map { n ->
+                        NodeTraceSample(
+                            index = n.index,
+                            queueDepth = n.schedulerQueueDepth,
+                            messagesProcessed = n.messagesProcessed.value,
+                            dupDrops = n.dupDrops.value,
+                            bloomSkips = n.bloomSkips.value,
+                        )
+                    }
+                    trace.add(world.metrics.value.toSample().copy(nodes = perNode))
                     lastTracedSec = curSec
                 }
             }
@@ -303,4 +312,21 @@ data class TraceSample(
     val totalMessages: Long,
     val totalDropped: Long,
     val heapUsedMb: Long,
+    /**
+     * Per-node breakdown at this tick. Empty for samples taken before nodes
+     * exist (e.g. t=0) and for the final-metrics snapshot in the result. When
+     * present, lets the bundle viewer plot per-node curves: queue-depth
+     * hotspots, asymmetric broadcaster load, dup-on-ingest, bloom efficiency,
+     * breadcrumb-cache growth.
+     */
+    val nodes: List<NodeTraceSample> = emptyList(),
+)
+
+@Serializable
+data class NodeTraceSample(
+    val index: Int,
+    val queueDepth: Int,
+    val messagesProcessed: Long,
+    val dupDrops: Long,
+    val bloomSkips: Long,
 )
