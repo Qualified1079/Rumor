@@ -1,0 +1,25 @@
+{
+  "name": "bloom-partition-heal",
+  "durationSec": 120,
+  "seed": 271,
+  "speedMult": 10.0,
+  "topology": { "kind": "two-cluster", "left": 25, "right": 25, "bridges": 1 },
+  "params": {
+    "msg_per_sec": "0.5",
+    "dm_fraction": "0.1",
+    "broadcaster_count": "0",
+    "hops_to_live": "12",
+    "use_breadcrumbs": "1",
+    "use_rbsr": "0"
+  },
+  "events": [
+    { "kind": "partition", "atSec": 30, "target": "bridge" },
+    { "kind": "heal",      "atSec": 70, "target": "bridge" }
+  ],
+  "assertions": [
+    { "kind": "min-total-messages", "min": 8000 },
+    { "kind": "cross-cluster-delivery", "fromCluster": "left", "toCluster": "right", "minRatio": 0.4 },
+    { "kind": "heap-bounded", "maxMb": 2048 }
+  ],
+  "trace": true
+}

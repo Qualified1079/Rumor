@@ -186,8 +186,9 @@ class SimParamRegistry {
         linkLatencyMs, linkJitterMs, lossRate, bandwidthKbps, partitionProbability, partitionDurationSec,
         nodeCount, connectionsPerNode, churnRatePerMinute,
         msgPerSecondPerNode, minPayloadBytes, maxPayloadBytes, burstProbability, burstMultiplier,
-        dmFraction, largeMessageFraction,
+        dmFraction, largeMessageFraction, broadcasterCount, broadcasterMultiplier,
         hopsToLive, schedulerQuantumKb, gossipIntervalMs,
+        useBreadcrumbs, useRbsr,
         speedMultiplier, seed,
     )
 

@@ -1,0 +1,21 @@
+{
+  "name": "breadcrumbs-on-dm-heavy",
+  "durationSec": 90,
+  "seed": 314,
+  "speedMult": 10.0,
+  "topology": { "kind": "mesh", "nodes": 30, "connectionsPerNode": 4 },
+  "params": {
+    "msg_per_sec": "0.3",
+    "dm_fraction": "0.5",
+    "broadcaster_count": "0",
+    "hops_to_live": "10",
+    "use_breadcrumbs": "1",
+    "use_rbsr": "0"
+  },
+  "assertions": [
+    { "kind": "min-total-messages", "min": 3000 },
+    { "kind": "dm-delivery", "minRatio": 0.5 },
+    { "kind": "heap-bounded", "maxMb": 2048 }
+  ],
+  "trace": true
+}
