@@ -139,8 +139,21 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     // koin-test provides Module.verify() for static DI wiring checks (no Android runtime needed).
     testImplementation("io.insert-koin:koin-test:3.5.3")
+    // O28 wire-parser fuzzing — bridge-codec harnesses for the Meshtastic and
+    // MeshCore protobuf paths live in :app because the codec objects are
+    // internal to this module. Same Jazzer setup as in :core.
+    testImplementation("com.code-intelligence:jazzer-junit:0.22.1")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+}
+
+// Surface JUnit5's platform so Jazzer @FuzzTest methods get picked up by
+// `gradle :app:testDebugUnitTest`. The bridge-codec fuzzers (Meshtastic /
+// MeshCore protobuf paths) live in :app/src/test/.
+android.testOptions {
+    unitTests.all {
+        it.useJUnitPlatform()
+    }
 }

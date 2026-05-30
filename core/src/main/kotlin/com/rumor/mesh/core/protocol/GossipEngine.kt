@@ -5,6 +5,7 @@ import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
 import com.rumor.mesh.core.model.IdentityRotationPayload
+import com.rumor.mesh.core.model.BridgeVouchedPayload
 import com.rumor.mesh.core.model.SelfPresencePayload
 import com.rumor.mesh.core.model.UserMode
 import com.rumor.mesh.core.model.identityRotationSignableBytes

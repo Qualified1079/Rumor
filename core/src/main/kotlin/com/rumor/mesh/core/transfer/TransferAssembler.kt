@@ -64,7 +64,10 @@ class TransferAssembler(
         val transfer = transferRepo.getById(transferId) ?: return
         watchdogs.remove(transferId)?.cancel()
         paused.remove(transferId)
-        gossipEngine.composeTransferCancel(transferId, transfer.senderId)
+        // senderId is nullable on the repo record (legacy: it can be unknown
+        // for inbound transfers whose metadata was lost). Without a sender we
+        // can't tell anyone to stop, but we still drop local state.
+        transfer.senderId?.let { gossipEngine.composeTransferCancel(transferId, it) }
         transferRepo.upsert(transfer.copy(
             status = TransferStatus.ABANDONED,
             completedAtMs = System.currentTimeMillis(),

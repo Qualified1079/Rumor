@@ -11,6 +11,7 @@ import com.rumor.mesh.core.model.GossipPacket
 import com.rumor.mesh.core.model.IdentityRotationPayload
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.SelfPresencePayload
+import com.rumor.mesh.core.model.TransferCancel
 import com.rumor.mesh.core.model.TransferMetadata
 import com.rumor.mesh.core.sync.RbsrFrameWire
 import com.rumor.mesh.core.transport.wifidirect.BloomFilterData
@@ -81,6 +82,12 @@ class WireParserFuzzers {
     fun fuzzChunkRequest(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
         runCatching { WireJson.decodeFromString<ChunkRequest>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzTransferCancel(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<TransferCancel>(json) }
     }
 
     @FuzzTest
