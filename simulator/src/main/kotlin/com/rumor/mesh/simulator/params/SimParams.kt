@@ -161,11 +161,11 @@ class SimParamRegistry {
      * side-by-side runs. Slider snaps to 0 or 1; not randomized.
      */
     val useBreadcrumbs = SimParam("use_breadcrumbs", "Breadcrumb routing (0/1)",
-        ParamCategory.PROTOCOL, 0, 1, 1, step = 1,
+        ParamCategory.PROTOCOL, 0, 1, 1, step = 1.0,
         randomFn = { _ -> 1 })
 
     val useRbsr = SimParam("use_rbsr", "RBSR sync (0/1)",
-        ParamCategory.PROTOCOL, 0, 1, 0, step = 1,
+        ParamCategory.PROTOCOL, 0, 1, 0, step = 1.0,
         randomFn = { _ -> 0 })
 
     val gossipIntervalMs = SimParam("gossip_interval_ms", "Gossip interval (ms)",
