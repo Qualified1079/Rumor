@@ -60,14 +60,14 @@ object ScenarioBundle {
 
         val runner = ScenarioRunner()
         val results = mutableListOf<RunRecord>()
-        val total = scenarioFiles.size
+        val numScenarios = scenarioFiles.size
 
         for ((idx, file) in scenarioFiles.withIndex()) {
             if (isCancelled()) {
                 RumorLog.i(TAG, "cancelled before ${file.name} — writing partial bundle")
                 break
             }
-            onProgress(idx, total, file.nameWithoutExtension, 0f)
+            onProgress(idx, numScenarios, file.nameWithoutExtension, 0f)
             RumorLog.i(TAG, "── running ${file.name} ──")
             val (scenario, parseError) = runCatching {
                 json.decodeFromString<Scenario>(file.readText())
@@ -87,7 +87,7 @@ object ScenarioBundle {
             }
 
             val result = runCatching {
-                runner.run(scenario) { fraction -> onProgress(idx, total, file.nameWithoutExtension, fraction) }
+                runner.run(scenario) { fraction -> onProgress(idx, numScenarios, file.nameWithoutExtension, fraction) }
             }
                 .getOrElse { e ->
                     RumorLog.e(TAG, "runtime error in ${file.name}: ${e.message}", e)
