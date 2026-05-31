@@ -61,13 +61,14 @@ class ScenarioRunnerState(
     fun cancelCurrent(): Boolean {
         val record = jobRef.get() ?: return false
         if (record.status != JobStatus.RUNNING) return false
+        // Just raise the flag — status stays RUNNING until the runAll coroutine
+        // actually exits and writes the bundle. Otherwise polling stops while
+        // the file is still mid-write and the download button never enables.
         cancelFlag.set(true)
-        jobRef.set(record.copy(
-            status = JobStatus.CANCELLED,
-            finishedAtMs = System.currentTimeMillis(),
-        ))
         return true
     }
+
+    fun isCancelRequested(): Boolean = cancelFlag.get()
 
     /** Bundled + uploaded scenario filenames, sorted, uploads shadow bundled. */
     fun listScenarios(): List<ScenarioEntry> {
@@ -164,11 +165,20 @@ class ScenarioRunnerState(
                 jobRef.updateAndGet { cur ->
                     if (cur?.id != jobId) cur  // someone cancelled / replaced — leave it
                     else cur.copy(
-                        status = if (allPassed) JobStatus.PASSED else JobStatus.FAILED,
+                        // If cancel was requested, runAll exited early and wrote a
+                        // partial bundle. Status flips to CANCELLED only NOW — after
+                        // the zip exists on disk — so the dashboard's polling sees a
+                        // downloadable result the same poll tick it sees the terminal
+                        // status.
+                        status = when {
+                            cancelFlag.get() -> JobStatus.CANCELLED
+                            allPassed        -> JobStatus.PASSED
+                            else             -> JobStatus.FAILED
+                        },
                         finishedAtMs = System.currentTimeMillis(),
                     )
                 }
-                RumorLog.i(TAG, "$jobId finished: allPassed=$allPassed")
+                RumorLog.i(TAG, "$jobId finished: allPassed=$allPassed cancelled=${cancelFlag.get()}")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 RumorLog.i(TAG, "$jobId cancelled")
                 throw e
@@ -222,4 +232,11 @@ data class JobStatusDto(
     val finishedAtMs: Long? = null,
     val error: String? = null,
     val hasZip: Boolean,
+    /**
+     * True from the moment Cancel was pressed until the runAll coroutine
+     * actually exits (status flips to CANCELLED). Lets the dashboard show
+     * "cancelling…" instead of going silent while the current scenario
+     * finishes and the partial bundle is being written.
+     */
+    val cancelRequested: Boolean = false,
 )

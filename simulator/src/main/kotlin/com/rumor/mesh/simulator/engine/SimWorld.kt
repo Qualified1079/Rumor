@@ -82,15 +82,19 @@ class SimWorld(val params: SimParamRegistry) {
         if (curSec == lastTracedSec) return
         lastTracedSec = curSec
         val m = _metrics.value
-        val perNode = _nodes.value.map { n ->
-            com.rumor.mesh.simulator.scenario.NodeTraceSample(
-                index = n.index,
-                queueDepth = n.schedulerQueueDepth,
-                messagesProcessed = n.messagesProcessed.value,
-                dupDrops = n.dupDrops.value,
-                bloomSkips = n.bloomSkips.value,
-            )
-        }
+        // Per-node samples every 5 sim-seconds; aggregate every 1. Per-node
+        // is O(nodes) allocations per snapshot and dominates trace overhead.
+        val perNode = if (curSec % 5L == 0L) {
+            _nodes.value.map { n ->
+                com.rumor.mesh.simulator.scenario.NodeTraceSample(
+                    index = n.index,
+                    queueDepth = n.schedulerQueueDepth,
+                    messagesProcessed = n.messagesProcessed.value,
+                    dupDrops = n.dupDrops.value,
+                    bloomSkips = n.bloomSkips.value,
+                )
+            }
+        } else emptyList()
         val sample = com.rumor.mesh.simulator.scenario.TraceSample(
             simTimeMs = m.simTimeMs,
             nodeCount = m.nodeCount,

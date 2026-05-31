@@ -69,16 +69,21 @@ class ScenarioRunner {
             }
             if (scenario.trace) {
                 val curSec = world.simTimeMs.value / 1000L
+                // Sample per-node every 5 sim-seconds; aggregate metrics every
+                // 1 sim-second. Per-node snapshots allocate O(nodes) per call
+                // and dominate trace overhead on 50+ node scenarios.
                 if (curSec != lastTracedSec) {
-                    val perNode = world.nodes.value.map { n ->
-                        NodeTraceSample(
-                            index = n.index,
-                            queueDepth = n.schedulerQueueDepth,
-                            messagesProcessed = n.messagesProcessed.value,
-                            dupDrops = n.dupDrops.value,
-                            bloomSkips = n.bloomSkips.value,
-                        )
-                    }
+                    val perNode = if (curSec % 5L == 0L) {
+                        world.nodes.value.map { n ->
+                            NodeTraceSample(
+                                index = n.index,
+                                queueDepth = n.schedulerQueueDepth,
+                                messagesProcessed = n.messagesProcessed.value,
+                                dupDrops = n.dupDrops.value,
+                                bloomSkips = n.bloomSkips.value,
+                            )
+                        }
+                    } else emptyList()
                     trace.add(world.metrics.value.toSample().copy(nodes = perNode))
                     lastTracedSec = curSec
                 }
