@@ -37,16 +37,16 @@ object TopologyBuilder {
 
     // ── Line: 0—1—2—…—N-1 ────────────────────────────────────────────────────
     private fun buildLine(t: Topology.Line, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
-        val nodes = (0 until t.length).map { SimNode(it, scope, useBreadcrumbs = params.useBreadcrumbs.value == 1) }
+        val nodes = (0 until t.length).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
         val edges = (0 until t.length - 1).map { i ->
-            SimTransport(nodes[i], nodes[i + 1], conditioner(p, rng), useRbsr = params.useRbsr.value == 1)
+            SimTransport(nodes[i], nodes[i + 1], conditioner(p, rng), useRbsr = p.useRbsr.value == 1)
         }
         return BuildResult(nodes, edges, TopologyMetadata(groups = mapOf("all" to nodes.map { it.index }.toSet())))
     }
 
     // ── Mesh: same as dashboard default ──────────────────────────────────────
     private fun buildMesh(t: Topology.Mesh, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
-        val nodes = (0 until t.nodes).map { SimNode(it, scope, useBreadcrumbs = params.useBreadcrumbs.value == 1) }
+        val nodes = (0 until t.nodes).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
         val edgeSet = mutableSetOf<String>()
         val edges = mutableListOf<SimTransport>()
         for (node in nodes) {
@@ -54,7 +54,7 @@ object TopologyBuilder {
                 it.index != node.index && SimTransport.edgeKey(node.index, it.index) !in edgeSet
             }
             for (peer in candidates.shuffled(rng).take(t.connectionsPerNode)) {
-                val e = SimTransport(node, peer, conditioner(p, rng), useRbsr = params.useRbsr.value == 1)
+                val e = SimTransport(node, peer, conditioner(p, rng), useRbsr = p.useRbsr.value == 1)
                 edges.add(e); edgeSet.add(e.edgeKey)
             }
         }
@@ -64,7 +64,7 @@ object TopologyBuilder {
     // ── TwoCluster: left fully meshed ↔ bridges ↔ right fully meshed ─────────
     private fun buildTwoCluster(t: Topology.TwoCluster, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
         val total = t.left + t.right + t.bridges
-        val nodes = (0 until total).map { SimNode(it, scope, useBreadcrumbs = params.useBreadcrumbs.value == 1) }
+        val nodes = (0 until total).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
         val leftIdx    = (0 until t.left).toSet()
         val rightIdx   = (t.left until t.left + t.right).toSet()
         val bridgeIdx  = (t.left + t.right until total).toSet()
@@ -74,7 +74,7 @@ object TopologyBuilder {
         fun fullyMesh(group: Set<Int>) {
             val g = group.toList()
             for (i in g.indices) for (j in i + 1 until g.size) {
-                edges.add(SimTransport(nodes[g[i]], nodes[g[j]], conditioner(p, rng), useRbsr = params.useRbsr.value == 1))
+                edges.add(SimTransport(nodes[g[i]], nodes[g[j]], conditioner(p, rng), useRbsr = p.useRbsr.value == 1))
             }
         }
         fullyMesh(leftIdx); fullyMesh(rightIdx)
@@ -82,10 +82,10 @@ object TopologyBuilder {
         // Each bridge connects to every node in both clusters, tagged "bridge".
         for (bIdx in bridgeIdx) {
             for (lIdx in leftIdx) {
-                edges.add(SimTransport(nodes[bIdx], nodes[lIdx], conditioner(p, rng), tags = setOf("bridge", "left-bridge"), useRbsr = params.useRbsr.value == 1))
+                edges.add(SimTransport(nodes[bIdx], nodes[lIdx], conditioner(p, rng), tags = setOf("bridge", "left-bridge"), useRbsr = p.useRbsr.value == 1))
             }
             for (rIdx in rightIdx) {
-                edges.add(SimTransport(nodes[bIdx], nodes[rIdx], conditioner(p, rng), tags = setOf("bridge", "right-bridge"), useRbsr = params.useRbsr.value == 1))
+                edges.add(SimTransport(nodes[bIdx], nodes[rIdx], conditioner(p, rng), tags = setOf("bridge", "right-bridge"), useRbsr = p.useRbsr.value == 1))
             }
         }
         return BuildResult(
@@ -96,9 +96,9 @@ object TopologyBuilder {
 
     // ── HubSpoke: center=0, spokes=1..N ──────────────────────────────────────
     private fun buildHubSpoke(t: Topology.HubSpoke, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
-        val nodes = (0..t.spokes).map { SimNode(it, scope, useBreadcrumbs = params.useBreadcrumbs.value == 1) }
+        val nodes = (0..t.spokes).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
         val edges = (1..t.spokes).map { i ->
-            SimTransport(nodes[0], nodes[i], conditioner(p, rng), tags = setOf("spoke"), useRbsr = params.useRbsr.value == 1)
+            SimTransport(nodes[0], nodes[i], conditioner(p, rng), tags = setOf("spoke"), useRbsr = p.useRbsr.value == 1)
         }
         return BuildResult(
             nodes, edges,
@@ -108,12 +108,12 @@ object TopologyBuilder {
 
     // ── Custom: explicit adjacency list ──────────────────────────────────────
     private fun buildCustom(t: Topology.Custom, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
-        val nodes = (0 until t.nodeCount).map { SimNode(it, scope, useBreadcrumbs = params.useBreadcrumbs.value == 1) }
+        val nodes = (0 until t.nodeCount).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
         val edges = t.edges.map { spec ->
             require(spec.from in 0 until t.nodeCount && spec.to in 0 until t.nodeCount) {
                 "Custom topology edge $spec references out-of-range node (nodeCount=${t.nodeCount})"
             }
-            SimTransport(nodes[spec.from], nodes[spec.to], conditioner(p, rng), tags = spec.tags.toSet(), useRbsr = params.useRbsr.value == 1)
+            SimTransport(nodes[spec.from], nodes[spec.to], conditioner(p, rng), tags = spec.tags.toSet(), useRbsr = p.useRbsr.value == 1)
         }
         // For Custom topology, scenarios using cross-cluster assertions are expected
         // to use named tags + tag-derived groups themselves.
