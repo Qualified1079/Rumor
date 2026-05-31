@@ -161,7 +161,17 @@ class ScenarioRunnerState(
 
         val coroutineJob = scope.launch {
             try {
-                val allPassed = ScenarioBundle.runAll(staging, outZip, isCancelled = { cancelFlag.get() })
+                val allPassed = ScenarioBundle.runAll(
+                    scenariosDir = staging,
+                    outputZip = outZip,
+                    isCancelled = { cancelFlag.get() },
+                    onProgress = { idx, _, name, fraction ->
+                        jobRef.updateAndGet { cur ->
+                            if (cur?.id != jobId) cur
+                            else cur.copy(currentIndex = idx, currentName = name, currentFraction = fraction)
+                        }
+                    },
+                )
                 jobRef.updateAndGet { cur ->
                     if (cur?.id != jobId) cur  // someone cancelled / replaced — leave it
                     else cur.copy(
@@ -221,6 +231,11 @@ data class JobRecord(
     val finishedAtMs: Long? = null,
     val error: String? = null,
     val coroutineJob: Job? = null,
+    /** Index of the scenario currently running (0-based), or null if not started. */
+    val currentIndex: Int? = null,
+    val currentName: String? = null,
+    /** 0.0..1.0 of the current scenario's sim-time. */
+    val currentFraction: Float = 0f,
 )
 
 @Serializable
@@ -239,4 +254,9 @@ data class JobStatusDto(
      * finishes and the partial bundle is being written.
      */
     val cancelRequested: Boolean = false,
+    /** Index of the scenario currently running (0-based). Null before any has started. */
+    val currentIndex: Int? = null,
+    val currentName: String? = null,
+    /** 0.0..1.0 of the current scenario's sim-time. */
+    val currentFraction: Float = 0f,
 )

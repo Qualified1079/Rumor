@@ -43,6 +43,14 @@ object ScenarioBundle {
          * original CLI behaviour.
          */
         isCancelled: () -> Boolean = { false },
+        /**
+         * Periodic progress callback. Called with the 0-based index of the
+         * scenario currently running, total count, its name, and an
+         * in-scenario 0.0..1.0 fraction. Lets the dashboard render an
+         * actual progress bar instead of just "elapsed seconds." Default
+         * is a no-op for the CLI.
+         */
+        onProgress: (currentIndex: Int, total: Int, currentName: String, currentFraction: Float) -> Unit = { _, _, _, _ -> },
     ): Boolean {
         require(scenariosDir.isDirectory) { "not a directory: $scenariosDir" }
         val scenarioFiles = scenariosDir.listFiles { f -> f.isFile && f.extension == "json" }
@@ -52,12 +60,14 @@ object ScenarioBundle {
 
         val runner = ScenarioRunner()
         val results = mutableListOf<RunRecord>()
+        val total = scenarioFiles.size
 
-        for (file in scenarioFiles) {
+        for ((idx, file) in scenarioFiles.withIndex()) {
             if (isCancelled()) {
                 RumorLog.i(TAG, "cancelled before ${file.name} — writing partial bundle")
                 break
             }
+            onProgress(idx, total, file.nameWithoutExtension, 0f)
             RumorLog.i(TAG, "── running ${file.name} ──")
             val (scenario, parseError) = runCatching {
                 json.decodeFromString<Scenario>(file.readText())
@@ -76,7 +86,9 @@ object ScenarioBundle {
                 continue
             }
 
-            val result = runCatching { runner.run(scenario) }
+            val result = runCatching {
+                runner.run(scenario) { fraction -> onProgress(idx, total, file.nameWithoutExtension, fraction) }
+            }
                 .getOrElse { e ->
                     RumorLog.e(TAG, "runtime error in ${file.name}: ${e.message}", e)
                     ScenarioResult(

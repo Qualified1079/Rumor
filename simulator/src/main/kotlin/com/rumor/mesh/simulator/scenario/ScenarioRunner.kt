@@ -20,7 +20,15 @@ private const val TAG = "ScenarioRunner"
  */
 class ScenarioRunner {
 
-    fun run(scenario: Scenario): ScenarioResult = runBlocking {
+    fun run(
+        scenario: Scenario,
+        /**
+         * Periodic in-scenario progress callback. Called from the tick loop
+         * each polled second with a `0.0..1.0` fraction of `simTimeMs /
+         * durationMs`. Default is a no-op for callers that don't care.
+         */
+        onProgress: (Float) -> Unit = {},
+    ): ScenarioResult = runBlocking {
         val params = SimParamRegistry()
         // Seed deterministically per scenario so replays line up.
         params.seed.value = scenario.seed
@@ -88,6 +96,7 @@ class ScenarioRunner {
                     lastTracedSec = curSec
                 }
             }
+            onProgress((world.simTimeMs.value.toFloat() / deadlineMs.coerceAtLeast(1L)).coerceIn(0f, 1f))
             delay(pollIntervalMs)
         }
         world.stop()

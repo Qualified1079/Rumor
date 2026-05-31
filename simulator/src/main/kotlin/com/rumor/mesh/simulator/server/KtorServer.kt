@@ -201,6 +201,9 @@ class DashboardServer(
                             hasZip = record.status != JobStatus.RUNNING && record.outputZip.exists(),
                             cancelRequested = scenarioRunner.isCancelRequested() &&
                                 record.status == JobStatus.RUNNING,
+                            currentIndex = record.currentIndex,
+                            currentName = record.currentName,
+                            currentFraction = record.currentFraction,
                         )
                         call.respondText(json.encodeToString(dto), ContentType.Application.Json)
                     }

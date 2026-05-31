@@ -77,6 +77,9 @@
     <input id="autoDownload" type="checkbox" checked> Auto-download when ready
   </label>
   <div id="scenarioStatus" style="margin-top:6px;font-size:12px;color:var(--fg);min-height:18px;"></div>
+  <div id="scenarioProgressWrap" style="margin-top:4px;height:6px;background:var(--line);border-radius:3px;overflow:hidden;display:none;">
+    <div id="scenarioProgressBar" style="height:100%;width:0;background:var(--accent);transition:width .2s;"></div>
+  </div>
 </div>
 <div id="main">
   <canvas id="graph"></canvas>
@@ -461,14 +464,23 @@ async function pollJob() {
   if (!r.id) return;
   const elapsed = ((r.finishedAtMs ?? Date.now()) - r.startedAtMs) / 1000;
   if (r.status === "RUNNING") {
+    const idx = r.currentIndex ?? 0;
+    const total = r.selected.length;
+    const inner = Math.max(0, Math.min(1, r.currentFraction || 0));
+    const overall = (idx + inner) / Math.max(1, total);
+    $("scenarioProgressWrap").style.display = "block";
+    $("scenarioProgressBar").style.width = `${(overall * 100).toFixed(1)}%`;
+    const name = r.currentName ?? "—";
     if (r.cancelRequested) {
-      $("scenarioStatus").textContent = `cancelling… ${elapsed.toFixed(1)}s elapsed (current scenario finishing; bundle being written)`;
+      $("scenarioStatus").textContent = `cancelling… (current scenario finishing; bundle being written)`;
       $("btnCancelRun").disabled = true;
     } else {
-      $("scenarioStatus").textContent = `running… ${elapsed.toFixed(1)}s elapsed (${r.selected.length} scenarios)`;
+      $("scenarioStatus").textContent =
+        `${idx + 1}/${total}: ${name} — ${(inner * 100).toFixed(0)}%  ·  ${elapsed.toFixed(1)}s elapsed`;
       $("btnCancelRun").disabled = false;
     }
   } else {
+    $("scenarioProgressWrap").style.display = "none";
     clearInterval(pollHandle); pollHandle = null;
     $("btnCancelRun").disabled = true;
     const tag = ({
