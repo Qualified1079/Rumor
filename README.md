@@ -521,7 +521,7 @@ Settlement A              Hilltop relay             Settlement B
 - Sideload via F-Droid or direct APK. No Play Store dependency.
 - Foreground service with persistent notification keeps the gossip engine alive on Android's aggressive process management.
 - Battery optimisation exemption is surfaced automatically in Settings for OEMs known to kill background processes.
-- For relay nodes: a phone in a window plugged in permanently becomes a high-throughput node automatically. Add a LoRa dongle for inter-settlement reach.
+- For relay nodes: a phone in a window plugged in permanently becomes a stable high-throughput relay automatically. Add a LoRa dongle (via the Meshtastic or MeshCore bridge) for kilometre-scale links between buildings or neighbourhoods.
 
 ### Companion apps
 
