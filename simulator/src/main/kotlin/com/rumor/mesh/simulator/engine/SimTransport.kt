@@ -70,8 +70,9 @@ class SimTransport(
         // class of bug worth catching here.
 
         var bloomSkipped = 0
+        var rbsrRounds = 0
         val (aToB, bToA) = if (useRbsr) {
-            rbsrExchange(rng) { dropped++ }
+            rbsrExchange(rng, onDrop = { dropped++ }, onRounds = { rbsrRounds = it })
         } else {
             // src side gets credit for the skip — it's the offerer who saved the bandwidth.
             val a = exchangeOneDirection(nodeA, nodeB, rng, onDrop = { dropped++ },
@@ -108,7 +109,8 @@ class SimTransport(
         }
 
         return ExchangeMetrics(messagesAtoB, messagesBtoA, dropped,
-            System.currentTimeMillis() - start, bloomOffersSkipped = bloomSkipped)
+            System.currentTimeMillis() - start,
+            bloomOffersSkipped = bloomSkipped, rbsrRoundsUsed = rbsrRounds)
     }
 
     /**
@@ -118,7 +120,7 @@ class SimTransport(
      * resolve in a subsequent exchange). After convergence, A sends to B
      * exactly the message IDs B didn't have, and vice versa.
      */
-    private fun rbsrExchange(rng: Random, onDrop: () -> Unit): Pair<List<RumorMessage>, List<RumorMessage>> {
+    private fun rbsrExchange(rng: Random, onDrop: () -> Unit, onRounds: (Int) -> Unit = {}): Pair<List<RumorMessage>, List<RumorMessage>> {
         val itemsA = nodeA.knownMessages().map { RbsrItem(it.sentAtMs, it.id) }
         val itemsB = nodeB.knownMessages().map { RbsrItem(it.sentAtMs, it.id) }
         val rbsrA = Rbsr(SortedListRbsrStorage(itemsA))
@@ -129,7 +131,9 @@ class SimTransport(
 
         var framesA = rbsrA.initiate()
         var framesB = rbsrB.initiate()
+        var roundsUsed = 0
         for (round in 0 until MAX_RBSR_ROUNDS) {
+            roundsUsed = round + 1
             val responseA = rbsrA.respond(framesB)
             aPeerNeeds.addAll(responseA.peerNeeds)
             val responseB = rbsrB.respond(framesA)
@@ -138,6 +142,7 @@ class SimTransport(
             framesA = responseA.outgoing
             framesB = responseB.outgoing
         }
+        onRounds(roundsUsed)
 
         val aToB = nodeA.knownMessages()
             .asSequence()
@@ -222,6 +227,12 @@ data class ExchangeMetrics(
      * missing, so there's no "we would have offered this but…" measure.
      */
     val bloomOffersSkipped: Int = 0,
+    /**
+     * Bisection rounds RBSR actually used to converge for this exchange (0
+     * for bloom-path exchanges). If this consistently equals MAX_RBSR_ROUNDS
+     * the cap is the bottleneck, not the algorithm — see O61.
+     */
+    val rbsrRoundsUsed: Int = 0,
 ) {
     val totalMessages get() = messagesAtoB + messagesBtoA
     val hasTraffic get() = totalMessages > 0

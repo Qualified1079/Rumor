@@ -52,7 +52,16 @@ data class RbsrBound(val timestamp: Long, val id: String) : Comparable<RbsrBound
 
 /** Storage interface the algorithm queries against. Implementations are responsible for sort order. */
 /** Maximum bisection rounds before falling through with whatever diffs we have. */
-const val MAX_RBSR_ROUNDS: Int = 5
+/**
+ * Maximum bisection rounds before exiting with whatever diff we have. With
+ * `bisectionFactor = 16`, N rounds covers 16^N distinct sub-ranges in theory.
+ * Set to 12 — that's 16^12 sub-ranges, astronomically large — so the cap
+ * functions as a safety against infinite recursion, not a budget. Per O61:
+ * an earlier value of 5 was hitting the cap on partition-heal scenarios
+ * (~1M ranges turned out not to be enough headroom in practice). If a
+ * future scenario hits 12, the algorithm has a real bug — not a tuning gap.
+ */
+const val MAX_RBSR_ROUNDS: Int = 12
 
 interface RbsrStorage {
     /** Items in `[lower, upper)` in ascending order. */
