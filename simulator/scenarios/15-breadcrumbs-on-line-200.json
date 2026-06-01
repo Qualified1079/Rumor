@@ -1,0 +1,21 @@
+{
+  "name": "breadcrumbs-on-line-200",
+  "durationSec": 180,
+  "seed": 4242,
+  "speedMult": 10.0,
+  "topology": { "kind": "line", "length": 200 },
+  "params": {
+    "msg_per_sec": "0.15",
+    "dm_fraction": "0.4",
+    "broadcaster_count": "0",
+    "hops_to_live": "40",
+    "use_breadcrumbs": "1",
+    "use_rbsr": "0"
+  },
+  "assertions": [
+    { "kind": "min-total-messages", "min": 5000 },
+    { "kind": "dm-delivery", "minRatio": 0.4 },
+    { "kind": "heap-bounded", "maxMb": 4096 }
+  ],
+  "trace": true
+}
