@@ -26,8 +26,39 @@ class MessageStore(
     private val staticMode: StaticMode? = null,
 ) {
     private val _sigFailures = AtomicLong()
+    private val _rateLimited = AtomicLong()
     /** Count of messages dropped due to invalid Ed25519 signatures. */
     val sigFailureCount: Long get() = _sigFailures.get()
+    /** Count of messages dropped at ingest because the sender exceeded the per-sender token bucket (O16). */
+    val rateLimitedCount: Long get() = _rateLimited.get()
+
+    /**
+     * O16 per-sender token bucket. Caps the rate at which any single sender
+     * can consume our ingest CPU + storage. Generous threshold ([INGEST_BUDGET_PER_SEC])
+     * so high-traffic legitimate nodes aren't false-positived; tight enough that
+     * a spammer or compromised plugin can't monopolise either resource.
+     *
+     * Relay path is NOT gated by this — only `MessageStore.ingest`. A sender
+     * we rate-limit at ingest still has their messages relayed by others; this
+     * only stops them consuming OUR local resources.
+     */
+    private data class Bucket(@Volatile var windowStartMs: Long, @Volatile var count: Int)
+    private val buckets = java.util.concurrent.ConcurrentHashMap<String, Bucket>()
+    private val INGEST_BUDGET_PER_SEC = 100
+    private val INGEST_WINDOW_MS = 1_000L
+
+    private fun acceptForRate(senderId: String, nowMs: Long): Boolean {
+        val b = buckets.computeIfAbsent(senderId) { Bucket(nowMs, 0) }
+        synchronized(b) {
+            if (nowMs - b.windowStartMs >= INGEST_WINDOW_MS) {
+                b.windowStartMs = nowMs
+                b.count = 0
+            }
+            if (b.count >= INGEST_BUDGET_PER_SEC) return false
+            b.count++
+            return true
+        }
+    }
 
     /**
      * Ingest a message from a gossip exchange.
@@ -35,6 +66,15 @@ class MessageStore(
      */
     suspend fun ingest(msg: RumorMessage): Boolean {
         if (!duplicateFilter.recordAndCheck(msg.id)) return false
+
+        // O16: per-sender token bucket gate. Skip ingest entirely for senders
+        // exceeding INGEST_BUDGET_PER_SEC. Caller treats the return as a duplicate;
+        // the relay path is unaffected so other peers still propagate.
+        if (!acceptForRate(msg.senderId, System.currentTimeMillis())) {
+            _rateLimited.incrementAndGet()
+            RumorLog.d(TAG, "Rate-limit drop from ${msg.senderId.take(8)}… (>$INGEST_BUDGET_PER_SEC/s)")
+            return false
+        }
 
         val pubKeyBytes = msg.senderPublicKey.fromBase64()
         val payload = signableBytes(msg)

@@ -35,11 +35,17 @@ interface MessageDao {
     /**
      * All DMs the local user is involved in (sent or received), newest first.
      * Used by the messages screen to assemble per-peer thread previews in memory.
+     *
+     * Orders by MIN(sentAtMs, receivedAtMs) so a malicious sender can't pin
+     * their DM to the top of the list by forging a future sentAtMs. For
+     * legitimate offline-then-delivered DMs from days ago, MIN keeps the
+     * older value (correct). For forged future timestamps, MIN clamps to
+     * receivedAtMs (when we actually saw it).
      */
     @Query("""
         SELECT * FROM messages
         WHERE type = 'DIRECT' AND (senderId = :userId OR recipientId = :userId)
-        ORDER BY sentAtMs DESC
+        ORDER BY MIN(sentAtMs, receivedAtMs) DESC
         LIMIT :limit
     """)
     fun observeAllDirect(userId: String, limit: Int = 500): Flow<List<MessageEntity>>

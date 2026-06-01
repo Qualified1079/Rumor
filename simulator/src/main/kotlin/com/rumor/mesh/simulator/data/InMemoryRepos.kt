@@ -138,7 +138,9 @@ class InMemoryRouteRepository : RouteRepository {
     override suspend fun getPreferred(limit: Int): List<Route> =
         routes.values
             .sortedWith(
-                compareByDescending<Route> { it.bytesRelayed }
+                // O3: rank by bytesRelayed / (1 + failureCount), tie-break on
+                // sessionCount then recency. Mirrors the Room DAO query.
+                compareByDescending<Route> { it.bytesRelayed.toDouble() / (1 + it.failureCount) }
                     .thenByDescending { it.sessionCount }
                     .thenByDescending { it.lastUpdatedMs }
             )

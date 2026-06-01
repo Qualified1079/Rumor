@@ -29,8 +29,8 @@ class BreadcrumbRepositoryAdapter(private val dao: BreadcrumbDao) : BreadcrumbRe
     override suspend fun pruneOld(olderThanMs: Long) = dao.pruneOld(olderThanMs)
 }
 
-private fun Route.toEntity() = RouteEntity(peerId, latencyMs, hopCount, lastUpdatedMs, sessionCount, bytesRelayed)
-private fun RouteEntity.toModel() = Route(peerId, latencyMs, hopCount, lastUpdatedMs, sessionCount, bytesRelayed)
+private fun Route.toEntity() = RouteEntity(peerId, latencyMs, hopCount, lastUpdatedMs, sessionCount, bytesRelayed, failureCount)
+private fun RouteEntity.toModel() = Route(peerId, latencyMs, hopCount, lastUpdatedMs, sessionCount, bytesRelayed, failureCount)
 
 private fun Breadcrumb.toEntity() = BreadcrumbEntity(
     targetUserId = targetUserId,

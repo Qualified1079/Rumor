@@ -226,13 +226,26 @@ class GossipSession(
                 // what they need in a separate Request frame because they cannot
                 // enumerate that just from our summary.
                 send(out, buildSummary())
-                val peerKnows = when (val peerSummary = receive(inp)) {
+                // O13: a peer can send an adversarial bloom (expectedItems =
+                // Int.MAX_VALUE) that would OOM the receiver. deserializeOrNull
+                // returns null on OOM/IAE; we treat that as "peer's bloom is
+                // unusable — assume they know nothing" and fall back to capped
+                // flood. Receiver stays alive; sender over-offers this exchange.
+                val peerKnows: (String) -> Boolean = when (val peerSummary = receive(inp)) {
                     is GossipPacket.IdList -> peerSummary.ids.toHashSet().let { set ->
                         { id: String -> id in set }
                     }
-                    is GossipPacket.Bloom -> BloomFilterData.deserialize(
-                        peerSummary.filter, peerSummary.expectedItems,
-                    ).let { f -> { id: String -> f.mightContain(id) } }
+                    is GossipPacket.Bloom -> {
+                        val f = BloomFilterData.deserializeOrNull(
+                            peerSummary.filter, peerSummary.expectedItems,
+                        )
+                        if (f == null) {
+                            RumorLog.w(TAG, "Peer bloom unusable (oversized?) — over-offering this exchange")
+                            { _: String -> false }
+                        } else {
+                            { id: String -> f.mightContain(id) }
+                        }
+                    }
                     else -> return@withTimeout null
                 }
                 overlapFraction = if (messagesToOffer.isEmpty()) 0f

@@ -181,6 +181,10 @@ class GossipEngine(
     fun onExchangeFailed(peerId: String) {
         scope.launch {
             canaryMetrics.recordExchange(success = false, rttMs = 0)
+            // O3: penalise unreliable peers in the route ranking. Empty peerId
+            // means the failure happened before HELLO completed — no route
+            // record to update.
+            if (peerId.isNotEmpty()) topologyTracker.recordSessionFailed(peerId)
             RumorLog.d(TAG, "Exchange failed with ${peerId.take(8)}…")
         }
     }

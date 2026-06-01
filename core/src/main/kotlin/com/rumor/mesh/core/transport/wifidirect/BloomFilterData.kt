@@ -66,6 +66,25 @@ class BloomFilterData(
     }
 
     companion object {
+        /**
+         * O13: graceful-fallback variant. A peer can send an adversarial
+         * `expectedItems` (e.g. `Int.MAX_VALUE`) that drives the constructor
+         * into a multi-GB allocation. Returns null on OOM / IllegalArgumentException
+         * so the caller can fall through to "no bloom filter, capped offer batch."
+         * Catching OutOfMemoryError is unusual but safe here: we only allocate
+         * inside the constructor (no shared state to leave in a bad mode), and
+         * the alternative is the peer crashing the whole engine for free.
+         */
+        fun deserializeOrNull(b64: String, expectedItems: Int): BloomFilterData? = try {
+            deserialize(b64, expectedItems)
+        } catch (e: OutOfMemoryError) {
+            null
+        } catch (e: IllegalArgumentException) {
+            null
+        } catch (e: NegativeArraySizeException) {
+            null
+        }
+
         fun deserialize(b64: String, expectedItems: Int): BloomFilterData {
             val filter = BloomFilterData(expectedItems)
             val bytes = Base64.getDecoder().decode(b64)
