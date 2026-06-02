@@ -296,6 +296,9 @@ class ScenarioRunner {
         totalMessages   = totalMessages,
         totalDropped    = totalDropped,
         heapUsedMb      = heapUsedMb,
+        rbsrRoundsAvg   = rbsrRoundsAvgThisTick,
+        rbsrRoundsMax   = rbsrRoundsMaxThisTick,
+        rbsrExchanges   = rbsrExchangeCountThisTick,
     )
 }
 
@@ -326,6 +329,12 @@ data class TraceSample(
     val totalMessages: Long,
     val totalDropped: Long,
     val heapUsedMb: Long,
+    /** O42/G17: avg RBSR rounds-per-exchange this tick (0.0 when bloom mode). */
+    val rbsrRoundsAvg: Double = 0.0,
+    /** O42/G17: worst single-edge RBSR rounds this tick. Approaching 12 = convergence at the cap. */
+    val rbsrRoundsMax: Int = 0,
+    /** O42/G17: how many edges ran RBSR this tick (denominator). */
+    val rbsrExchanges: Int = 0,
     /**
      * Per-node breakdown at this tick. Empty for samples taken before nodes
      * exist (e.g. t=0) and for the final-metrics snapshot in the result. When

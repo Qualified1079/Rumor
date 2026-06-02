@@ -145,8 +145,11 @@ class SimNode(
         gossipEngine.messagesForExchange(peerUserId).take(max)
     fun knownIds(): Set<String> = gossipEngine.knownMessageIds()
 
-    /** All messages currently stored on this node, with full metadata. Sim assertions only. */
-    fun knownMessages(): List<com.rumor.mesh.core.model.RumorMessage> = messageRepo.snapshot()
+    /** All messages currently stored on this node, with full metadata. Sim assertions only.
+     *  Sorted by id so ConcurrentHashMap iteration order doesn't seed the network
+     *  conditioner's RNG differently across replays (O12 escalation). */
+    fun knownMessages(): List<com.rumor.mesh.core.model.RumorMessage> =
+        messageRepo.snapshot().sortedBy { it.id }
 
     /**
      * Drain the scheduler (outbound queue for locally composed messages: DMs, chunks)

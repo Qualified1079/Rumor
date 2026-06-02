@@ -7,6 +7,7 @@ import com.rumor.mesh.simulator.params.SimParamRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlin.random.Random
 
 /**
@@ -25,7 +26,14 @@ object TopologyBuilder {
         params: SimParamRegistry,
         rng: Random,
     ): BuildResult {
-        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        // O12 escalation: single-threaded dispatcher so coroutine handler
+        // execution order is deterministic across replays. Multi-threaded
+        // Dispatchers.Default was producing 6–17% msgDelta on partition/heal
+        // scenarios, well past the ±5% tolerance.
+        val singleThread = java.util.concurrent.Executors
+            .newSingleThreadExecutor { r -> Thread(r, "sim-scope").apply { isDaemon = true } }
+            .asCoroutineDispatcher()
+        val scope = CoroutineScope(singleThread + SupervisorJob())
         return when (topology) {
             is Topology.Line       -> buildLine(topology, params, rng, scope)
             is Topology.Mesh       -> buildMesh(topology, params, rng, scope)

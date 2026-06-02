@@ -314,6 +314,9 @@ class SimWorld(val params: SimParamRegistry) {
         // 2. Run gossip exchanges on each edge (skip if either endpoint is killed).
         var totalMsgs = 0L
         var totalDropped = 0L
+        var rbsrRoundsSum = 0L
+        var rbsrRoundsMax = 0
+        var rbsrExchangeCount = 0
         for (edge in edges) {
             if (edge.nodeA.index in killedNodes || edge.nodeB.index in killedNodes) continue
             // Probabilistic partition.
@@ -327,6 +330,11 @@ class SimWorld(val params: SimParamRegistry) {
             val m = edge.exchange(rng)
             totalMsgs    += m.totalMessages
             totalDropped += m.dropped
+            if (m.rbsrRoundsUsed > 0) {
+                rbsrRoundsSum += m.rbsrRoundsUsed
+                if (m.rbsrRoundsUsed > rbsrRoundsMax) rbsrRoundsMax = m.rbsrRoundsUsed
+                rbsrExchangeCount++
+            }
             if (m.hasTraffic) _edgeActivity[edge.edgeKey] = _simTimeMs.value
         }
 
@@ -341,6 +349,9 @@ class SimWorld(val params: SimParamRegistry) {
             simTimeMs         = _simTimeMs.value,
             heapUsedMb        = (runtime.totalMemory() - runtime.freeMemory()) / 1_048_576,
             heapMaxMb         = runtime.maxMemory() / 1_048_576,
+            rbsrRoundsAvgThisTick = if (rbsrExchangeCount > 0) (rbsrRoundsSum.toDouble() / rbsrExchangeCount) else 0.0,
+            rbsrRoundsMaxThisTick = rbsrRoundsMax,
+            rbsrExchangeCountThisTick = rbsrExchangeCount,
         )
         recordTraceIfDue()
     }
@@ -389,6 +400,12 @@ data class WorldMetrics(
     val simTimeMs: Long         = 0,
     val heapUsedMb: Long        = 0,
     val heapMaxMb: Long         = 0,
+    /** O42/G17: average RBSR rounds across edges this tick (0.0 if useRbsr is off). */
+    val rbsrRoundsAvgThisTick: Double = 0.0,
+    /** O42/G17: worst-case RBSR rounds on any edge this tick. Approaching MAX_RBSR_ROUNDS=12 means convergence is failing. */
+    val rbsrRoundsMaxThisTick: Int = 0,
+    /** How many edges actually ran RBSR this tick (denominator for the avg). */
+    val rbsrExchangeCountThisTick: Int = 0,
 )
 
 data class EdgeSnapshot(
