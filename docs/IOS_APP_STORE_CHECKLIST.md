@@ -39,7 +39,7 @@ Standalone checklist. Reference without dragging in the full port plan. For arch
 - [ ] **4.2 (minimum functionality).** Mesh messenger easily clears.
 - [ ] **5.1.1 / 5.1.2 (Data Collection & Use).** Nothing collected, no third-party SDKs phoning home.
 - [ ] **1.2 (User-Generated Content).** Required mechanisms: report a message, block a user, EULA, commitment to act on reports. Rumor already has block/blocklist machinery — surface it in the UI. No global broadcast room (O36 decision) substantially reduces UGC review burden.
-- [ ] **5.0 (Legal).** App-Store copy framed as resilience / disaster-recovery comms. Avoid protest / anti-government framing in any reviewer-visible material — moves review to a stricter desk. Bridgefy and Berty both pass with this framing.
+- [ ] **5.0 (Legal).** App-Store copy framed as resilience / disaster-recovery / off-grid comms. Avoid politically-loaded or anti-government framing in any reviewer-visible material — moves review to a stricter desk. Bridgefy and Berty both pass with the resilience framing.
 
 ## 6. Encryption export compliance (U.S. BIS, separate from Apple)
 
