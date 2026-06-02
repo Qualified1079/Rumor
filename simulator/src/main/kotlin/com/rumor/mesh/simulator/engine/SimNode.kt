@@ -157,6 +157,15 @@ class SimNode(
      * for broadcast relay). This bridge makes locally composed messages visible to the
      * exchange mechanism without disturbing the relay-path duplicate-filter logic.
      */
+    /** Test seed: populate both the repo and the duplicate filter, mirroring
+     * what MessageStore.ingest would do for an incoming message. Without
+     * the duplicate-filter populate, knownIds() returns empty and SimTransport
+     * falls into the "no bloom needed, send everything" branch. */
+    suspend fun seedKnown(msg: com.rumor.mesh.core.model.RumorMessage) {
+        messageRepo.insert(msg)
+        duplicateFilter.recordAndCheck(msg.id)
+    }
+
     suspend fun flushSchedulerToRepo() {
         val msgs = scheduler.take(500)
         for (msg in msgs) {

@@ -36,6 +36,7 @@ class BreadcrumbSubstrateTest {
 
         // A → B exchange: B sees the message, hand-delivered by A.
         SimTransport(a, b).exchange(kotlin.random.Random(1))
+        delay(50)  // async ingest
         b.flushSchedulerToRepo()
 
         // Sanity: B knows the message.

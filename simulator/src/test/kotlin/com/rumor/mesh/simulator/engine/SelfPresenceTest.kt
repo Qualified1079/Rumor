@@ -7,6 +7,7 @@ import com.rumor.mesh.core.wire.WireJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
@@ -34,6 +35,7 @@ class SelfPresenceTest {
         a.flushSchedulerToRepo()
 
         SimTransport(a, b).exchange(kotlin.random.Random(1))
+        delay(50)  // async ingest
 
         val received = b.knownMessages().firstOrNull { it.id == beacon.id }
         assertNotNull("B must receive A's entry pulse", received)

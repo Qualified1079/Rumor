@@ -32,6 +32,7 @@ class BreadcrumbBiasTest {
         a.gossipEngine.composeBroadcast("hello")!!
         a.flushSchedulerToRepo()
         SimTransport(a, b).exchange(kotlin.random.Random(1))
+        delay(50)  // let B's async ingest finish before B offers to C
         b.flushSchedulerToRepo()
         SimTransport(b, c).exchange(kotlin.random.Random(2))
         delay(50)
@@ -52,7 +53,8 @@ class BreadcrumbBiasTest {
         ) ?: error("composeDirect returned null — recipient pubkey missing?")
 
         val noise = (0 until 5).map { c.gossipEngine.composeBroadcast("noise $it")!! }
-        c.flushSchedulerToRepo()
+        // Do NOT flush C's scheduler — messagesForExchange reads from
+        // scheduler.take(), which is destructive; flushing drains it.
 
         // Phase 3: ask C for the batch it would offer peer B.
         val offer = c.gossipEngine.messagesForExchange(b.userId)
