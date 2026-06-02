@@ -241,9 +241,11 @@ class GossipSession(
                         )
                         if (f == null) {
                             RumorLog.w(TAG, "Peer bloom unusable (oversized?) — over-offering this exchange")
-                            { _: String -> false }
+                            val none: (String) -> Boolean = { false }
+                            none
                         } else {
-                            { id: String -> f.mightContain(id) }
+                            val pred: (String) -> Boolean = { id -> f.mightContain(id) }
+                            pred
                         }
                     }
                     else -> return@withTimeout null

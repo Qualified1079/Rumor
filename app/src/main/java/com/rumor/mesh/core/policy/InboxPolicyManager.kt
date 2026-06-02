@@ -37,9 +37,9 @@ class InboxPolicyManager(
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private val _policy = MutableStateFlow(load())
-    val policy: StateFlow<InboxPolicy> = _policy.asStateFlow()
+    override val policy: StateFlow<InboxPolicy> = _policy.asStateFlow()
 
-    fun update(policy: InboxPolicy) {
+    override fun update(policy: InboxPolicy) {
         prefs.edit {
             putBoolean(KEY_CONTACTS_ONLY_MEDIA, policy.contactsOnlyMedia)
             putBoolean(KEY_REJECT_UNKNOWN_TRANSFERS, policy.rejectUnknownTransfers)
@@ -53,7 +53,7 @@ class InboxPolicyManager(
      * Decide whether [msg] is allowed to surface in the inbox. Returns true if
      * it should be emitted; false if policy suppresses it.
      */
-    suspend fun allowsInbox(msg: RumorMessage): Boolean {
+    override suspend fun allowsInbox(msg: RumorMessage): Boolean {
         val pol = _policy.value
         val isContact = contactRepo.getById(msg.senderId) != null
 

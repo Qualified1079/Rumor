@@ -74,7 +74,7 @@ private fun MetricsSection(title: String, content: @Composable ColumnScope.() ->
         color = MaterialTheme.colorScheme.primary,
     )
     HorizontalDivider(Modifier.padding(bottom = 4.dp))
-    content()
+    Column { content() }
 }
 
 @Composable

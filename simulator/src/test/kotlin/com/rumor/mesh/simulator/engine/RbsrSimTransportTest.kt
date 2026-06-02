@@ -86,7 +86,7 @@ class RbsrSimTransportTest {
         return SimNode(0, scope) to SimNode(1, scope)
     }
 
-    private fun seedDifferingSets(a: SimNode, b: SimNode) {
+    private suspend fun seedDifferingSets(a: SimNode, b: SimNode) {
         // 10 shared, 5 unique to A, 5 unique to B.
         val shared = (0 until 10).map { synthMessage(it, "s$it") }
         val aOnly = (0 until 5).map { synthMessage(100 + it, "a$it") }

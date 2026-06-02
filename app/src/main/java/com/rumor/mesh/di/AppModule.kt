@@ -34,7 +34,6 @@ import com.rumor.mesh.data.RumorDatabase
 import com.rumor.mesh.data.adapter.BreadcrumbRepositoryAdapter
 import com.rumor.mesh.data.adapter.BlockEntryRepositoryAdapter
 import com.rumor.mesh.data.adapter.BlocklistEntryRepositoryAdapter
-import com.rumor.mesh.data.adapter.BlockRepositoryAdapter
 import com.rumor.mesh.data.adapter.ChunkRepositoryAdapter
 import com.rumor.mesh.data.adapter.ContactRepositoryAdapter
 import com.rumor.mesh.data.adapter.MessageRepositoryAdapter
@@ -115,7 +114,7 @@ val appModule = module {
     single { WifiDirectTransport(androidContext()) }
 
     // ── Plugins ───────────────────────────────────────────────────────────────
-    single { PluginRegistry(get(), get<IdentityProvider>(), get(), get()) }
+    single { PluginRegistry(get(), get<IdentityManager>(), get(), get()) }
     single { PluginCatalog(androidContext(), get()) }
 
     // ── Service ───────────────────────────────────────────────────────────────
