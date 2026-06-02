@@ -24,6 +24,7 @@ class MessageStore(
     private val contactRepo: ContactRepository,
     private val duplicateFilter: DuplicateFilter,
     private val staticMode: StaticMode? = null,
+    private val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
     private val _sigFailures = AtomicLong()
     private val _rateLimited = AtomicLong()
@@ -70,7 +71,7 @@ class MessageStore(
         // O16: per-sender token bucket gate. Skip ingest entirely for senders
         // exceeding INGEST_BUDGET_PER_SEC. Caller treats the return as a duplicate;
         // the relay path is unaffected so other peers still propagate.
-        if (!acceptForRate(msg.senderId, System.currentTimeMillis())) {
+        if (!acceptForRate(msg.senderId, clock.now())) {
             _rateLimited.incrementAndGet()
             RumorLog.d(TAG, "Rate-limit drop from ${msg.senderId.take(8)}… (>$INGEST_BUDGET_PER_SEC/s)")
             return false
@@ -135,12 +136,12 @@ class MessageStore(
                     autoRelay = false,
                     alwaysSave = false,
                     willingToCache = false,
-                    firstSeenMs = System.currentTimeMillis(),
-                    lastSeenMs = System.currentTimeMillis(),
+                    firstSeenMs = clock.now(),
+                    lastSeenMs = clock.now(),
                 )
             )
         } else {
-            contactRepo.updateLastSeen(userId, System.currentTimeMillis())
+            contactRepo.updateLastSeen(userId, clock.now())
         }
     }
 

@@ -106,8 +106,10 @@ class GossipEngine(
      */
     private val relayBatchMinWindowMs: Long = RelayBatcher.MIN_WINDOW_MS,
     private val relayBatchSpreadMs: Long = RelayBatcher.SPREAD_MS,
+    /** O12: injectable clock for deterministic replay. Defaults to wall-clock. */
+    private val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
-    private val sequenceCounter = AtomicLong(System.currentTimeMillis())
+    private val sequenceCounter = AtomicLong(clock.now())
 
     /**
      * Plaintext for outbound DMs keyed by message ID. The ephemeral X25519 private
@@ -172,7 +174,7 @@ class GossipEngine(
             val autoRelayIds = contactRepo.getAutoRelayContacts().map { it.userId }.toSet()
 
             for (msg in result.messagesReceived) {
-                val adjusted = msg.copy(receivedAtMs = System.currentTimeMillis())
+                val adjusted = msg.copy(receivedAtMs = clock.now())
                 processIncoming(adjusted, MessageSource.PEER, autoRelayIds, fromPeerId = result.peerUserId)
             }
         }
@@ -194,7 +196,7 @@ class GossipEngine(
     fun injectFromPlugin(message: RumorMessage, sourcePluginId: String) {
         scope.launch {
             RumorLog.d(TAG, "Injecting from plugin $sourcePluginId: ${message.id.take(8)}…")
-            val adjusted = message.copy(receivedAtMs = System.currentTimeMillis())
+            val adjusted = message.copy(receivedAtMs = clock.now())
             processIncoming(adjusted, MessageSource.LOCAL_BRIDGE, emptySet())
         }
     }
@@ -254,8 +256,8 @@ class GossipEngine(
             id               = UUID.randomUUID().toString().replace("-", ""),
             senderId         = senderUserId,
             senderPublicKey  = senderPubKey.toBase64(),
-            sequenceNumber   = System.currentTimeMillis(),
-            sentAtMs         = System.currentTimeMillis(),
+            sequenceNumber   = clock.now(),
+            sentAtMs         = clock.now(),
             type             = MessageType.DIRECT,
             hopsToLive              = 1,  // BRIDGED trust prevents relay; hopsToLive=1 is belt-and-suspenders
             encryptedPayload = encPayload,
@@ -442,7 +444,7 @@ class GossipEngine(
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
         val newPublicKeyB64 = identity.publicKeyBytes.toBase64()
-        val authorizedAtMs = System.currentTimeMillis()
+        val authorizedAtMs = clock.now()
         val continuityBytes = identityRotationSignableBytes(
             oldUserId = oldUserId,
             newUserId = identity.userId,
@@ -488,7 +490,7 @@ class GossipEngine(
         val identity = identityProvider.identity.value ?: return null
         val payload = SelfPresencePayload(
             mode = mode,
-            authorizedAtMs = System.currentTimeMillis(),
+            authorizedAtMs = clock.now(),
             recentlyExchangedWith = recentlyExchangedWith,
         )
         val msg = buildMessage(
@@ -521,7 +523,7 @@ class GossipEngine(
         originContentType: ContentType,
         payload: String,
         originSignatureIfAny: String? = null,
-        receivedAtMs: Long = System.currentTimeMillis(),
+        receivedAtMs: Long = clock.now(),
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
         val body = BridgeVouchedPayload(
@@ -849,7 +851,7 @@ class GossipEngine(
             senderId = identity.userId,
             senderPublicKey = identity.publicKeyBytes.toBase64(),
             sequenceNumber = sequenceCounter.getAndIncrement(),
-            sentAtMs = System.currentTimeMillis(),
+            sentAtMs = clock.now(),
             type = type,
             hopsToLive = hopsToLive,
             payload = payload,

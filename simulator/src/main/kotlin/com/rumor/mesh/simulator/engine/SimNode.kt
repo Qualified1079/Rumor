@@ -41,6 +41,14 @@ class SimNode(
      * baseline pure-flood behaviour for comparison runs.
      */
     private val useBreadcrumbs: Boolean = true,
+    /**
+     * O12: shared sim-time clock. All SimNodes built by the same scenario
+     * share one clock so the entire mesh sees the same `now()` value — what
+     * a real-world wall-clock would offer if it were perfectly synced. Sim
+     * advances this from SimWorld.tick(). Default to wall-clock for ad-hoc
+     * one-off tests.
+     */
+    val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
     val identityProvider = SimIdentityProvider(index)
     val userId: String get() = identityProvider.identity.value!!.userId
@@ -56,7 +64,7 @@ class SimNode(
     private val blocklistRepo   = InMemoryBlocklistEntryRepository()
 
     private val duplicateFilter = DuplicateFilter()
-    private val messageStore    = MessageStore(messageRepo, contactRepo, duplicateFilter)
+    private val messageStore    = MessageStore(messageRepo, contactRepo, duplicateFilter, clock = clock)
     private val onlineTracker   = OnlineStatusTracker()
     private val topoTracker     = TopologyTracker(routeRepo)
     internal val breadcrumbs    = BreadcrumbCache(breadcrumbRepo)
@@ -80,6 +88,7 @@ class SimNode(
         // would equal 1–5 sim-seconds at speedMult=10, breaking multi-hop propagation.
         relayBatchMinWindowMs = 1L,
         relayBatchSpreadMs    = 1L,
+        clock           = clock,
     )
 
     val transferSender = TransferSender(gossipEngine, identityProvider, transferRepo, chunkRepo)

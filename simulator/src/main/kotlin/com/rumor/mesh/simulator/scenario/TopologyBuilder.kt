@@ -25,6 +25,7 @@ object TopologyBuilder {
         topology: Topology,
         params: SimParamRegistry,
         rng: Random,
+        clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
     ): BuildResult {
         // O12 escalation: single-threaded dispatcher so coroutine handler
         // execution order is deterministic across replays. Multi-threaded
@@ -35,17 +36,17 @@ object TopologyBuilder {
             .asCoroutineDispatcher()
         val scope = CoroutineScope(singleThread + SupervisorJob())
         return when (topology) {
-            is Topology.Line       -> buildLine(topology, params, rng, scope)
-            is Topology.Mesh       -> buildMesh(topology, params, rng, scope)
-            is Topology.TwoCluster -> buildTwoCluster(topology, params, rng, scope)
-            is Topology.HubSpoke   -> buildHubSpoke(topology, params, rng, scope)
-            is Topology.Custom     -> buildCustom(topology, params, rng, scope)
+            is Topology.Line       -> buildLine(topology, params, rng, scope, clock)
+            is Topology.Mesh       -> buildMesh(topology, params, rng, scope, clock)
+            is Topology.TwoCluster -> buildTwoCluster(topology, params, rng, scope, clock)
+            is Topology.HubSpoke   -> buildHubSpoke(topology, params, rng, scope, clock)
+            is Topology.Custom     -> buildCustom(topology, params, rng, scope, clock)
         }
     }
 
     // ── Line: 0—1—2—…—N-1 ────────────────────────────────────────────────────
-    private fun buildLine(t: Topology.Line, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
-        val nodes = (0 until t.length).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
+    private fun buildLine(t: Topology.Line, p: SimParamRegistry, rng: Random, scope: CoroutineScope, clock: com.rumor.mesh.core.Clock): BuildResult {
+        val nodes = (0 until t.length).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1, clock = clock) }
         val edges = (0 until t.length - 1).map { i ->
             SimTransport(nodes[i], nodes[i + 1], conditioner(p, rng), useRbsr = p.useRbsr.value == 1)
         }
@@ -53,8 +54,8 @@ object TopologyBuilder {
     }
 
     // ── Mesh: same as dashboard default ──────────────────────────────────────
-    private fun buildMesh(t: Topology.Mesh, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
-        val nodes = (0 until t.nodes).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
+    private fun buildMesh(t: Topology.Mesh, p: SimParamRegistry, rng: Random, scope: CoroutineScope, clock: com.rumor.mesh.core.Clock): BuildResult {
+        val nodes = (0 until t.nodes).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1, clock = clock) }
         val edgeSet = mutableSetOf<String>()
         val edges = mutableListOf<SimTransport>()
         for (node in nodes) {
@@ -70,9 +71,9 @@ object TopologyBuilder {
     }
 
     // ── TwoCluster: left fully meshed ↔ bridges ↔ right fully meshed ─────────
-    private fun buildTwoCluster(t: Topology.TwoCluster, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
+    private fun buildTwoCluster(t: Topology.TwoCluster, p: SimParamRegistry, rng: Random, scope: CoroutineScope, clock: com.rumor.mesh.core.Clock): BuildResult {
         val total = t.left + t.right + t.bridges
-        val nodes = (0 until total).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
+        val nodes = (0 until total).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1, clock = clock) }
         val leftIdx    = (0 until t.left).toSet()
         val rightIdx   = (t.left until t.left + t.right).toSet()
         val bridgeIdx  = (t.left + t.right until total).toSet()
@@ -103,8 +104,8 @@ object TopologyBuilder {
     }
 
     // ── HubSpoke: center=0, spokes=1..N ──────────────────────────────────────
-    private fun buildHubSpoke(t: Topology.HubSpoke, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
-        val nodes = (0..t.spokes).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
+    private fun buildHubSpoke(t: Topology.HubSpoke, p: SimParamRegistry, rng: Random, scope: CoroutineScope, clock: com.rumor.mesh.core.Clock): BuildResult {
+        val nodes = (0..t.spokes).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1, clock = clock) }
         val edges = (1..t.spokes).map { i ->
             SimTransport(nodes[0], nodes[i], conditioner(p, rng), tags = setOf("spoke"), useRbsr = p.useRbsr.value == 1)
         }
@@ -115,8 +116,8 @@ object TopologyBuilder {
     }
 
     // ── Custom: explicit adjacency list ──────────────────────────────────────
-    private fun buildCustom(t: Topology.Custom, p: SimParamRegistry, rng: Random, scope: CoroutineScope): BuildResult {
-        val nodes = (0 until t.nodeCount).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1) }
+    private fun buildCustom(t: Topology.Custom, p: SimParamRegistry, rng: Random, scope: CoroutineScope, clock: com.rumor.mesh.core.Clock): BuildResult {
+        val nodes = (0 until t.nodeCount).map { SimNode(it, scope, useBreadcrumbs = p.useBreadcrumbs.value == 1, clock = clock) }
         val edges = t.edges.map { spec ->
             require(spec.from in 0 until t.nodeCount && spec.to in 0 until t.nodeCount) {
                 "Custom topology edge $spec references out-of-range node (nodeCount=${t.nodeCount})"

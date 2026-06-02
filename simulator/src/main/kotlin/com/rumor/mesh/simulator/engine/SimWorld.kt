@@ -29,6 +29,9 @@ private const val TICK_MS = 100L   // wall-clock ms per sim tick
  * 10× longer, reducing CPU/memory pressure and allowing more nodes to be run.
  */
 class SimWorld(val params: SimParamRegistry) {
+    /** Shared O12 clock — all SimNodes built by this world read from this. */
+    val clock = SimClock(0L)
+
 
     private val mutex  = Mutex()
     private val scope  = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -128,6 +131,7 @@ class SimWorld(val params: SimParamRegistry) {
     suspend fun reset() {
         stop()
         _simTimeMs.value = 0
+        clock.nowMs = 0
         _metrics.value = WorldMetrics()
         clearTrace()
         start()
@@ -158,7 +162,7 @@ class SimWorld(val params: SimParamRegistry) {
         val useBreadcrumbs = params.useBreadcrumbs.value == 1
         val useRbsr = params.useRbsr.value == 1
         val nodeScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val newNodes = (0 until count).map { SimNode(it, nodeScope, useBreadcrumbs = useBreadcrumbs) }
+        val newNodes = (0 until count).map { SimNode(it, nodeScope, useBreadcrumbs = useBreadcrumbs, clock = clock) }
         _nodes.value = newNodes
 
         val k = params.connectionsPerNode.value
@@ -256,6 +260,7 @@ class SimWorld(val params: SimParamRegistry) {
     private suspend fun tick() {
         val tickDurationMs = (TICK_MS * params.speedMultiplier.value).toLong()
         _simTimeMs.value += tickDurationMs
+        clock.nowMs = _simTimeMs.value
 
         val nodes = _nodes.value
         val edges = _edges.value

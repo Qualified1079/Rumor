@@ -40,7 +40,7 @@ class ScenarioRunner {
         params.enforceInvariants()
 
         val world = SimWorld(params)
-        val build = TopologyBuilder.build(scenario.topology, params, Random(scenario.seed))
+        val build = TopologyBuilder.build(scenario.topology, params, Random(scenario.seed), clock = world.clock)
         world.customTopology = { _ -> build.nodes to build.edges }
 
         // Trace samples; we snapshot lightly each second.
