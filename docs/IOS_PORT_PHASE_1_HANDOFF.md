@@ -74,6 +74,17 @@ Independent of the iOS work; pick up whenever convenient.
 4. **NoBridgedRerelay under eviction (O11).** Not broken today (in-memory MessageRepository doesn't evict mid-run). If eviction lands, switch the assertion to the live `relayObserver` hook noted in the JSON-schema docstring.
 5. **Heal-storm scenarios (O43).** Deferred — depends on O42 promotion + O32 per-peer byte accounting.
 
+## Research flags — questions owed before specific items can ship
+
+Each requires a focused web-research pass. Some are inline-noted in the relevant backlog row in CLAUDE.md; collected here so they don't get lost between sessions.
+
+1. **On-device NSFW / gore image classifier model licensing** (relevant to the App Store filtering posture under O64/O65 and the LOCAL_ONLY plugin tier added in O24). Candidates: NudeNet, OpenNSFW-derived models, Google's Vision API on-device equivalents. Some popular models have non-commercial licenses that would block App Store distribution. Need: license audit + Core ML conversion path on iOS + TFLite/NNAPI conversion path on Android + binary-size impact.
+2. **Apple reviewer expectations for report-log destination (Guideline 1.2)** — referenced in O65. Specifically: is a purely device-local report queue sufficient, or does App Store review require a destination endpoint (maintainer email, web form, etc.)? Affects whether O65 needs any networked component.
+3. **Per-store review climate for P2P / mesh / E2E apps in 2026** — referenced in O71. Huawei AppGallery, Xiaomi GetApps, Samsung Galaxy Store, Amazon Appstore, Uptodown, APKPure, GetJar, SlideME, 1Mobile each have different policies; an empirical pass is needed before sinking effort into submissions.
+4. **Chinese App Store (Apple China) + Tencent MyApp 2026 stance on uncensorable E2E mesh apps** — referenced in O71 as probably-infeasible. Confirm with primary sources whether any feature-stripped variant is permitted, or whether China distribution is a non-goal entirely.
+5. **I2P-as-library Android maturity** — relevant to O54 (transport plugins, listing Tor / I2P / Nostr) and O69 (Nostr-relay fallback with Tor or I2P as the anonymising layer). Current state of `i2pd` vs `Java-I2P` for in-app use without root; comparison to `tor-android` (used by Briar) and Arti.
+6. **iOS minimum-version sweet spot for CoreBluetooth StateRestoration + BGContinuedProcessingTask** — relevant to Phase 3 (BLE transport) and Phase 4 (background lifecycle). CryptoKit hard-floors at iOS 13; BGContinuedProcessingTask is iOS 26+. Question is what minimum deployment target balances reach against background-relay quality.
+
 ## When to update this file
 
 Once Phase 1a is committed and verified, replace this file with a Phase 1b/c handoff (or delete it if Phase 1 is fully done). The next handoff doc should record what's actually in `commonMain` vs `jvmMain` so the iOS `actual`s know their target surface.
