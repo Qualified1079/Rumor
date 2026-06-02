@@ -1,0 +1,34 @@
+{
+  "name": "bridge-flap-soak",
+  "durationSec": 180,
+  "seed": 42,
+  "speedMult": 10.0,
+  "topology": { "kind": "two-cluster", "left": 10, "right": 10, "bridges": 1 },
+  "params": {
+    "msg_per_sec": "1.0",
+    "hops_to_live": "10"
+  },
+  "events": [
+    { "kind": "partition", "atSec": 20,  "target": "bridge" },
+    { "kind": "heal",      "atSec": 30,  "target": "bridge" },
+    { "kind": "partition", "atSec": 40,  "target": "bridge" },
+    { "kind": "heal",      "atSec": 50,  "target": "bridge" },
+    { "kind": "partition", "atSec": 60,  "target": "bridge" },
+    { "kind": "heal",      "atSec": 70,  "target": "bridge" },
+    { "kind": "partition", "atSec": 80,  "target": "bridge" },
+    { "kind": "heal",      "atSec": 90,  "target": "bridge" },
+    { "kind": "partition", "atSec": 100, "target": "bridge" },
+    { "kind": "heal",      "atSec": 110, "target": "bridge" },
+    { "kind": "partition", "atSec": 120, "target": "bridge" },
+    { "kind": "heal",      "atSec": 130, "target": "bridge" },
+    { "kind": "partition", "atSec": 140, "target": "bridge" },
+    { "kind": "heal",      "atSec": 150, "target": "bridge" },
+    { "kind": "partition", "atSec": 160, "target": "bridge" },
+    { "kind": "heal",      "atSec": 170, "target": "bridge" }
+  ],
+  "assertions": [
+    { "kind": "min-total-messages", "min": 5000 },
+    { "kind": "cross-cluster-delivery", "fromCluster": "left", "toCluster": "right", "minRatio": 0.5 },
+    { "kind": "heap-bounded", "maxMb": 1024 }
+  ]
+}
