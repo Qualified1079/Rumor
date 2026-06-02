@@ -1,45 +1,59 @@
 plugins {
-    id("org.jetbrains.kotlin.jvm")
+    id("org.jetbrains.kotlin.multiplatform")
     id("org.jetbrains.kotlin.plugin.serialization")
-}
-
-java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
 }
 
 kotlin {
     jvmToolchain(17)
-    compilerOptions {
-        freeCompilerArgs.add("-opt-in=kotlin.RequiresOptIn")
+
+    jvm {
+        compilations.all {
+            kotlinOptions {
+                jvmTarget = "17"
+            }
+        }
+    }
+
+    sourceSets {
+        all {
+            languageSettings.optIn("kotlin.RequiresOptIn")
+        }
+
+        val commonMain by getting {
+            dependencies {
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+            }
+        }
+
+        val commonTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+            }
+        }
+
+        val jvmMain by getting {
+            dependencies {
+                implementation("org.bouncycastle:bcprov-jdk15on:1.70")
+            }
+        }
+
+        val jvmTest by getting {
+            dependencies {
+                implementation("junit:junit:4.13.2")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+                implementation("io.kotest:kotest-runner-junit5:5.8.0")
+                implementation("io.kotest:kotest-property:5.8.0")
+                // O28 wire-parser fuzzing. Jazzer-junit registers @FuzzTest methods as
+                // ordinary JUnit5 tests by default (single corpus seed run); set the env
+                // var JAZZER_FUZZ=1 to put them into in-process fuzzing mode for CI or
+                // ad-hoc bug-hunting. https://github.com/CodeIntelligenceTesting/jazzer
+                implementation("com.code-intelligence:jazzer-junit:0.22.1")
+            }
+        }
     }
 }
 
-dependencies {
-    // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-
-    // Serialization
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
-
-    // Crypto — BouncyCastle for Ed25519 / X25519
-    implementation("org.bouncycastle:bcprov-jdk15on:1.70")
-
-    // Testing
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
-    testImplementation("io.kotest:kotest-runner-junit5:5.8.0")
-    testImplementation("io.kotest:kotest-property:5.8.0")
-    // O28 wire-parser fuzzing. Jazzer-junit registers @FuzzTest methods as
-    // ordinary JUnit5 tests by default (single corpus seed run); set the env
-    // var JAZZER_FUZZ=1 to put them into in-process fuzzing mode for CI or
-    // ad-hoc bug-hunting. https://github.com/CodeIntelligenceTesting/jazzer
-    testImplementation("com.code-intelligence:jazzer-junit:0.22.1")
-}
-
-// Surface Jazzer's JUnit5 platform so the @FuzzTest methods actually run when
-// invoking `gradle :core:test`. Kotest already pulls JUnit5; Jazzer plays
-// nicely with it.
-tasks.test {
+tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
