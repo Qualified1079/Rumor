@@ -75,12 +75,13 @@ When the architecture is approved, add an `O63` entry to the open items table su
 - **Different but not worse:** BLE-only Android↔iOS interop bottlenecks bulk transfers but does not change the protocol or security posture.
 - **New invariants for iOS sustaining-compatibility (O56-style):** keep `:core` Kotlin-only forever (no Apple SDK imports leaking in); CoreBluetooth code lives only in Swift; `expect`/`actual` boundary surface stays small and audited; CryptoKit `actual`s must be byte-identical with BouncyCastle on the wire (golden-vector tests in shared `commonTest`).
 
-## Verification gate before implementation
+## Decisions locked
 
-User decides:
-1. **Plugin track:** option 1, 2, or 3 above?
-2. **Distribution:** App Store + AltStore PAL pairing acceptable, or App Store only?
-3. **Background-relay framing:** are we OK with the README saying "iOS Rumor is a part-time relay, real infrastructure lives elsewhere"?
-4. **UI:** SwiftUI native (recommended), or Compose-Multiplatform-iOS (untried at this scale)?
+1. **Plugin track:** option 1 — no plugins on iOS for v1. Bridges (Meshtastic, MeshCore) are also deferred from the initial iOS ship — they add Bluetooth-talks-to-unknown-device complexity that complicates review with no clear upside for the first cut. They stay first-class on Android. Adding them to iOS later is an additive change, not a regression. Per O63, iOS HELLO advertises a narrower `supportedFeatures` set and Android↔iOS sessions negotiate down.
+2. **Distribution:** App Store only for v1. AltStore PAL (EU + Japan) deferred — adds notarization mechanics and a second SKU, gives little value before the App Store build is stable.
+3. **Background-relay framing:** accepted. README will state iOS is a part-time relay; always-on infrastructure lives on Android, SBCs, or transport-plugin hardware.
+4. **UI:** Compose Multiplatform for iOS. Reuses the existing Android Compose UI as a single source of truth, minimises blind code, single design pipeline. Platform-specific glue (CoreBluetooth permission prompts, Keychain access, share sheet, lifecycle hooks) is Swift behind `expect`/`actual` boundaries.
 
-After answers, write a second plan file naming concrete `expect`/`actual` boundaries, the new `:ios-app` Xcode project layout, and the phase order (crypto `actual` first → wire-format golden tests → BLE transport → bridge ports → SwiftUI → distribution mechanics).
+### App stores beyond Apple
+
+A broader survey of non-Play Android stores (and any iOS-adjacent paths that emerge) is owed under O71 — the long tail of regional and niche stores is reach the F-Droid + Play baseline doesn't cover. Note in CLAUDE.md backlog, do not block v1 on it.
