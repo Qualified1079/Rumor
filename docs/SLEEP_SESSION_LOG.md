@@ -67,3 +67,85 @@ This unblocks O75 (MCU relay), O54 (TransportPlugin / native relays), and O63 (i
 
 ---
 
+## Entry 3 — Phase 1c shim surface (`docs/PHASE_1C_SHIM_SURFACE.md`)
+
+**STATUS: NEEDS REVIEW** (decisions deferred at end of doc; pure planning, no code)
+
+Read all 13 files in `:core/jvmMain/` that import `java.*` and inventoried the platform shims Phase 1c will need:
+
+- 9 distinct java types across the 13 files
+- Demand ranking: Base64 (5) > ConcurrentMap (4) > Sha256/UUID/AtomicLong (3 each) > others
+- One straight migration (no shim needed): `java.util.ArrayDeque` → `kotlin.collections.ArrayDeque`
+- Proposed `expect/actual` declarations sketched per shim, with JVM and iOS actuals named (CryptoKit for iOS crypto; `atomicfu` for concurrent primitives; etc.)
+- Implementation order proposed: Base64 first (highest fan-in, trivial), CryptoManager (AES-GCM + PBKDF2) last (biggest single lift)
+- Decisions deferred to user: atomicfu vs alternatives, BouncyCastle KMP vs split per-platform, linuxMain-now vs iosMain-first
+
+Files: `docs/PHASE_1C_SHIM_SURFACE.md` (new).
+Rollback: `rm docs/PHASE_1C_SHIM_SURFACE.md`.
+
+This unblocks O63 Phase 1c from "needs research." Phase 1c can start the moment Phase 1b is green.
+
+---
+
+## Entry 4 — O64 sentAtMs audit (`docs/O64_SENTATMS_AUDIT.md`)
+
+**STATUS: NEEDS REVIEW** (documents 5 confirmed UI bugs but does NOT fix them)
+
+Grep'd every `sentAtMs` reference in the codebase (18 files). Categorised each:
+
+- **Category A** (correct, no change): 11 sites — compose-time stamps, signature inclusion, Room columns, sim fixtures.
+- **Category B** (already mitigated): `MessageDao.kt`'s `ORDER BY MIN(sentAtMs, receivedAtMs)` — the original 9cb2ad9 fix. Should be refactored to use the new `displayTimeMs` once added.
+- **Category C** (confirmed bugs): **5 UI sites** use sender-asserted `sentAtMs` directly:
+  - `FeedScreen.kt:88`, `ThreadScreen.kt:145`, `MessagesScreen.kt:84` — "X ago" labels (use `receivedAtMs` instead).
+  - `MessagesViewModel.kt:72,81` — thread-list ordering by `sentAtMs` (pinning attack; use `displayTimeMs`).
+- **Category D** (verification pass needed): simulator + RBSR docstring.
+
+Implementation order specified; decisions deferred:
+1. Explicit ingest-time clamp vs `displayTimeMs = min(sentAtMs, receivedAtMs)` doing the job implicitly. Lean: rely on `min` — cheaper, signature stays valid on relay.
+2. SKEW_TOLERANCE_MS value if explicit clamp goes in. Lean: generous (1 hr) for post-collapse drift.
+3. **Whether to ship the Category C UI fixes now in a small PR** vs wait until after Phase 1b lands. The fixes are real security bugs but the framing copy for "X ago" UI is yours to choose, so I held them back. **Suggest you yay/nay this on wake — they're a 30-min self-contained PR.**
+
+Files: `docs/O64_SENTATMS_AUDIT.md` (new).
+Rollback: `rm docs/O64_SENTATMS_AUDIT.md`.
+
+---
+
+## Entry 5 — O13 BloomFilterData OOM: already done
+
+**STATUS: DONE (closed via audit, no code needed)**
+
+Read `core/.../transport/wifidirect/BloomFilterData.kt`. The `deserializeOrNull` graceful-fallback companion already exists (catches `OutOfMemoryError`, `IllegalArgumentException`, `NegativeArraySizeException`). Grep'd call sites:
+
+- `GossipSession.kt:239` — uses `deserializeOrNull` ✅
+- Other call sites (`GossipSession.kt:346,361`, `SimTransport.kt:183,188`) use the raw constructor on *locally-trusted* sizes (`knownMessageIds.size`, sim-controlled `dstKnownIds.size`) — no attack surface.
+
+**O13 is effectively done.** The backlog entry can be moved into "Completed gaps" when you next edit CLAUDE.md, or repurposed to track the followups in the body of the entry (per-sender ingest token bucket).
+
+No files touched.
+
+---
+
+## Entry 6 — O48 bridge synthetic userId from pubkey (`docs/O48_BRIDGE_USERID_AUDIT.md`)
+
+**STATUS: NEEDS REVIEW + USER INPUT** (documented thoroughly, NOT implemented)
+
+Read both bridge implementations. Confirmed the current state matches O48's concern:
+
+- **MeshCoreBridge.kt:147**: `meshcore:" + FNV1a(senderName)` — spoofable by display-name impersonation.
+- **MeshtasticBridge.kt:125**: `meshtastic:" + (packet.from).toString(16)` — better than name, but `packet.from` is cleartext and trivially spoofed.
+
+Identified the per-bridge work needed:
+- **MeshCore**: subscribe to `CONTACTS_START` frames, maintain `Map<senderName, pubkey>` keyring, derive userId as `meshcore:" + sha256(pubkey).take(16).toHex()`. Needs reading `MeshCoreFrames.kt` (and likely the upstream meshcore-open BLE_PROTOCOL.md afresh) to see the contact-frame format.
+- **Meshtastic**: add NODEINFO_APP handler, decode `User.public_key` (X25519), build `Map<nodeNum, pubkey>`, derive userId same shape.
+
+**Held back from implementation** because:
+1. I'd be writing protocol code against documentation rather than verified frame layouts.
+2. The migration question (existing bridged contacts → new userId) needs your call: hard cutover or O41-style identity rotation rebind.
+3. Userid byte length (16 hex / 64 bits chosen by me, you may want larger).
+4. O48 is pre-ship requirement for O5 (DM bridging) but isn't blocking anything you're working on right now.
+
+Files: `docs/O48_BRIDGE_USERID_AUDIT.md` (new).
+Rollback: `rm docs/O48_BRIDGE_USERID_AUDIT.md`.
+
+---
+
