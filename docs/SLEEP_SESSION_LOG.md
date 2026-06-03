@@ -233,3 +233,63 @@ Rollback: each shim landed in its own commit (`d5d878b`, `d0438e0`); revert eith
 
 ---
 
+## Entry 10 — More research (Briar/iOS, Tor-android, KMP state) + RBSR divergence test
+
+**STATUS: DONE + PUSHED** (`48cf2b1`)
+
+Added `docs/RESEARCH_NOTES.md` §9 (Briar iOS prior art — they don't ship iOS, important O63 data point), §10 (Tor-android vs Arti for O72 — recommend tor-android first), §11 (KMP ecosystem state Aug 2025 — Compose iOS stable, BouncyCastle not the go-to for KMP-native crypto).
+
+Also `core/src/jvmTest/.../RbsrFormulaComparisonTest.kt` — executable demonstration that Rumor's RBSR fingerprint formula differs from hoytech/NIP-77's. Four test cases, all pass: ours is commutative, NIP-77's is commutative, their outputs differ on the same input, and the empty-set fingerprints differ too.
+
+---
+
+## Entry 11 — Backlog audit: 4 entries already done in code (G19-G22)
+
+**STATUS: DONE + PUSHED** (`12e6e20`, audit doc `547986a`)
+
+Walked the CLAUDE.md open-items list looking for entries shipped but not closed. Same shape as the O13 finding earlier.
+
+Closed by audit (moved to Completed gaps):
+- **O3** reliability ranking — `failureCount` field, TopologyTracker increments, Room v5 migration, DAO ordering → **G19**.
+- **O13** bloom OOM — `deserializeOrNull` wired at attack surface → **G20**.
+- **O16** ingest rate limit — token bucket in MessageStore → **G21**.
+- **O12** deterministic-replay — both predicted escalation paths shipped (single-threaded sim-scope + sorted knownMessages) → **G22**.
+
+Reclassified:
+- **O25** plugin crash isolation: `TODO/CODE` → `PART`. Per-call try/catch shipped (the hard part); auto-disable, persistent disable, user notification UI not done.
+
+Counts: 71 → 67 open rows. Audit notes preserved in `docs/BACKLOG_ALREADY_DONE_AUDIT.md`.
+
+---
+
+## Entry 12 — TrafficClass invariant tests (25 tests)
+
+**STATUS: DONE + PUSHED** (`305e460`)
+
+`core/src/jvmTest/.../TrafficClassInvariantTest.kt`. Pins the "trafficClass is derived, never on the wire" rule from CLAUDE.md "Architecture at a glance" in executable form. Covers every MessageType variant's expected base class (INFRA / TRANSFER_SETUP / BULK / content-driven for BROADCAST etc.), size-ceiling demotion boundaries (16 KB INFRA, 16 KB REALTIME, 256 KB TRANSFER_SETUP), and an exhaustiveness guard that fails loudly when a new `MessageType` lands without a class mapping in the test. All 25 green.
+
+---
+
+## Entry 13 — :app:testDebugUnitTest engine fix + 3-of-7 dormant test failures repaired
+
+**STATUS: DONE + PUSHED** (`0bed36c`, `022e66a`, `60cb2c9`)
+
+**Discovery:** `:app:testDebugUnitTest` was silently passing in CI because the JUnit Platform was enabled but no JUnit 5 engine was on the classpath — "Cannot create Launcher without at least one TestEngine" so zero tests ran. CI's G7 workflow was reporting green on a no-op task.
+
+Fix: added `testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.10.2")` + vintage engine to `app/build.gradle.kts`. Now 96 tests run; 7 fail.
+
+**4 of 7 failures repaired:**
+- **DmEnvelopeRegistryTest** (3 of 7) — test fixture used `env-meshtastic:` with a colon, which a later security-harden commit (8019739) rejects. Fixed: helper strips colon.
+- **AppModuleTest** (1 of 7) — TransfersViewModel takes raw DAOs; added DAO singles to AppModule. This uncovered a deeper DI-typing inconsistency in the Block adapters (concrete-typed `single`s, interface-typed constructors) which I did NOT fix because it touches multiple files and warrants design review.
+
+**3 of 7 remaining:**
+- SchedulerTest DRR fairness (`expected:5 but was:0`)
+- NeighborStoreTest selectDiverse (inverted comparator?)
+- ChunkerTest reassemble gap handling (returning non-null when null expected)
+
+These each need behavior investigation; held back from autonomous work.
+
+**CI impact warning:** CI's `:app:testDebugUnitTest` job will turn red on next push that touches `:app` test paths because the engine is now actually running tests. Two options recorded in `docs/PREEXISTING_APP_TEST_FAILURES.md` — revert the engine fix to restore silent-pass, or land the 3 remaining repairs. I lean land-the-repairs.
+
+---
+
