@@ -48,15 +48,18 @@ In rough priority order.
 
 Since `LOCAL_SUPPORTED_FEATURES = emptyList()` in production today (rbsr-v1 opt-in only), the cost of switching is essentially nil. I lean **align with NIP-77** now.
 
-### B. CI is going to turn red on next `:app` push
+### B. CI is going to turn red on next `:app` push — *one* test, not three
 
-`:app:testDebugUnitTest` was silently passing because the JUnit 5 engine was missing. My fix to add the engine causes 3 real test failures to actually count. Two options in `docs/PREEXISTING_APP_TEST_FAILURES.md`. I lean repair-the-3-tests; they're in this ballpark:
+`:app:testDebugUnitTest` was silently passing because the JUnit 5 engine was missing. My fix to add the engine surfaced 7 dormant failures. I diagnosed and repaired **6 of 7**:
 
-- **SchedulerTest DRR fairness** — real assertion failure, likely needs scheduler behaviour or test expectation adjustment.
-- **NeighborStoreTest selectDiverse** — inverted-comparator level bug.
-- **ChunkerTest reassemble gap** — `Chunker.reassemble` returns non-null when chunks are missing; either a real bug in Chunker or a stale test expectation.
+- **ChunkerTest reassemble gap** ✅ — fixture used uniform-byte content so chunks were byte-identical; replacing chunk 1 with chunk 0 yielded the same hash. Fixed fixture.
+- **NeighborStore selectDiverse** ✅ — real bug: `(limit*0.8).toInt()` truncated, producing `coverageCount=0` at limit=1 (so the documented "prefer low-overlap" pick became random). Fixed with `ceil`.
+- **SchedulerTest DRR fairness** ✅ — real production bug: a single-flow class with a head message exceeding the quantum couldn't drain (loop exited after `progress=false` round 1, even though deficit would have accumulated to cover the message on round 2). Restructured to loop while any queue is non-empty, with a 32-round progress-free cap. **This was a real bandwidth-fairness regression in BULK-class scheduling that would have surfaced on any node sending media chunks.**
+- **DmEnvelopeRegistryTest** ✅ (3 of 7) — test fixture's default envelopeId contained a colon, rejected by the validator added in 8019739.
 
-I held off on these because each one needs you to decide "is the test wrong or the code wrong?"
+**Only 1 test failure remains** — `AppModuleTest` Koin verify catches a real DI typing inconsistency in the three Block adapters (registered as concrete types, consumed via interface types). Fixing it cleanly requires interface-widening the registrations and rewriting downstream `get<*Adapter>()` calls. Touches multiple files; warrants design review. See `docs/PREEXISTING_APP_TEST_FAILURES.md` §5 for both possible cleanup paths.
+
+If you want CI green immediately: revert just `60cb2c9` (the DAO bindings + first AppModule attempt) AND `0bed36c` (the engine fix), which puts you back to silently-passing-on-zero-tests. But the engine fix is net-positive — it caught a real DRR bug and 5 other defects. I lean keep everything, fix the 1 remaining DI issue when you next touch DI.
 
 ### C. AppModuleTest DI typing inconsistency
 
