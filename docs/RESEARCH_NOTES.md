@@ -196,3 +196,49 @@ Compiled while user was asleep. Sources cited inline. Findings are summaries —
 4. **Regional non-Play Android store review climates** — varies by store-by-jurisdiction-by-year; only researchable on submission attempt.
 
 These are not resolvable from the web at this hour; recording them so they don't block other work.
+
+---
+
+## 8. O81 — On-device NSFW + gore classifier (added after user prompt)
+
+**Question:** What open-source, fully-on-device image classifiers exist that can be packaged as an O24 LOCAL_ONLY plugin for shipping default content warnings? Constraints: no network at runtime; no Google Play Services / SafetyCore; F-Droid-compatible license.
+
+### NSFW (still images)
+
+| Project | License | Format | APK cost | Notes |
+|---|---|---|---|---|
+| **Yahoo Open NSFW** ([mdietrichstein/tensorflow-open_nsfw](https://github.com/mdietrichstein/tensorflow-open_nsfw)) | BSD 3-Clause | TFLite | ~22 MB | Mature, widely used. Model from 2016 — less accurate than newer ViTs but still a sane default for conservative WARN. Used by `nsfw_detector_flutter` and similar wrappers. |
+| **AdamCodd/vit-base-nsfw-detector** ([HuggingFace](https://huggingface.co/AdamCodd/vit-base-nsfw-detector)) | Apache 2.0 | ONNX (quantized variant available) | TBD | ViT-based, more accurate than Open NSFW. Quantized ONNX runs on Android via ONNX Runtime Mobile. Active maintenance. |
+| **NudeNet v3** | Apache 2.0 | ONNX | TBD | Granular body-part detection (not just one score). Best accuracy in this list. Primarily Python today; requires a Kotlin/Android port. |
+| **nipunru/nsfw-detector-android** | (Firebase AutoML) | TFLite + Firebase | N/A | **REJECT** — requires Firebase, breaks F-Droid posture per O56. Listed for completeness so the reasoning is recorded. |
+| **Google SafetyCore** | Proprietary system service | Play Services adjacent | N/A | **REJECT** — system service introduced Nov 2024. Privacy-preserving in principle but pulls in Play Services and is documented as attackable ([arXiv 2509.06371](https://arxiv.org/pdf/2509.06371)). Same posture issue. |
+
+### Gore / violence detection
+
+| Project | License | Notes |
+|---|---|---|
+| **MobileNet-TSM** ([PMC9621415](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9621415/)) | Open source, paper-bundled GitHub | ~8.5 MB; MobileNet-V2 backbone + Temporal Shift Modules. Video-focused — exactly what's needed for animated GIFs / video. Source + trained model + Android demo published with the paper. |
+| Roboflow Universe community models | Varies (often CC) | Many community-trained YOLO-family models for "violence detection." Quality is inconsistent — usable for personal testing, not for default-ship without independent eval. |
+| **picpurify gore API**, **APILayer violence API** | Proprietary, network | **REJECT** — network APIs, not on-device. |
+
+### Recommendation for O81 default ship
+
+**Combined: AdamCodd ViT (stills) + MobileNet-TSM (video).** Approximate APK cost ~30 MB combined. Both fully on-device, both permissively licensed. Both ride the ONNX Runtime Mobile (single inference library, two model files).
+
+### What this does NOT replace
+
+- **O67 text-pattern filter** is the text-content sibling. They cover different surfaces; ship both, default both to WARN-not-BLOCK.
+- **App Store 1.2 compliance** still requires the reporting (O68) and moderation (O79) surfaces. The classifier is *content-filtering*, not *moderation*. Apple 1.2 wants both.
+
+### Open questions
+
+- Whether the ONNX Runtime Mobile dependency is acceptable to F-Droid (it's Apache 2.0, no closed-source binaries — should be fine, verify on submission).
+- Model card publication: who writes it. The researchers behind each upstream model should have published one; for ship, we'd link upstream rather than republish, with a "Rumor uses model X version Y published Z" disclosure in app.
+- False-positive rate by demographic — both models have well-documented bias issues against darker skin tones (Open NSFW especially). Default WARN-not-BLOCK partially mitigates by leaving the choice to the user, but the bias should be surfaced honestly in onboarding copy.
+
+**Sources:**
+- [umitkacar/awesome-mobile-ai catalog](https://github.com/umitkacar/awesome-mobile-ai)
+- [mdietrichstein/tensorflow-open_nsfw](https://github.com/mdietrichstein/tensorflow-open_nsfw)
+- [AdamCodd/vit-base-nsfw-detector](https://huggingface.co/AdamCodd/vit-base-nsfw-detector)
+- [Lightweight mobile network for real-time violence recognition (PMC9621415)](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9621415/)
+- [Breaking SafetyCore (arXiv 2509.06371)](https://arxiv.org/pdf/2509.06371) — the design comp for "why not SafetyCore"
