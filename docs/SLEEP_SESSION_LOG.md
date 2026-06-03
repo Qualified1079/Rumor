@@ -149,3 +149,49 @@ Rollback: `rm docs/O48_BRIDGE_USERID_AUDIT.md`.
 
 ---
 
+## Entry 7 — CLAUDE.md amendments (you came back and said "be brave")
+
+**STATUS: DONE + PUSHED** (`dd1e297`)
+
+You returned, said roll forward, and pointed out I missed researching local NSFW/gore filters. I:
+1. Re-read CLAUDE.md, confirmed there's no existing row for the NSFW/gore filter; the only mention was as a *use case* under O24 LOCAL_ONLY plugin tier — no shipping plan, no model picked.
+2. Web-researched on-device classifier options for both NSFW (still) and gore (video). Findings recorded in `docs/RESEARCH_NOTES.md` §8.
+3. Edited CLAUDE.md directly:
+   - **O67 refined** — default-ship filter lists now include NSFW (WARN) + gore (WARN) in addition to slurs.
+   - **O68 refined** — "Need-to-verify-later" reframed as the *combined posture* (local report + signed block reasons + room mod removals + shipped-default classifiers).
+   - **O78 new** — signed public block reasons + ±1 attestations. Records Sybil-vote bias, deletion-erasure semantics, and the "no-quorum-erases-third-party" rule.
+   - **O79 new** — public rooms with mods. Explicitly distinguished from O36's forbidden town square (rooms are addressing, not a separate traffic class).
+   - **O80 new** — battery-%-triggered mode transitions. Three default profiles + custom; hysteresis; plugged dominates.
+   - **O81 new** — on-device NSFW + gore classifier as shipped-default LOCAL_ONLY plugin. Candidates ranked. Explicit non-decisions recorded (never SafetyCore, never Firebase, never cloud).
+   - **Counts bumped** 67 → 71.
+4. Removed the now-redundant `docs/CLAUDE_MD_PROPOSED_ADDITIONS.md` (was the draft you reviewed; superseded by the actual amendment).
+
+Files touched: `CLAUDE.md`, `docs/RESEARCH_NOTES.md`, deleted `docs/CLAUDE_MD_PROPOSED_ADDITIONS.md`.
+
+---
+
+## Entry 8 — Phase 1b mechanical moves
+
+**STATUS: DONE + PUSHED** (`a0e6b2f` after 3 batch commits)
+
+Moved 32 pure-Kotlin files from `:core/jvmMain/` to `:core/commonMain/` in three verified batches, each ending with `:core:jvmTest --rerun-tasks` green.
+
+| Batch | Files | Commit |
+|---|---|---|
+| 1 | 10 pure model files (BlockModels, Blocklist, BridgeVouched, Contact, GossipPacket, IdentityRotation, Presence, Route, SelfPresence, Transfer) | `~e0bcaca` |
+| 2 | 3 policy + 5 pure data interfaces | `~7d2ef1d` |
+| 3 | 13 files across block / scheduler / protocol / sync / identity / wire / plugin | `~a39cba8` |
+| 1b-cap | Clock interface split — interface to commonMain, SystemClock stays in jvmMain | `a0e6b2f` |
+
+Held back (23 files still in jvmMain):
+- **10 files** use `System.currentTimeMillis()` as default-arg values. Easy to fix by passing `Clock` parameter, but the refactor touches `:app` + `:simulator` call sites — held for Phase 1c.
+- **13 files** with real `java.*` imports (Base64, ConcurrentHashMap, MessageDigest, UUID, AtomicLong, SecureRandom, RwLock, javax.crypto). Need `expect/actual` shims per `docs/PHASE_1C_SHIM_SURFACE.md`.
+
+After this commit: `:core/commonMain` = 32 files, `:core/jvmMain` = 23 files. The `:core:jvmTest` baseline is green throughout (tests run on each --rerun-tasks).
+
+Rollback per batch: `git revert <commit>` — each batch is independent.
+
+**Phase 1b is at its natural stopping point.** Further progress requires Phase 1c shim decisions you flagged for review.
+
+---
+

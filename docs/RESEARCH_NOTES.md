@@ -242,3 +242,68 @@ These are not resolvable from the web at this hour; recording them so they don't
 - [AdamCodd/vit-base-nsfw-detector](https://huggingface.co/AdamCodd/vit-base-nsfw-detector)
 - [Lightweight mobile network for real-time violence recognition (PMC9621415)](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9621415/)
 - [Breaking SafetyCore (arXiv 2509.06371)](https://arxiv.org/pdf/2509.06371) — the design comp for "why not SafetyCore"
+
+---
+
+## 9. O63 / Briar — what iOS prior art tells us
+
+**Question:** What can we learn from Briar's iOS posture?
+
+**Findings:**
+
+- **Briar does not have an iOS port and has no plans for one.** Stated by the project team. The reason given on Hacker News by a developer: "iOS simply does not allow apps like Briar to run reliably in the background" — the OS kills background processes "with no recourse to bring it up again on its own."
+- **iOS background-execution constraints documented elsewhere:**
+  - Apps in background get a limited execution budget (typically ≤30 seconds in Suspended-soon-after state).
+  - **`bluetooth-central` background mode** lets an app keep a BLE Central role active while in background — but with significant constraints: scan filtering by service UUID is required (no blanket scan), and the OS bunches advertisement deliveries to save power, so latency is high.
+  - **`bluetooth-peripheral` background mode** lets the app advertise in background, but the local-name / service-UUID set is *truncated* by iOS to fit a shorter overflow advertisement frame. Discoverability by non-iOS peers is degraded.
+  - **No equivalent to Wi-Fi Direct.** MultipeerConnectivity is the closest, but it's an Apple-proprietary framework and does not interop with Android Wi-Fi Direct.
+  - **Workarounds mentioned, none clean:** background audio + silent track (battery-cost theatre and may be rejected on review); location-tracking background mode (same); sideload via AltStore (changes deployment story, doesn't fix background limits).
+- **Implication for Rumor iOS port (O63):**
+  - **iOS Rumor will not be a continuous background relay.** It will be a foreground messenger with background BLE *advertise* + *scan-on-service-UUID*. Wi-Fi Direct is gone; mDNS (O73) becomes the highest-throughput same-LAN path on iOS.
+  - This matches the "iOS ships a strict subset, Android stays full-fat" decision already recorded in O63. The new data is *how strict the subset is*: iOS won't be a 24-hour relay node, period. Free mode (O57) is Android-only by hardware constraint, not by code choice.
+  - **Honest framing for the App Store description**: "Rumor on iOS is for active messaging on your local mesh. For 24-hour relay support, use the Android app on a plugged-in device." This is the truthful capability statement; trying to claim parity is the path to rejection.
+- **No code action.** This is a planning-mindset finding. Update O63 with the constraint when next editing CLAUDE.md.
+
+**Sources:**
+- [Briar Wikipedia](https://en.wikipedia.org/wiki/Briar_(software))
+- [Hacker News thread on Briar iOS limitations](https://news.ycombinator.com/item?id=43368263)
+- [Briar project site](https://briarproject.org/)
+
+---
+
+## 10. Tor on Android — `tor-android` vs Arti for O72
+
+**Question:** Which Tor library should O72 (Nostr-over-Tor fallback) target?
+
+**Findings:**
+
+- **`tor-android` (Guardian Project)** is the canonical Java-callable Tor binary wrapper for Android. Last updated May 30, 2026 per the repo. Used by Briar. C-based Tor under the hood. Mature, battle-tested.
+- **Arti Mobile Experimental** (Guardian Project, GitLab) is the Rust-based next-generation Tor implementation with mobile-targeted experimentation. **Still labelled experimental** as of the linked source.
+- **Recommendation for O72 first implementation:** ship on `tor-android`. It's what Briar uses, it has the longest production track record, and the Rumor risk of being early-adopter on Arti while also figuring out our own Nostr layer is bad scoping.
+- **Track Arti maturity** — once GP labels Arti Mobile non-experimental, the migration story is straightforward (same control protocol, different runtime).
+- **iOS Tor is its own animal.** Briar didn't ship iOS; the only first-party Tor-for-iOS is the iCepa project (also Guardian-adjacent). For O72 on iOS, expect the implementation to lag Android by months.
+
+**Sources:**
+- [guardianproject/tor-android](https://github.com/guardianproject/tor-android)
+- [TorService library guide](https://guardianproject.info/code/tor-android/)
+- [Arti Mobile Experimental (GP, GitLab)](https://gitlab.com/guardianproject/tormobile/arti-mobile-ex)
+
+---
+
+## 11. Kotlin Multiplatform 2025–26 ecosystem state — informs Phase 1b/1c
+
+**Question:** Is KMP for `:core` and possibly Compose UI a defensible bet in 2026?
+
+**Findings:**
+
+- **KMP core (business-logic sharing)** has been stable since November 2023; broadly considered production-ready. Netflix Prodicle, Cash App, McDonald's mobile, Snap, others use it in production.
+- **Compose Multiplatform for iOS reached stable in May 2025.** Native scrolling, gestures, hot reload supported.
+- **BouncyCastle KMP** — search returned no clean signal; one referenced post noted that for Bitcoin's libsecp256k1, JNI bindings beat BouncyCastle in KMP setups, suggesting BC isn't the go-to for KMP-native crypto. **Implication for Phase 1c:** expect to use **platform-native crypto** (CryptoKit on iOS, JCA + BouncyCastle on JVM) wrapped behind an `expect/actual` shim, rather than trying to ride BC across all targets. This matches the `docs/PHASE_1C_SHIM_SURFACE.md` recommendation (CryptoKit `Curve25519`, JCA AES-GCM, etc.).
+- **secp256k1-kmp** exists (ACINQ) for Bitcoin curves — useful precedent for Curve25519-kmp / Ed25519-kmp if no good library surfaces by the time we need it. Pattern is: build the JNI bridge yourself, keep the native lib in `iosMain` `cinterop` and `jvmMain` JNI.
+- **Compose Multiplatform iOS** is interesting for the post-Phase-1c future: it means we could ship one UI codebase. But: the existing `:app/ui/` Compose code uses Android-specific Material 3 components and Activity lifecycle wiring. Migrating to Compose Multiplatform is its own non-trivial pass, not a free shared-UI.
+
+**Sources:**
+- [JetBrains KMP roadmap August 2025](https://blog.jetbrains.com/kotlin/2025/08/kmp-roadmap-aug-2025/)
+- [KMP supported platforms](https://kotlinlang.org/docs/multiplatform/supported-platforms.html)
+- [ACINQ/secp256k1-kmp](https://github.com/ACINQ/secp256k1-kmp)
+- [Compose Multiplatform iOS stable 2025](https://www.kmpship.app/blog/compose-multiplatform-ios-stable-2025)
