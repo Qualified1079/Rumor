@@ -5,7 +5,9 @@ import org.junit.Test
 
 class DmEnvelopeRegistryTest {
 
-    private fun makeEnvelope(prefix: String, id: String = "env-$prefix") = object : DmEnvelope {
+    // envelopeId validator rejects colons (commit 8019739, security harden), so
+    // strip the colon from the recipientPrefix when constructing the default id.
+    private fun makeEnvelope(prefix: String, id: String = "env-${prefix.trimEnd(':')}") = object : DmEnvelope {
         override val recipientPrefix = prefix
         override val envelopeId = id
         override val selfAuthenticating = true

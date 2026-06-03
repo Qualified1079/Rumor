@@ -13,18 +13,14 @@ The Phase 1b moves, Phase 1c shims, O64 UI fixes, and CLAUDE.md edits in this se
 
 ## The 7 failures
 
-### 1. `DmEnvelopeRegistryTest` — 3 failures
+### 1. ~~`DmEnvelopeRegistryTest` — 3 failures~~ **FIXED**
 
 ```
 java.lang.IllegalArgumentException: DmEnvelope.envelopeId must match
   ^[A-Za-z0-9_.-]+$ (got 'env-meshtastic:')
 ```
 
-The test fixture uses an envelopeId with a trailing colon (`env-meshtastic:`); commit `8019739` "security: harden DmEnvelope framework from red-team review" added validation that rejects colons. The test needs to be updated to use a valid envelopeId (drop the colon, e.g. `env-meshtastic`). Three test methods affected:
-
-- `multiple prefixes coexist`
-- `forRecipient returns null for non-matching prefix`
-- `forRecipient matches on prefix`
+Test fixture used an envelopeId with a trailing colon (`env-meshtastic:`); commit `8019739` "security: harden DmEnvelope framework from red-team review" added validation that rejects colons. **Fixed by updating the `makeEnvelope` helper default to strip the colon: `id = "env-${prefix.trimEnd(':')}"`.** All three test methods now pass.
 
 ### 2. `SchedulerTest.drr shares bandwidth fairly across two senders`
 
