@@ -91,12 +91,23 @@ class Scheduler(
     private fun drain(group: FlowGroup, result: MutableList<RumorMessage>, maxCount: Int) {
         if (group.queues.isEmpty()) return
         val drained = mutableListOf<String>()
-        var progress = true
-        while (progress && result.size < maxCount) {
-            progress = false
+        // Classic DRR may need multiple rounds before deficit covers a head
+        // message that is larger than the quantum. If we exited the moment a
+        // round drained nothing, a single flow with one oversized message in
+        // its class would never make progress (saw this on the BULK class of
+        // SchedulerTest.drr-shares-bandwidth-fairly). Instead, keep looping as
+        // long as ANY queue is non-empty, and bound progress-free rounds to
+        // avoid pathological inputs holding the lock forever.
+        val maxProgressFreeRounds = 32   // each round = one quantum per flow
+        var progressFreeRounds = 0
+        while (result.size < maxCount) {
+            var anyQueue = false
+            var madeProgress = false
             for (key in group.queues.keys.toList()) {
                 if (result.size >= maxCount) break
                 val queue = group.queues[key] ?: continue
+                if (queue.isEmpty()) continue
+                anyQueue = true
                 var deficit = (group.deficits[key] ?: 0) + effectiveQuantum
                 while (queue.isNotEmpty() && result.size < maxCount) {
                     val head = queue.first()
@@ -105,7 +116,7 @@ class Scheduler(
                     queue.removeFirst()
                     result.add(head)
                     deficit -= size
-                    progress = true
+                    madeProgress = true
                 }
                 if (queue.isEmpty()) {
                     drained.add(key)
@@ -113,6 +124,13 @@ class Scheduler(
                 } else {
                     group.deficits[key] = deficit
                 }
+            }
+            if (!anyQueue) break
+            if (madeProgress) {
+                progressFreeRounds = 0
+            } else {
+                progressFreeRounds++
+                if (progressFreeRounds >= maxProgressFreeRounds) break
             }
         }
         drained.forEach { group.queues.remove(it) }

@@ -44,7 +44,11 @@ class NeighborStore {
             id to (data[id]?.overlapFraction ?: 0.5f)
         }.sortedBy { it.second }
 
-        val coverageCount = (limit * 0.8).toInt().coerceAtLeast(limit - 1)
+        // Ceil rather than truncate so that at limit=1 we get coverageCount=1
+        // (not 0, which would make the whole pick random). The 80%/20% split
+        // is the steady-state for larger limits; for small limits the ceil
+        // preserves the design intent ("prefer low-overlap peers").
+        val coverageCount = kotlin.math.ceil(limit * 0.8).toInt().coerceAtMost(limit)
         val explorationCount = limit - coverageCount
 
         val coverageSet = scored.take(coverageCount).map { it.first }

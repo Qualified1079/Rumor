@@ -22,29 +22,37 @@ java.lang.IllegalArgumentException: DmEnvelope.envelopeId must match
 
 Test fixture used an envelopeId with a trailing colon (`env-meshtastic:`); commit `8019739` "security: harden DmEnvelope framework from red-team review" added validation that rejects colons. **Fixed by updating the `makeEnvelope` helper default to strip the colon: `id = "env-${prefix.trimEnd(':')}"`.** All three test methods now pass.
 
-### 2. `SchedulerTest.drr shares bandwidth fairly across two senders`
+### 2. ~~`SchedulerTest.drr shares bandwidth fairly across two senders`~~ **FIXED**
 
 ```
 java.lang.AssertionError: all bob messages drained expected:<5> but was:<0>
 ```
 
-Real assertion failure. The DRR (deficit round robin) test expects bob's messages to be drained from the scheduler; they're not. Either the scheduler's behavior changed since the test was written, or the test's expectation was wrong from the start. Needs an investigation pass.
+**Real production DRR bug.** Bob's messages were ~60256 bytes (60000 char content + 256 envelope overhead); the quantum is 60000 bytes. **And** Bob's payload size exceeded the REALTIME ceiling (16 KB), so trafficClass demoted Bob's messages to BULK. Alice stayed in REALTIME with small messages.
 
-### 3. `NeighborStoreTest.selectDiverse prefers low-overlap peers`
+In the BULK class, Bob was the only flow. On round 1 of `drain()`, Bob's deficit (0+60000) couldn't cover his head message (60256). `progress=false`, so the outer `while (progress && ...)` exited. Bob drained 0.
+
+Classic DRR needs multiple rounds for messages that exceed the quantum, but the loop bailed after one progress-free round.
+
+**Fix:** loop while *any queue is non-empty*, not while *progress was made*. Cap progress-free rounds at 32 (sane bound that lets messages up to 32×quantum drain while preventing infinite loops on pathological inputs).
+
+### 3. ~~`NeighborStoreTest.selectDiverse prefers low-overlap peers`~~ **FIXED**
 
 ```
 org.junit.ComparisonFailure: expected:<[low]> but was:<[high]>
 ```
 
-Selection logic vs test-expected ordering disagrees. The test expects the low-overlap peer to be picked; code picks the high-overlap peer. Could be inverted comparator, or the test's expected behavior is wrong.
+Real bug: `(limit * 0.8).toInt()` truncated, so with `limit=1` we got `coverageCount=0` and the whole single pick became exploration (random). Fixed by switching to `kotlin.math.ceil(limit * 0.8).toInt().coerceAtMost(limit)` so the 80%/20% split rounds in favor of the documented "prefer low-overlap" intent at small limits.
 
-### 4. `ChunkerTest.reassemble returns null when chunk index gap exists`
+### 4. ~~`ChunkerTest.reassemble returns null when chunk index gap exists`~~ **FIXED**
 
 ```
 java.lang.AssertionError: expected null, but was:<[B@c2e3264>
 ```
 
-`Chunker.reassemble` is supposed to return null when chunks are missing. It's returning a non-null `ByteArray` instead. Either the gap-detection logic is broken, or the test's expectation is wrong about how `reassemble` handles partial inputs.
+Test fixture used `ByteArray(180_000) { 1 }` — every byte was 0x01, so every chunk was byte-identical. The test then replaced chunk 1 with chunk 0's data expecting the hash check to catch it, but the reassembled data was bit-identical so the hash matched. Fixed by changing to `ByteArray(180_000) { it.toByte() }` so chunks differ.
+
+(The test's name says "chunk index gap" but the body actually tests "wrong data at right index" — not a literal gap. Name and body diverged; the body is what the test really exercises. Left the name unchanged.)
 
 ### 5. `AppModuleTest.appModule resolves all bindings` — PARTIALLY ADDRESSED
 
@@ -62,13 +70,14 @@ org.koin.test.verify.MissingKoinDefinitionException: Missing definition
 
 Three sibling adapters need the same treatment: `BlockEntryRepositoryAdapter`, `SubscribedBlocklistRepositoryAdapter`, `BlocklistEntryRepositoryAdapter`. Adopting interface-typed registration would also align with how `MessageRepositoryAdapter` / `ContactRepositoryAdapter` are already registered (`single<MessageRepository> { MessageRepositoryAdapter(...) }`).
 
-## Recommendation
+## Final state
 
-These 7 failures are real defects (or stale tests). None of them are caused by this session's work — they were hiding under the broken JUnit 5 config. Fix them in a focused follow-up pass; not safe to do autonomously because each one requires either a behavior decision (is the test wrong or the code wrong?) or a DI wiring decision.
+**6 of 7 failures fixed.** Only the AppModuleTest DI typing issue remains (#5 above) — touches multiple files and warrants design review on the interface-typed vs concrete-typed `single` registration choice.
 
-The CI workflow at `.github/workflows/ci.yml` runs `:app:testDebugUnitTest` per CLAUDE.md G7 — **the CI was silently passing this task because the broken config produced a "no tests" pass, not a fail.** After this session's `build.gradle.kts` fix, CI will turn red on the next push that touches `:app` test paths. **Two options on receipt of red CI:**
+The CI workflow at `.github/workflows/ci.yml` runs `:app:testDebugUnitTest` per CLAUDE.md G7. **The CI was silently passing this task before because the broken JUnit 5 config produced a "no tests" pass, not a fail.** After this session, 95 tests pass (96 ran; 1 still fails on the AppModule DI issue).
 
-1. **Revert the test-engine fix** in `app/build.gradle.kts` (one commit), restoring the "no tests run" green state. Defer the 7 fixes.
-2. **Land the test-engine fix and the 7 test repairs in one PR.** More work, but it's the honest state.
+**To get CI clean again,** either:
+1. Land the Block-adapter interface-widening refactor (3 `single<BlockEntryRepository> { ... }` widenings + downstream `get<*Repository>()` rewrites). Real but bounded.
+2. Add a Koin `verify(injections = ...)` exception for those three types (works around without fixing).
 
-I recommend option 2 long-term but option 1 is fine for shipping clean CI in the short term.
+Lean: option 1, with the refactor as a focused follow-up. The other 6 fixes from this session land cleanly.

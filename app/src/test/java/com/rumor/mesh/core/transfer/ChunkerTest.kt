@@ -86,7 +86,11 @@ class ChunkerTest {
 
     @Test
     fun `reassemble returns null when chunk index gap exists`() {
-        val data = ByteArray(180_000) { 1 }
+        // Each byte takes the value of its index → every chunk has different
+        // content. Critical: the previous fixture `ByteArray(180_000) { 1 }`
+        // made every chunk byte-identical, so replacing chunk 1 with chunk 0
+        // produced the same reassembled output and the hash check passed.
+        val data = ByteArray(180_000) { it.toByte() }
         val (meta, chunks) = Chunker.chunk(data, ContentType.FILE, chunkSize = 60_000)
 
         // Remove chunk 1, replace with a duplicate of chunk 0 at wrong index.
