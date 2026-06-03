@@ -195,3 +195,41 @@ Rollback per batch: `git revert <commit>` — each batch is independent.
 
 ---
 
+## Entry 9 — Phase 1c first wave: Sha256, Base64Codec, Uuid shims + RBSR formula divergence test
+
+**STATUS: DONE + PUSHED** (`d5d878b`, `d0438e0`, `48cf2b1`)
+
+Decided to push past the "decisions deferred" framing on Phase 1c — the first three shims (Sha256, Base64Codec, Uuid) are decision-free: they're straight JVM-only-currently calls that move behind an `expect/actual` with the JVM actual identical to today's code. iOS / native actuals get filled in by whoever ships those targets; not blocking Phase 1c first wave.
+
+Shims shipped:
+1. **`platform/Sha256`** — `expect object` + JVM actual delegating to `MessageDigest.getInstance("SHA-256")`. Migrated `core/sync/Rbsr.kt` and `core/transfer/Chunker.kt` to use it; both files now in commonMain.
+2. **`platform/Base64Codec`** — `expect object` + JVM actual using `java.util.Base64.getEncoder/getDecoder`. **6 callers migrated** mechanically via sed: CryptoManager, BlocklistSubscriber, BloomFilterData, TransferSender, TransferAssembler, Chunker.
+3. **`platform/Uuid`** — `expect object` with both `random()` (canonical 36-char form) and `randomHex32()` (the .replace("-", "") form most callers actually use). **3 callers migrated**: MessageScheduler, Chunker, GossipEngine.
+
+Build hygiene:
+- `core/build.gradle.kts`: added `-Xexpect-actual-classes` compiler flag to suppress the KT-61573 beta warning on `expect/actual` objects.
+- `core/wire/WireJson.kt`: added `@OptIn(ExperimentalSerializationApi::class)` for `classDiscriminator` — was emitting a warning on every build.
+
+Files newly lifted to commonMain in this wave:
+- `core/sync/Rbsr.kt` (was just `MessageDigest` away)
+- `core/transport/wifidirect/BloomFilterData.kt` (was just `Base64` away)
+- `core/transfer/Chunker.kt` (was just `Sha256` + `Base64` + `Uuid` away)
+
+**RBSR formula divergence test** — `core/src/jvmTest/.../RbsrFormulaComparisonTest.kt`. Executable demonstration that our XOR-of-domain-tagged-SHA-256 fingerprint does NOT match the hoytech/NIP-77 sum-mod-2^256-then-SHA-256 formula. Pins the divergence in the test suite so the wire-format.md §2.9 claim has a regression guard if anyone tries to "align" the formulas without thinking through the wire-format implications.
+
+**Three-module green check** (verified with `:core:jvmTest --rerun-tasks`, `:simulator:test`, `:app:compileDebugKotlin`):
+- `:core/commonMain` now has 35 files; `:core/jvmMain` has 19 (3 are platform actuals).
+- 16 files remain in jvmMain that need future work:
+  - 8 with real `java.*` imports (ConcurrentHashMap, remaining MessageDigest call sites inside CryptoManager, AtomicLong, ArrayDeque, ReentrantReadWriteLock, javax.crypto).
+  - 8 with only `System.currentTimeMillis()` — fixable with `Clock` injection but the refactor touches callers in `:app` and `:simulator` so it's not autonomously-safe work.
+
+**Next obvious Phase 1c shims** (decision-free, would lift more files):
+- `ConcurrentMap<K, V>` shim (`atomicfu` or platform-specific). Unlocks BreadcrumbCache, NeighborStore, parts of GossipEngine + TransferAssembler.
+- `AtomicCounter` shim (typealias to AtomicLong on JVM). Unlocks GossipEngine, MessageStore, CanaryMetrics.
+- `RwLock` shim. Unlocks RumorLog.
+- The rest (Cipher / PBKDF / AES-GCM) is the chunky CryptoManager port — biggest single lift, real decision (BouncyCastle vs platform-native).
+
+Rollback: each shim landed in its own commit (`d5d878b`, `d0438e0`); revert either independently. No data on disk depends on the shims; they're pure call-site refactor.
+
+---
+
