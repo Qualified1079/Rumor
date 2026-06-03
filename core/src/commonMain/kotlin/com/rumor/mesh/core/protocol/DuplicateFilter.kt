@@ -6,6 +6,19 @@ package com.rumor.mesh.core.protocol
  *
  * Separate from MessageStore so they can evolve independently: the dedup cache
  * is hot, write-mostly, and acceptable to lose; the store is persistent and compressed.
+ *
+ * Bandwidth-bound under a TTL-extender attack: the dedup check gates BEFORE
+ * relay enqueue (see `GossipEngine.processIncoming` line ~623, `if (!isNew) return`),
+ * so duplicates never re-fan-out. Attacker resending an already-seen message id
+ * costs only O(attacker_immediate_neighbors) wire-receives per resend — bounded
+ * by the LRU retention window and the per-sender O16 token bucket. The eventual
+ * Tier-1 RAM-bloom layer (O85 in CLAUDE.md) closes the "id evicts from LRU →
+ * re-floodable" window by remembering essentially every id ever seen at the
+ * cost of a 0.1% false-positive rate that gossip-exchange / RBSR catches.
+ *
+ * Disk persistence intentionally NOT added here: flash wear, forensic surface,
+ * and incompatibility with MCU-class relays (O75) outweigh the crash-recovery
+ * benefit. See O85 for the agreed two-tier RAM design.
  */
 class DuplicateFilter {
     private val MIN_CAPACITY = 2_000
