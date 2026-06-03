@@ -10,6 +10,9 @@ kotlin {
         compilations.all {
             kotlinOptions {
                 jvmTarget = "17"
+                // expect/actual on objects is "Beta" per KT-61573 but functional and
+                // documented; suppress the warning. Re-evaluate when KMP graduates it.
+                freeCompilerArgs += listOf("-Xexpect-actual-classes")
             }
         }
     }

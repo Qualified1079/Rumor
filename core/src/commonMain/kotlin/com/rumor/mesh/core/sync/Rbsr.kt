@@ -1,6 +1,6 @@
 package com.rumor.mesh.core.sync
 
-import java.security.MessageDigest
+import com.rumor.mesh.core.platform.Sha256
 
 /**
  * Range-Based Set Reconciliation (O42).
@@ -220,10 +220,8 @@ class Rbsr(
          */
         fun xorFingerprint(items: List<RbsrItem>): ByteArray {
             val acc = ByteArray(32)
-            val md = MessageDigest.getInstance("SHA-256")
             for (item in items) {
-                md.reset()
-                val hash = md.digest("rumor-rbsr-v1:${item.timestamp}:${item.id}".toByteArray(Charsets.UTF_8))
+                val hash = Sha256.digest("rumor-rbsr-v1:${item.timestamp}:${item.id}".toByteArray(Charsets.UTF_8))
                 for (i in acc.indices) acc[i] = (acc[i].toInt() xor hash[i].toInt()).toByte()
             }
             return acc
