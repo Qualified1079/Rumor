@@ -4,7 +4,10 @@ import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.block.BlocklistGossipBridge
 import com.rumor.mesh.core.block.BlocklistPublisher
 import com.rumor.mesh.core.block.BlocklistSubscriber
+import com.rumor.mesh.core.data.BlockEntryRepository
+import com.rumor.mesh.core.data.BlocklistEntryRepository
 import com.rumor.mesh.core.data.BreadcrumbRepository
+import com.rumor.mesh.core.data.SubscribedBlocklistRepository
 import com.rumor.mesh.core.data.ChunkRepository
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.data.MessageRepository
@@ -87,9 +90,9 @@ val appModule = module {
     single { get<RumorDatabase>().blocklistEntryDao() }
     single { get<RumorDatabase>().transferDao() }
     single { get<RumorDatabase>().chunkDao() }
-    single { BlockEntryRepositoryAdapter(get<RumorDatabase>().blockEntryDao()) }
-    single { SubscribedBlocklistRepositoryAdapter(get<RumorDatabase>().subscribedBlocklistDao()) }
-    single { BlocklistEntryRepositoryAdapter(get<RumorDatabase>().blocklistEntryDao()) }
+    single<BlockEntryRepository>        { BlockEntryRepositoryAdapter(get<RumorDatabase>().blockEntryDao()) }
+    single<SubscribedBlocklistRepository> { SubscribedBlocklistRepositoryAdapter(get<RumorDatabase>().subscribedBlocklistDao()) }
+    single<BlocklistEntryRepository>    { BlocklistEntryRepositoryAdapter(get<RumorDatabase>().blocklistEntryDao()) }
 
     // ── Identity ──────────────────────────────────────────────────────────────
     single { IdentityManager(androidContext()) }
@@ -100,9 +103,9 @@ val appModule = module {
     single<StaticMode> { get<StaticModeManager>() }
 
     // ── Block module ──────────────────────────────────────────────────────────
-    single { BlockManager(get<BlockEntryRepositoryAdapter>(), get<SubscribedBlocklistRepositoryAdapter>(), get<BlocklistEntryRepositoryAdapter>()) }
-    single { BlocklistPublisher(get<BlockEntryRepositoryAdapter>(), get<IdentityProvider>()) }
-    single { BlocklistSubscriber(get<SubscribedBlocklistRepositoryAdapter>(), get<BlocklistEntryRepositoryAdapter>()) }
+    single { BlockManager(get<BlockEntryRepository>(), get<SubscribedBlocklistRepository>(), get<BlocklistEntryRepository>()) }
+    single { BlocklistPublisher(get<BlockEntryRepository>(), get<IdentityProvider>()) }
+    single { BlocklistSubscriber(get<SubscribedBlocklistRepository>(), get<BlocklistEntryRepository>()) }
 
     // ── Protocol layer ────────────────────────────────────────────────────────
     single { DuplicateFilter() }
@@ -112,9 +115,12 @@ val appModule = module {
     single { TopologyTracker(get(), get()) }
     single { BreadcrumbCache(get()) }
     single { Scheduler(staticMode = get<StaticMode>()) }
-    single<InboxFilter> { InboxPolicyManager(androidContext(), get()) }
+    single { InboxPolicyManager(androidContext(), get()) }
+    single<InboxFilter> { get<InboxPolicyManager>() }
     single { DmEnvelopeRegistry() }
-    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), dmEnvelopeRegistry = get()) }
+    single { com.rumor.mesh.core.protocol.CanaryMetrics() }
+    single<com.rumor.mesh.core.Clock> { com.rumor.mesh.core.SystemClock }
+    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), canaryMetrics = get(), dmEnvelopeRegistry = get()) }
 
     // ── Transfer layer ────────────────────────────────────────────────────────
     single { TransferAssembler(get(), get(), get()) }

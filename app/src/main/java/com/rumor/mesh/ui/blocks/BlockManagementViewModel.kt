@@ -5,7 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.model.BlockEntry
 import com.rumor.mesh.core.model.SubscribedBlocklist
-import com.rumor.mesh.data.adapter.SubscribedBlocklistRepositoryAdapter
+import com.rumor.mesh.core.data.SubscribedBlocklistRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,7 +31,7 @@ data class BlockManagementState(
  */
 class BlockManagementViewModel(
     private val blockManager: BlockManager,
-    private val subscribedBlocklistRepo: SubscribedBlocklistRepositoryAdapter,
+    private val subscribedBlocklistRepo: SubscribedBlocklistRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BlockManagementState())
