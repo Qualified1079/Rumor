@@ -66,6 +66,25 @@ data class RumorMessage(
 )
 
 /**
+ * O64: ordering / "X ago" timestamp that callers should use instead of [RumorMessage.sentAtMs].
+ *
+ * `sentAtMs` is sender-asserted and trivially forgeable. A malicious sender forging a
+ * far-future timestamp pins their message to the top of any list ordered by sentAtMs;
+ * a forged past timestamp hides their message from sorted views. `receivedAtMs` is what
+ * this node actually witnessed and cannot be forged by the sender. Taking the min gives:
+ *  - honest senders unaffected (sentAtMs ≤ receivedAtMs in the normal case)
+ *  - future-forging senders capped at receive time (no pinning attack)
+ *  - past-forging senders ordered by their own claim, which is what they wanted (a
+ *    sender hiding their own message is not a security problem worth defending against)
+ *
+ * This is the value UI sort orders and "X ago" labels should consume. Protocol behaviour
+ * (eviction, dedup TTL, retry timers) MUST use `receivedAtMs` or monotonic deltas — never
+ * `sentAtMs` and never `displayTimeMs`.
+ */
+val RumorMessage.displayTimeMs: Long
+    get() = minOf(sentAtMs, receivedAtMs)
+
+/**
  * O32 split-TTL helpers. `floodedHops` decrements only when the relay falls
  * back to flood (no breadcrumb match for this hop); `routedHops` counts
  * confirmed-route hops separately for diagnostics and the hard ceiling.

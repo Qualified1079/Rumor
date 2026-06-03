@@ -81,7 +81,7 @@ private fun ThreadRow(thread: ThreadSummary, onClick: () -> Unit) {
         trailingContent = {
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = formatElapsed(System.currentTimeMillis() - thread.lastMessage.sentAtMs),
+                    text = formatElapsed(System.currentTimeMillis() - thread.lastMessage.receivedAtMs),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 )
