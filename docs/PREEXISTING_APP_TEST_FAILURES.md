@@ -46,7 +46,7 @@ java.lang.AssertionError: expected null, but was:<[B@c2e3264>
 
 `Chunker.reassemble` is supposed to return null when chunks are missing. It's returning a non-null `ByteArray` instead. Either the gap-detection logic is broken, or the test's expectation is wrong about how `reassemble` handles partial inputs.
 
-### 5. `AppModuleTest.appModule resolves all bindings`
+### 5. `AppModuleTest.appModule resolves all bindings` — PARTIALLY ADDRESSED
 
 ```
 org.koin.test.verify.MissingKoinDefinitionException: Missing definition
@@ -54,11 +54,13 @@ org.koin.test.verify.MissingKoinDefinitionException: Missing definition
   '[Factory:'com.rumor.mesh.ui.transfers.TransfersViewModel']'
 ```
 
-The G6 DI smoke test (Koin `Module.verify()`) is reporting that `TransfersViewModel` depends on `TransferDao` but no `TransferDao` binding is registered in the Koin module. Either:
-- `TransferDao` needs to be added to `AppModule.kt`
-- `TransfersViewModel`'s constructor should depend on a higher-level type (a `TransferRepository`-style adapter) instead of the DAO directly
+**Cause is a broader DI-typing inconsistency surfacing now that tests run.** Walking the failures revealed the underlying issue:
 
-Likely the second — DAOs are usually wrapped in repository adapters per CLAUDE.md's DI architecture.
+1. **Direct DAO consumption by ViewModels.** `TransfersViewModel` takes `TransferDao` and `ChunkDao` directly. **Fixed in this session** by registering `single { get<RumorDatabase>().*Dao() }` for every DAO, including all the others (MessageDao, ContactDao, etc.) that adapters consume inline. This addresses the immediate "ViewModel needs a DAO" case.
+
+2. **Adapters not registered as their interface types.** `single { BlockEntryRepositoryAdapter(...) }` registers the adapter as the concrete class, not as `BlockEntryRepository`. But `BlocklistPublisher`'s constructor signature takes `BlockEntryRepository`, which `Koin verify` can't resolve from a concrete-typed `single`. **NOT fixed in this session** — fixing it correctly requires either widening the registrations (e.g. `single<BlockEntryRepository> { BlockEntryRepositoryAdapter(...) }`) AND updating downstream `get<BlockEntryRepositoryAdapter>()` calls to use the interface, or keeping the current concrete-pinned registrations and changing constructors to take the adapter type. Both touch multiple files and warrant a focused DI refactor.
+
+Three sibling adapters need the same treatment: `BlockEntryRepositoryAdapter`, `SubscribedBlocklistRepositoryAdapter`, `BlocklistEntryRepositoryAdapter`. Adopting interface-typed registration would also align with how `MessageRepositoryAdapter` / `ContactRepositoryAdapter` are already registered (`single<MessageRepository> { MessageRepositoryAdapter(...) }`).
 
 ## Recommendation
 

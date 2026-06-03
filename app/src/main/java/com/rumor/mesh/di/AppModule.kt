@@ -73,6 +73,20 @@ val appModule = module {
     single<BreadcrumbRepository> { BreadcrumbRepositoryAdapter(get<RumorDatabase>().breadcrumbDao()) }
     single<TransferRepository> { TransferRepositoryAdapter(get<RumorDatabase>().transferDao()) }
     single<ChunkRepository>    { ChunkRepositoryAdapter(get<RumorDatabase>().chunkDao()) }
+    // Raw DAOs exposed for the Koin verify() static check (G6 AppModuleTest) —
+    // every adapter constructor in this module takes a DAO directly, so verify
+    // needs each DAO to be resolvable as its own binding. Production code path
+    // is unchanged: nothing actually calls `get<MessageDao>()` etc., the
+    // adapters consume the DAO at construction time inside their own lambdas.
+    single { get<RumorDatabase>().messageDao() }
+    single { get<RumorDatabase>().contactDao() }
+    single { get<RumorDatabase>().routeDao() }
+    single { get<RumorDatabase>().breadcrumbDao() }
+    single { get<RumorDatabase>().blockEntryDao() }
+    single { get<RumorDatabase>().subscribedBlocklistDao() }
+    single { get<RumorDatabase>().blocklistEntryDao() }
+    single { get<RumorDatabase>().transferDao() }
+    single { get<RumorDatabase>().chunkDao() }
     single { BlockEntryRepositoryAdapter(get<RumorDatabase>().blockEntryDao()) }
     single { SubscribedBlocklistRepositoryAdapter(get<RumorDatabase>().subscribedBlocklistDao()) }
     single { BlocklistEntryRepositoryAdapter(get<RumorDatabase>().blocklistEntryDao()) }
