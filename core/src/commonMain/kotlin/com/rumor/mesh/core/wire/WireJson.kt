@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.wire
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 
 /**
@@ -30,6 +31,7 @@ import kotlinx.serialization.json.Json
  * dumps, anything that never travels between Rumor nodes) may use a separate
  * `Json` instance — `WireJson` is reserved for the wire format itself.
  */
+@OptIn(ExperimentalSerializationApi::class)
 val WireJson: Json = Json {
     ignoreUnknownKeys = true
     encodeDefaults = true

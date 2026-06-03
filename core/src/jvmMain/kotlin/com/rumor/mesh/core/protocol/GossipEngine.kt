@@ -37,7 +37,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
-import java.util.UUID
+import com.rumor.mesh.core.platform.Uuid
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import com.rumor.mesh.core.wire.WireJson
@@ -253,7 +253,7 @@ class GossipEngine(
         }
         val encPayload = "${envelope.envelopeId}:${ciphertext.toBase64()}"
         val msg = RumorMessage(
-            id               = UUID.randomUUID().toString().replace("-", ""),
+            id               = Uuid.randomHex32(),
             senderId         = senderUserId,
             senderPublicKey  = senderPubKey.toBase64(),
             sequenceNumber   = clock.now(),
@@ -847,7 +847,7 @@ class GossipEngine(
         recipientId: String? = null,
     ): RumorMessage {
         val unsigned = RumorMessage(
-            id = UUID.randomUUID().toString().replace("-", ""),
+            id = Uuid.randomHex32(),
             senderId = identity.userId,
             senderPublicKey = identity.publicKeyBytes.toBase64(),
             sequenceNumber = sequenceCounter.getAndIncrement(),

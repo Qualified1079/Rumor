@@ -4,9 +4,9 @@ import com.rumor.mesh.core.crypto.CryptoManager.toBase64
 import com.rumor.mesh.core.model.Chunk
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.TransferMetadata
-import java.security.MessageDigest
-import java.util.Base64
-import java.util.UUID
+import com.rumor.mesh.core.platform.Sha256
+import com.rumor.mesh.core.platform.Base64Codec
+import com.rumor.mesh.core.platform.Uuid
 
 /** 60 KB leaves comfortable room for gossip framing under typical Wi-Fi Direct MTUs. */
 const val DEFAULT_CHUNK_SIZE = 60_000
@@ -31,10 +31,9 @@ object Chunker {
         require(data.isNotEmpty()) { "Cannot chunk empty payload" }
         require(chunkSize > 0) { "chunkSize must be positive" }
 
-        val transferId = UUID.randomUUID().toString().replace("-", "")
+        val transferId = Uuid.randomHex32()
         val totalChunks = (data.size + chunkSize - 1) / chunkSize
-        val digest = MessageDigest.getInstance("SHA-256")
-        val contentHash = digest.digest(data).toBase64()
+        val contentHash = Sha256.digest(data).toBase64()
 
         val metadata = TransferMetadata(
             transferId = transferId,
@@ -55,7 +54,7 @@ object Chunker {
                 transferId = transferId,
                 chunkIndex = index,
                 totalChunks = totalChunks,
-                data = Base64.getEncoder().encodeToString(data.copyOfRange(start, end)),
+                data = Base64Codec.encode(data.copyOfRange(start, end)),
             )
         }
 
@@ -77,13 +76,12 @@ object Chunker {
         val result = ByteArray(metadata.totalBytes.toInt())
         var offset = 0
         for (chunk in sorted) {
-            val bytes = Base64.getDecoder().decode(chunk.data)
+            val bytes = Base64Codec.decode(chunk.data)
             bytes.copyInto(result, offset)
             offset += bytes.size
         }
 
-        val digest = MessageDigest.getInstance("SHA-256")
-        val actualHash = digest.digest(result).toBase64()
+        val actualHash = Sha256.digest(result).toBase64()
         if (actualHash != metadata.contentHash) return null
 
         return result

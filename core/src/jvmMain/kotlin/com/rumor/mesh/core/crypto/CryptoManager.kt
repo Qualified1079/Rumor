@@ -12,7 +12,7 @@ import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.Base64
+import com.rumor.mesh.core.platform.Base64Codec
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
@@ -107,12 +107,12 @@ object CryptoManager {
             val combined = ByteArray(iv.size + ciphertext.size)
             iv.copyInto(combined)
             ciphertext.copyInto(combined, iv.size)
-            return Base64.getEncoder().encodeToString(combined)
+            return Base64Codec.encode(combined)
         }
 
         companion object {
             fun fromBase64(b64: String): AesGcmCiphertext {
-                val combined = Base64.getDecoder().decode(b64)
+                val combined = Base64Codec.decode(b64)
                 val iv = combined.copyOfRange(0, 12)
                 val ct = combined.copyOfRange(12, combined.size)
                 return AesGcmCiphertext(iv, ct)
@@ -157,8 +157,8 @@ object CryptoManager {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
-    fun ByteArray.toBase64(): String = Base64.getEncoder().encodeToString(this)
-    fun String.fromBase64(): ByteArray = Base64.getDecoder().decode(this)
+    fun ByteArray.toBase64(): String = Base64Codec.encode(this)
+    fun String.fromBase64(): ByteArray = Base64Codec.decode(this)
 
     fun randomBytes(n: Int): ByteArray = ByteArray(n).also { rng.nextBytes(it) }
 }

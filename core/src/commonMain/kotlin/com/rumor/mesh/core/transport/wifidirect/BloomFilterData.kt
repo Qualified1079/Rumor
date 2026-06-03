@@ -1,6 +1,6 @@
 package com.rumor.mesh.core.transport.wifidirect
 
-import java.util.Base64
+import com.rumor.mesh.core.platform.Base64Codec
 import kotlin.math.ceil
 import kotlin.math.ln
 
@@ -52,7 +52,7 @@ class BloomFilterData(
             val v = bits[i]
             for (b in 0..7) bytes[i * 8 + b] = ((v shr (b * 8)) and 0xFF).toByte()
         }
-        return Base64.getEncoder().encodeToString(bytes)
+        return Base64Codec.encode(bytes)
     }
 
     private fun murmur3(data: ByteArray, seed: Long): Long {
@@ -87,7 +87,7 @@ class BloomFilterData(
 
         fun deserialize(b64: String, expectedItems: Int): BloomFilterData {
             val filter = BloomFilterData(expectedItems)
-            val bytes = Base64.getDecoder().decode(b64)
+            val bytes = Base64Codec.decode(b64)
             for (i in filter.bits.indices) {
                 var v = 0L
                 for (b in 0..7) {

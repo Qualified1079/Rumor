@@ -19,7 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
-import java.util.Base64
+import com.rumor.mesh.core.platform.Base64Codec
 import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "TransferSender"
@@ -122,7 +122,7 @@ class TransferSender(
             ChunkRecord(
                 transferId = metadata.transferId,
                 chunkIndex = c.chunkIndex,
-                data = Base64.getDecoder().decode(c.data),
+                data = Base64Codec.decode(c.data),
                 receivedAtMs = null,
                 ackedAtMs = null,
             )
@@ -160,7 +160,7 @@ class TransferSender(
                 transferId = req.transferId,
                 chunkIndex = index,
                 totalChunks = transfer.totalChunks,
-                data = Base64.getEncoder().encodeToString(entity.data),
+                data = Base64Codec.encode(entity.data),
             )
             gossipEngine.composeOutbound(
                 type = MessageType.CHUNK,

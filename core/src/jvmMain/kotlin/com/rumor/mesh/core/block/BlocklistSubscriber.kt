@@ -20,7 +20,7 @@ class BlocklistSubscriber(
         subscribedBlocklistRepo.upsert(
             SubscribedBlocklist(
                 publisherId = publisherId,
-                publisherPublicKey = java.util.Base64.getEncoder().encodeToString(publisherPublicKey),
+                publisherPublicKey = com.rumor.mesh.core.platform.Base64Codec.encode(publisherPublicKey),
                 mode = mode,
                 currentVersion = 0,
                 subscribedAtMs = System.currentTimeMillis(),

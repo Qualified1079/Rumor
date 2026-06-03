@@ -19,7 +19,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
-import java.util.Base64
+import com.rumor.mesh.core.platform.Base64Codec
 import java.util.concurrent.ConcurrentHashMap
 import com.rumor.mesh.core.wire.WireJson
 
@@ -131,7 +131,7 @@ class TransferAssembler(
             ChunkRecord(
                 transferId = chunk.transferId,
                 chunkIndex = chunk.chunkIndex,
-                data = Base64.getDecoder().decode(chunk.data),
+                data = Base64Codec.decode(chunk.data),
                 receivedAtMs = System.currentTimeMillis(),
                 ackedAtMs = null,
             )
@@ -144,7 +144,7 @@ class TransferAssembler(
         val transfer = transferRepo.getById(transferId) ?: return
         val rawChunks = chunkRepo.getByTransfer(transferId)
         val chunks = rawChunks.map { e ->
-            Chunk(e.transferId, e.chunkIndex, transfer.totalChunks, Base64.getEncoder().encodeToString(e.data))
+            Chunk(e.transferId, e.chunkIndex, transfer.totalChunks, Base64Codec.encode(e.data))
         }
         val meta = TransferMetadata(
             transferId = transfer.transferId,
