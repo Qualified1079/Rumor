@@ -133,4 +133,36 @@ class RbsrFormulaComparisonTest {
         assertFalse(nip77.all { it == 0.toByte() }, "NIP-77 empty-set fingerprint is SHA-256(zeros || 0x00), not zeros")
         assertFalse(rumor.contentEquals(nip77), "Even the empty-set fingerprints differ between the two formulas")
     }
+
+    // ── production formula parity check: this test's local nip77Fingerprint
+    // must match Rbsr.nip77Fingerprint exactly, or we have a regression. ──
+
+    @Test
+    fun `production nip77 formula matches the reference impl in this test`() {
+        val items = sample.map { (ts, id) -> com.rumor.mesh.core.sync.RbsrItem(ts, id) }
+        val production = com.rumor.mesh.core.sync.Rbsr.nip77Fingerprint(items)
+        val reference  = nip77Fingerprint(sample)
+        assertTrue(
+            production.contentEquals(reference),
+            "Production Rbsr.nip77Fingerprint must match this test's reference impl byte-for-byte. " +
+                "Divergence means the production formula drifted from NIP-77 — fix Rbsr.kt, not this test."
+        )
+    }
+
+    @Test
+    fun `production v1 still differs from v2 by formula dispatch`() {
+        val items = sample.map { (ts, id) -> com.rumor.mesh.core.sync.RbsrItem(ts, id) }
+        val v1 = com.rumor.mesh.core.sync.Rbsr.fingerprint(items, com.rumor.mesh.core.sync.FingerprintFormula.V1_XOR)
+        val v2 = com.rumor.mesh.core.sync.Rbsr.fingerprint(items, com.rumor.mesh.core.sync.FingerprintFormula.V2_NIP77)
+        assertFalse(v1.contentEquals(v2), "v1 and v2 must produce different fingerprints by construction")
+    }
+
+    @Test
+    fun `production v2 is commutative — required for any RBSR fingerprint`() {
+        val forward = sample.map { (ts, id) -> com.rumor.mesh.core.sync.RbsrItem(ts, id) }
+        val reverse = forward.reversed()
+        val a = com.rumor.mesh.core.sync.Rbsr.nip77Fingerprint(forward)
+        val b = com.rumor.mesh.core.sync.Rbsr.nip77Fingerprint(reverse)
+        assertTrue(a.contentEquals(b), "v2 NIP-77 formula must be commutative; without this RBSR breaks")
+    }
 }

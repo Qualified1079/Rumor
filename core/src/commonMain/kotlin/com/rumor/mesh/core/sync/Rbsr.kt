@@ -215,8 +215,13 @@ class Rbsr(
 
     companion object {
         /**
-         * XOR over SHA-256 of each item — order-independent, matches across peers
-         * iff sets match. Empty range yields the zero block.
+         * v1 (legacy, Rumor-original): XOR over SHA-256 of each domain-tagged item.
+         * Order-independent. Empty range yields the 32-byte zero block.
+         *
+         * Used when peers negotiate `rbsr-v1` in HELLO `supportedFeatures`. Not
+         * byte-compatible with hoytech/Nostr-NIP-77 — use [nip77Fingerprint] for
+         * interop with strfry / any NIP-77 implementation. See O42 in CLAUDE.md
+         * and `RbsrFormulaComparisonTest` for the divergence proof.
          */
         fun xorFingerprint(items: List<RbsrItem>): ByteArray {
             val acc = ByteArray(32)
@@ -226,5 +231,103 @@ class Rbsr(
             }
             return acc
         }
+
+        /**
+         * v2 (NIP-77 / hoytech-compatible): `SHA-256( sum_mod_2^256(item_ids) || varint(count) )`.
+         *
+         * Item ids are interpreted as 32-byte little-endian unsigned ints (with
+         * zero-padding if the id is shorter than 32 bytes — Rumor's 128-bit
+         * random ids are 16 bytes hex-encoded = 16 raw bytes, padded to 32 with
+         * leading zeros). Sum mod 2^256 of the raw byte arrays is computed
+         * little-endian with carry. The count is appended as a varint (LEB128).
+         * SHA-256 of the concatenation is the fingerprint.
+         *
+         * This formula is byte-compatible with hoytech/negentropy and Nostr
+         * NIP-77 (subject to the id-interpretation note above). Wins us free
+         * interop with strfry and any NIP-77 relay — which unblocks O54
+         * (transport plugins) and O72 (Nostr fallback transport) to reuse
+         * RBSR machinery without re-implementing.
+         *
+         * Used when peers negotiate `rbsr-v2` in HELLO `supportedFeatures`.
+         * Production default until promote-to-default (see O42).
+         */
+        fun nip77Fingerprint(items: List<RbsrItem>): ByteArray {
+            val sum = ByteArray(32)  // little-endian mod-2^256 accumulator
+            for (item in items) {
+                val raw = hexToBytes(item.id)
+                addLittleEndianMod256(sum, raw)
+            }
+            return Sha256.digest(sum + varint(items.size.toLong()))
+        }
+
+        /**
+         * Dispatcher used by [RbsrStorage.fingerprint] when a formula is supplied.
+         * Default is [FingerprintFormula.V1_XOR] for back-compat with current
+         * sim runs and tests; capability-gated v2 is the migration path.
+         */
+        fun fingerprint(items: List<RbsrItem>, formula: FingerprintFormula): ByteArray = when (formula) {
+            FingerprintFormula.V1_XOR -> xorFingerprint(items)
+            FingerprintFormula.V2_NIP77 -> nip77Fingerprint(items)
+        }
+
+        // ── helpers for the NIP-77 path ──────────────────────────────────────
+
+        private fun hexToBytes(hex: String): ByteArray {
+            require(hex.length % 2 == 0) { "RBSR item id must be even-length hex; got '$hex'" }
+            val out = ByteArray(hex.length / 2)
+            for (i in out.indices) {
+                val hi = hexDigit(hex[i * 2])
+                val lo = hexDigit(hex[i * 2 + 1])
+                out[i] = ((hi shl 4) or lo).toByte()
+            }
+            return out
+        }
+
+        private fun hexDigit(c: Char): Int = when (c) {
+            in '0'..'9' -> c - '0'
+            in 'a'..'f' -> c - 'a' + 10
+            in 'A'..'F' -> c - 'A' + 10
+            else -> error("non-hex char '$c' in RBSR id")
+        }
+
+        /** acc += raw, treating both as little-endian unsigned, mod 2^256. */
+        private fun addLittleEndianMod256(acc: ByteArray, raw: ByteArray) {
+            var carry = 0
+            for (i in 0 until 32) {
+                val a = acc[i].toInt() and 0xFF
+                val r = if (i < raw.size) raw[i].toInt() and 0xFF else 0
+                val s = a + r + carry
+                acc[i] = (s and 0xFF).toByte()
+                carry = s ushr 8
+            }
+            // overflow past 2^256 wraps (carry discarded — that's the "mod 2^256")
+        }
+
+        /** LEB128 (Protobuf-compatible) varint encoding of an unsigned long. */
+        private fun varint(value: Long): ByteArray {
+            var v = value
+            val out = ArrayList<Byte>(10)
+            while (true) {
+                val b = (v and 0x7F).toInt()
+                v = v ushr 7
+                if (v == 0L) { out.add(b.toByte()); break }
+                out.add((b or 0x80).toByte())
+            }
+            return out.toByteArray()
+        }
     }
+}
+
+/**
+ * Which RBSR fingerprint formula a session is using. Chosen at HELLO time via
+ * the highest-version capability tag both peers advertise in
+ * `supportedFeatures` (`rbsr-v2` preferred when both have it; falls back to
+ * `rbsr-v1`). Production capability list is empty until the v2 promote-to-
+ * default gate passes (see O42 in CLAUDE.md).
+ */
+enum class FingerprintFormula {
+    /** Rumor-original XOR-of-domain-tagged-SHA-256. Tag: `rbsr-v1`. */
+    V1_XOR,
+    /** Hoytech / Nostr NIP-77 sum-mod-2^256 then SHA-256. Tag: `rbsr-v2`. */
+    V2_NIP77,
 }
