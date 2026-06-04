@@ -57,8 +57,11 @@ class TopologyTracker(
             }
             routeRepo.upsert(newRoute)
             neighborStore.update(peerId, overlapFraction)
+            // Approximate "%.2f" without String.format (JVM-only) — log noise,
+            // not display copy. Multiplies, rounds, divides.
+            val overlap2dp = kotlin.math.round(overlapFraction * 100.0) / 100.0
             RumorLog.d(TAG, "Session with ${peerId.take(8)}… " +
-                "bytes=${bytesTransferred} overlap=%.2f".format(overlapFraction))
+                "bytes=${bytesTransferred} overlap=$overlap2dp")
         }
     }
 

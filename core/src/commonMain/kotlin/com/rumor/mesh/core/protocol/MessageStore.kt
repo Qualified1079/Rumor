@@ -44,21 +44,27 @@ class MessageStore(
      * we rate-limit at ingest still has their messages relayed by others; this
      * only stops them consuming OUR local resources.
      */
-    private data class Bucket(@Volatile var windowStartMs: Long, @Volatile var count: Int)
+    // SynchronizedObject so each Bucket can act as its own atomicfu monitor on
+    // every platform. Mutations of windowStartMs / count are under that monitor;
+    // happens-before via synchronized makes @Volatile redundant.
+    private class Bucket(var windowStartMs: Long, var count: Int) : kotlinx.atomicfu.locks.SynchronizedObject()
     private val buckets = ConcurrentMap<String, Bucket>()
     private val INGEST_BUDGET_PER_SEC = 100
     private val INGEST_WINDOW_MS = 1_000L
 
     private fun acceptForRate(senderId: String, nowMs: Long): Boolean {
         val b = buckets.getOrPut(senderId) { Bucket(nowMs, 0) }
-        synchronized(b) {
+        return kotlinx.atomicfu.locks.synchronized(b) {
             if (nowMs - b.windowStartMs >= INGEST_WINDOW_MS) {
                 b.windowStartMs = nowMs
                 b.count = 0
             }
-            if (b.count >= INGEST_BUDGET_PER_SEC) return false
-            b.count++
-            return true
+            if (b.count >= INGEST_BUDGET_PER_SEC) {
+                false
+            } else {
+                b.count++
+                true
+            }
         }
     }
 

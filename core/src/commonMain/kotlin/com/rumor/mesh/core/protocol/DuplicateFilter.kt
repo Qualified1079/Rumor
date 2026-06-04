@@ -20,16 +20,16 @@ package com.rumor.mesh.core.protocol
  * and incompatibility with MCU-class relays (O75) outweigh the crash-recovery
  * benefit. See O85 for the agreed two-tier RAM design.
  */
-class DuplicateFilter {
-    private val MIN_CAPACITY = 2_000
-    private val MAX_CAPACITY = 200_000
-    private val BYTES_PER_ENTRY = 200
-    private val HEAP_FRACTION_DENOM = 200
-
-    private val capacity: Int = run {
-        val budgetBytes = Runtime.getRuntime().maxMemory() / HEAP_FRACTION_DENOM
-        (budgetBytes / BYTES_PER_ENTRY).toInt().coerceIn(MIN_CAPACITY, MAX_CAPACITY)
-    }
+class DuplicateFilter(
+    /**
+     * Maximum entries before LRU eviction. Default sized for a modern phone
+     * (~40 MB upper bound at 200 bytes/entry). JVM callers can pass a heap-
+     * aware value if they want tighter scaling on low-RAM Android devices;
+     * iOS/native callers should accept the default. Hard-coded floor + ceiling
+     * preserved as constants for documentation.
+     */
+    private val capacity: Int = DEFAULT_CAPACITY,
+) : kotlinx.atomicfu.locks.SynchronizedObject() {
 
     private val cache: LinkedHashMap<String, Unit> = object : LinkedHashMap<String, Unit>(
         capacity, 0.75f, true
@@ -39,16 +39,19 @@ class DuplicateFilter {
     }
 
     /** Returns true if [id] is new (not previously seen). Records it either way. */
-    @Synchronized
-    fun recordAndCheck(id: String): Boolean {
+    fun recordAndCheck(id: String): Boolean = kotlinx.atomicfu.locks.synchronized(this) {
         val isNew = !cache.containsKey(id)
         cache[id] = Unit
-        return isNew
+        isNew
     }
 
-    @Synchronized
-    fun knownIds(): Set<String> = cache.keys.toSet()
+    fun knownIds(): Set<String> = kotlinx.atomicfu.locks.synchronized(this) { cache.keys.toSet() }
 
-    @Synchronized
-    fun size(): Int = cache.size
+    fun size(): Int = kotlinx.atomicfu.locks.synchronized(this) { cache.size }
+
+    companion object {
+        const val MIN_CAPACITY = 2_000
+        const val MAX_CAPACITY = 200_000
+        const val DEFAULT_CAPACITY = MAX_CAPACITY
+    }
 }

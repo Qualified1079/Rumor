@@ -1,5 +1,8 @@
 package com.rumor.mesh.plugin
 
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
+
 /**
  * Thread-safe registry mapping recipient userId prefixes to [DmEnvelope] implementations.
  *
@@ -14,7 +17,7 @@ package com.rumor.mesh.plugin
  */
 class DmEnvelopeRegistry {
 
-    private val lock = Any()
+    private val lock = SynchronizedObject()
     private val byPrefix = LinkedHashMap<String, DmEnvelope>()
 
     /**

@@ -37,8 +37,8 @@ object ConsoleSink : LogSink {
 object RumorLog {
     private const val RING_CAPACITY = 1000
 
-    @Volatile var debugMode: Boolean = false
-    @Volatile var sink: LogSink = ConsoleSink
+    @kotlin.concurrent.Volatile var debugMode: Boolean = false
+    @kotlin.concurrent.Volatile var sink: LogSink = ConsoleSink
 
     private val ring = ArrayDeque<LogEntry>()
     private val lock = RwLock()

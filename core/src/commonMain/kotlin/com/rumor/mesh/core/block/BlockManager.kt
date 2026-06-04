@@ -33,7 +33,7 @@ class BlockManager(
     private val TAG = "BlockManager"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    @Volatile private var blockedSet: Set<String> = emptySet()
+    @kotlin.concurrent.Volatile private var blockedSet: Set<String> = emptySet()
 
     private val _blockedFlow = MutableStateFlow<Set<String>>(emptySet())
     val blocked: StateFlow<Set<String>> = _blockedFlow.asStateFlow()
@@ -115,7 +115,7 @@ class BlockManager(
     }.toByteArray(Charsets.UTF_8)
 
     private fun decodeEntries(bytes: ByteArray): List<BlockEntry> =
-        String(bytes, Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.map { line ->
+        bytes.decodeToString().lineSequence().filter { it.isNotBlank() }.map { line ->
             val f = line.split('\t')
             BlockEntry(
                 userId = f[0],
