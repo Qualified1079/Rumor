@@ -114,11 +114,9 @@ class GossipEngine(
     /**
      * Plaintext for outbound DMs keyed by message ID. The ephemeral X25519 private
      * key is discarded after encryption so the sender cannot re-derive the text.
-     * Bounded to 500 entries; oldest are evicted by insertion order via LinkedHashMap.
+     * Bounded to 500 entries; oldest are evicted by insertion order.
      */
-    private val sentDmPlaintext: MutableMap<String, String> = object : LinkedHashMap<String, String>(64, 0.75f, false) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 500
-    }.let { java.util.Collections.synchronizedMap(it) }
+    private val sentDmPlaintext = com.rumor.mesh.core.platform.BoundedFifoMap<String, String>(500)
 
     fun sentPlaintextFor(messageId: String): String? = sentDmPlaintext[messageId]
 
@@ -307,7 +305,7 @@ class GossipEngine(
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
-        sentDmPlaintext[msg.id] = text
+        sentDmPlaintext.put(msg.id, text)
         if (envelope != null && rawCiphertext != null) {
             // Bridged DM: the bridge plugin picks this up via outboundBridgedDm and
             // forwards the raw ciphertext to the external network. Do not enqueue in the
