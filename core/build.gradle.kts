@@ -17,6 +17,25 @@ kotlin {
         }
     }
 
+    // iOS targets — only enabled on macOS (Konan iOS toolchain requires Xcode).
+    // Code in core/src/iosMain compiles on Mac builds; Linux/Windows skip the
+    // iOS source set entirely so JVM workflows work everywhere.
+    //
+    // Actuals: CryptoKit + CommonCrypto back PlatformCrypto; Foundation backs
+    // Base64Codec / Uuid; Security backs PlatformRandom; NSDate backs SystemClock.
+    val isMac = org.jetbrains.kotlin.konan.target.HostManager.hostIsMac
+    if (isMac) {
+        iosX64()
+        iosArm64()
+        iosSimulatorArm64()
+
+        targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
+            compilations.all {
+                kotlinOptions.freeCompilerArgs += listOf("-Xexpect-actual-classes")
+            }
+        }
+    }
+
     sourceSets {
         all {
             languageSettings.optIn("kotlin.RequiresOptIn")
@@ -56,6 +75,20 @@ kotlin {
                 // var JAZZER_FUZZ=1 to put them into in-process fuzzing mode for CI or
                 // ad-hoc bug-hunting. https://github.com/CodeIntelligenceTesting/jazzer
                 implementation("com.code-intelligence:jazzer-junit:0.22.1")
+            }
+        }
+
+        // iOS source-set hierarchy: shared iosMain feeds the three iOS targets.
+        // Only configured on Mac builds (where the targets are declared).
+        if (isMac) {
+            val iosX64Main by getting
+            val iosArm64Main by getting
+            val iosSimulatorArm64Main by getting
+            val iosMain by creating {
+                dependsOn(commonMain)
+                iosX64Main.dependsOn(this)
+                iosArm64Main.dependsOn(this)
+                iosSimulatorArm64Main.dependsOn(this)
             }
         }
     }
