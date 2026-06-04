@@ -82,6 +82,22 @@ When the architecture is approved, add an `O63` entry to the open items table su
 3. **Background-relay framing:** accepted. README will state iOS is a part-time relay; always-on infrastructure lives on Android, SBCs, or transport-plugin hardware.
 4. **UI:** Compose Multiplatform for iOS. Reuses the existing Android Compose UI as a single source of truth, minimises blind code, single design pipeline. Platform-specific glue (CoreBluetooth permission prompts, Keychain access, share sheet, lifecycle hooks) is Swift behind `expect`/`actual` boundaries.
 
+### Hardware acquisition triggers (recorded so it doesn't drift)
+
+The iOS port goes through three tooling tiers, each with a concrete trigger
+for the next hardware purchase. Skip ahead at your own pace; don't buy ahead
+of need.
+
+| Tier | Tooling | Covers | Trigger to advance |
+|------|---------|--------|--------------------|
+| 1 | **xtool on Linux** (cross-compile, no Mac) | Build `iosX64`/`iosArm64`/`iosSimulatorArm64` Kotlin/Native targets; build Swift bridge; produce signed `.ipa`; CI verification via GitHub Actions `macos-latest` runners for simulator-only steps. Free. | Compile-only verification feels insufficient and you want to *run* the app yourself. |
+| 2 | **xtool + personal iPhone (used / existing)** | Same as tier 1 plus sideload to your own iPhone via free Apple Developer ID for 7-day re-signing dev cycles. Runtime testing on real hardware, Swift bridge byte-output validated against the golden-vectors in `commonTest`. | Submitting to the App Store enters the critical path, or simulator runs become structurally necessary (UI debug, screen recordings, accessibility audit). |
+| 3 | **Used Mac mini M1/M2 (~$300)** + paid Apple Developer Program ($99/yr) | Xcode, iOS Simulator, App Store Connect upload, TestFlight, full polished dev workflow. | This is the ship-to-iOS-users tier. Don't buy until the App Store is the actual next step. |
+
+Tier transitions are additive — tier 1 work isn't wasted when you move to tier 2; everything carries forward. The xtool path stays useful even with a Mac because cross-compile from a fast Linux dev box is often faster than Xcode on entry-level Mac silicon.
+
+**Not on the list:** Hackintosh, macOS-on-VM-on-Linux (UTM/KVM), x86 emulation of Apple silicon. All technically possible, none worth the tinkering hours relative to a used Mac mini when you actually need one.
+
 ### App stores beyond Apple
 
 A broader survey of non-Play Android stores (and any iOS-adjacent paths that emerge) is owed under O71 — the long tail of regional and niche stores is reach the F-Droid + Play baseline doesn't cover. Note in CLAUDE.md backlog, do not block v1 on it.
