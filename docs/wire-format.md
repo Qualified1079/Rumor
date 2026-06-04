@@ -60,7 +60,7 @@ Json {
 
 ### 1.3 Forward-compat: `_ext`
 
-Every top-level wire object (`GossipPacket.*`, `RumorMessage`, `Blocklist`, `BlocklistDiff`, `IdentityRotationPayload`, `BridgeVouchedPayload`, `SelfPresencePayload`, `RbsrFrameWire.*`, `TransferMetadata`, `Chunk`, `ChunkRequest`) reserves a field:
+Every top-level wire object (`GossipPacket.*`, `RumorMessage`, `Blocklist`, `BlocklistDiff`, `BridgeVouchedPayload`, `SelfPresencePayload`, `RbsrFrameWire.*`, `TransferMetadata`, `Chunk`, `ChunkRequest`) reserves a field:
 
 ```jsonc
 "_ext": { "<key>": <any JSON> } | null
@@ -341,7 +341,6 @@ Signed bytes deliberately exclude:
 | `"blocklist_diff"` | Signed incremental blocklist diff. Broadcast through mesh. |
 | `"priority_link_request"` | Request a persistent-priority connection. Routed as DM. |
 | `"priority_link_accept"` | Accept a priority-link request. Routed as DM. |
-| `"identity_rotation"` | O41 signed key-rotation announcement. See §4.2. |
 | `"self_presence"` | O30/O57 self-presence beacon. See §4.3. |
 | `"bridge_vouched"` | O17 bridge-vouched cross-network content. See §4.4. |
 | `"transfer_cancel"` | O18 receiver-cancel for in-flight chunked transfer. Routed as DM. |
@@ -407,33 +406,9 @@ Signature bytes:
 "rumor-blocklist-diff-v1:" || publisherId || "|" || fromVersion || "->" || toVersion || "|+" || added.sortedAscii.joinWith(',', trailingComma=true) || "|-" || removed.sortedAscii.joinWith(',', trailingComma=true)
 ```
 
-Subscribers MUST verify the signature using `publisherId`'s known public key (TOFU at first subscribe; re-pin on identity rotation). Diffs are only applied when `fromVersion` matches the subscriber's currently-applied version.
+Subscribers MUST verify the signature using `publisherId`'s known public key (TOFU at first subscribe). Diffs are only applied when `fromVersion` matches the subscriber's currently-applied version.
 
-### 4.2 Identity rotation (O41)
-
-`MessageType.IDENTITY_ROTATION`:
-
-```json
-{
-  "oldUserId": "<hex>",
-  "newUserId": "<hex>",
-  "newPublicKey": "<base64 32-byte Ed25519>",
-  "authorizedAtMs": 1700000000000,
-  "continuitySignature": "<base64 Ed25519 by OLD key>",
-  "_ext": null
-}
-```
-
-Two signatures:
-- **Outer** (on the `RumorMessage`): by the **new** Ed25519 key. Verifies normally via §3.2.
-- **Inner** (`continuitySignature`): by the **old** Ed25519 key over:
-  ```
-  "rumor-identity-rotation-v1:" || oldUserId || "|" || newUserId || "|" || newPublicKey || "|" || authorizedAtMs
-  ```
-
-Recipients holding `oldUserId` as a contact verify both signatures (old-key sig against the public key they have on file), then atomically rebind the contact record to the new userId/publicKey, preserving display name / priority / autorelay (per G9).
-
-### 4.3 Self-presence (O30/O57)
+### 4.2 Self-presence (O30/O57)
 
 `MessageType.SELF_PRESENCE`:
 
@@ -450,7 +425,7 @@ Recipients holding `oldUserId` as a contact verify both signatures (old-key sig 
 - `recentlyExchangedWith` is the O31 route-advertisement list. Limit ~20 entries; sender's choice to opt-in per contact.
 - INFRASTRUCTURE traffic class, short TTL (≤ `MAX_BROADCAST_HOPS`).
 
-### 4.4 Bridge-vouched (O17)
+### 4.3 Bridge-vouched (O17)
 
 `MessageType.BRIDGE_VOUCHED`:
 
@@ -468,7 +443,7 @@ Outer `RumorMessage.signature` is by the **bridge's** Rumor Ed25519 key. The bri
 
 Per-bridge trust toggles (receivers decide which bridges they accept vouching from) are a receiver-local policy, not on the wire.
 
-### 4.5 Chunked transfer (O16, O18)
+### 4.4 Chunked transfer (O16, O18)
 
 `TransferMetadata` (sent first, then chunks):
 

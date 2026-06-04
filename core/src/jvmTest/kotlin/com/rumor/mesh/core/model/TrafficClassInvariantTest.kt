@@ -64,9 +64,6 @@ class TrafficClassInvariantTest {
     @Test fun `PRIORITY_LINK_ACCEPT is INFRASTRUCTURE`() =
         assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.PRIORITY_LINK_ACCEPT).trafficClass)
 
-    @Test fun `IDENTITY_ROTATION is INFRASTRUCTURE`() =
-        assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.IDENTITY_ROTATION).trafficClass)
-
     @Test fun `SELF_PRESENCE is INFRASTRUCTURE`() =
         assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.SELF_PRESENCE).trafficClass)
 
@@ -159,7 +156,6 @@ class TrafficClassInvariantTest {
             MessageType.BLOCKLIST_DIFF,
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT,
-            MessageType.IDENTITY_ROTATION,
             MessageType.SELF_PRESENCE,
             MessageType.TRANSFER_METADATA,
             MessageType.BLOCKLIST_PUBLISH,

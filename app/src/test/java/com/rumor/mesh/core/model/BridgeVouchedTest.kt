@@ -60,10 +60,13 @@ class BridgeVouchedTest {
     }
 
     @Test
-    fun `domain prevents cross-protocol replay against an identity-rotation signature`() {
+    fun `domain prevents cross-protocol replay against a different domain-tagged signature`() {
+        // Sign bytes under a different domain tag, then attempt to use that
+        // signature against the bridge-vouched bytes. Must fail — the domain
+        // tag binds each signature to its protocol context.
         val key = CryptoManager.generateEd25519KeyPair()
-        val rotationBytes = identityRotationSignableBytes("old", "new", "pubkey", 1L)
-        val sig = CryptoManager.sign(rotationBytes, key.privateKeyBytes)
+        val otherDomainBytes = "rumor-other-domain-v1:old|new|pubkey|1".toByteArray(Charsets.UTF_8)
+        val sig = CryptoManager.sign(otherDomainBytes, key.privateKeyBytes)
         val vouchedBytes = bridgeVouchedSignableBytes("bridge", "net", "sender", "payload", 1L)
         assertEquals(false, CryptoManager.verify(vouchedBytes, sig, key.publicKeyBytes))
     }

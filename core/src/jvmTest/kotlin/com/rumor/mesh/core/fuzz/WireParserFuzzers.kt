@@ -8,7 +8,6 @@ import com.rumor.mesh.core.model.BridgeVouchedPayload
 import com.rumor.mesh.core.model.Chunk
 import com.rumor.mesh.core.model.ChunkRequest
 import com.rumor.mesh.core.model.GossipPacket
-import com.rumor.mesh.core.model.IdentityRotationPayload
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.SelfPresencePayload
 import com.rumor.mesh.core.model.TransferCancel
@@ -94,12 +93,6 @@ class WireParserFuzzers {
     fun fuzzBridgeVouchedPayload(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
         runCatching { WireJson.decodeFromString<BridgeVouchedPayload>(json) }
-    }
-
-    @FuzzTest
-    fun fuzzIdentityRotationPayload(data: FuzzedDataProvider) {
-        val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<IdentityRotationPayload>(json) }
     }
 
     @FuzzTest

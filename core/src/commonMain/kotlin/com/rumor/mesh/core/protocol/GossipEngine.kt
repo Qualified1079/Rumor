@@ -4,11 +4,9 @@ import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
-import com.rumor.mesh.core.model.IdentityRotationPayload
 import com.rumor.mesh.core.model.BridgeVouchedPayload
 import com.rumor.mesh.core.model.SelfPresencePayload
 import com.rumor.mesh.core.model.UserMode
-import com.rumor.mesh.core.model.identityRotationSignableBytes
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.identity.IdentityProvider
 import com.rumor.mesh.core.identity.LocalIdentity
@@ -429,45 +427,6 @@ class GossipEngine(
     }
 
     /**
-     * Compose and broadcast an [MessageType.IDENTITY_ROTATION] migrating the
-     * local identity from [oldUserId] (proven via [oldKeySign]) to the current
-     * identity. The outer message is signed by the current (new) key in the
-     * usual way; [oldKeySign] produces the inner continuity signature with the
-     * old key, which contacts holding [oldUserId] verify before rebinding.
-     * See O41.
-     */
-    suspend fun composeIdentityRotation(
-        oldUserId: String,
-        oldKeySign: (ByteArray) -> ByteArray,
-    ): RumorMessage? {
-        val identity = identityProvider.identity.value ?: return null
-        val newPublicKeyB64 = identity.publicKeyBytes.toBase64()
-        val authorizedAtMs = clock.now()
-        val continuityBytes = identityRotationSignableBytes(
-            oldUserId = oldUserId,
-            newUserId = identity.userId,
-            newPublicKey = newPublicKeyB64,
-            authorizedAtMs = authorizedAtMs,
-        )
-        val continuitySig = oldKeySign(continuityBytes).toBase64()
-        val payload = IdentityRotationPayload(
-            oldUserId = oldUserId,
-            newUserId = identity.userId,
-            newPublicKey = newPublicKeyB64,
-            authorizedAtMs = authorizedAtMs,
-            continuitySignature = continuitySig,
-        )
-        val msg = buildMessage(
-            identity = identity,
-            type = MessageType.IDENTITY_ROTATION,
-            hopsToLive = DEFAULT_BROADCAST_HOPS,
-            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(payload)),
-        )
-        enqueueImmediate(msg)
-        return msg
-    }
-
-    /**
      * Compose and broadcast a [MessageType.SELF_PRESENCE] beacon (O30 + O57).
      * The sender declares its current [mode] to the mesh. Used both as the
      * entry pulse when going Static or Free, and as the symmetric exit pulse
@@ -655,56 +614,8 @@ class GossipEngine(
         // key (already verified above). We additionally check the *inner*
         // continuity signature against the existing contact's old public key —
         // proves the rotation is authorized by the old-key holder. Only then
-        // do we rebind the contact record so display-name pinning (O21) and
-        // routing breadcrumbs (O29) follow the same human across the rotation.
-        if (msg.type == MessageType.IDENTITY_ROTATION) {
-            scope.launch { applyIdentityRotation(msg) }
-        }
-
         emitToInbox(msg)
         relay(msg, autoRelayIds)
-    }
-
-    private suspend fun applyIdentityRotation(msg: RumorMessage) {
-        val payloadJson = msg.payload?.content ?: return
-        val rotation = runCatching {
-            WireJson.decodeFromString<IdentityRotationPayload>(payloadJson)
-        }.getOrNull() ?: return
-
-        // Outer-signature pubkey must equal claimed new pubkey, otherwise an
-        // attacker could broadcast someone else's rotation with their own
-        // outer key. The userId↔pubkey binding is cryptographic
-        // (userId = SHA-256(pubkey)) so a simple equality on the new userId is
-        // sufficient: if senderId != newUserId, drop.
-        if (msg.senderId != rotation.newUserId) return
-        if (msg.senderPublicKey != rotation.newPublicKey) return
-
-        // Old key on file determines whether we accept this rotation. If we
-        // don't have the old contact, there is nothing to rebind — drop
-        // silently. (Relaying the message is fine; rebinding requires prior
-        // knowledge of the old key.)
-        val existing = contactRepo.getById(rotation.oldUserId) ?: return
-        val oldPubKeyBytes = runCatching { existing.publicKey.fromBase64() }.getOrNull() ?: return
-        val continuityBytes = runCatching { rotation.continuitySignature.fromBase64() }.getOrNull() ?: return
-        val signable = identityRotationSignableBytes(
-            oldUserId = rotation.oldUserId,
-            newUserId = rotation.newUserId,
-            newPublicKey = rotation.newPublicKey,
-            authorizedAtMs = rotation.authorizedAtMs,
-        )
-        if (!CryptoManager.verify(signable, continuityBytes, oldPubKeyBytes)) {
-            RumorLog.w(TAG, "Identity rotation from ${rotation.oldUserId.take(16)}… failed continuity check")
-            return
-        }
-
-        val rebound = contactRepo.rebindIdentity(
-            oldUserId = rotation.oldUserId,
-            newUserId = rotation.newUserId,
-            newPublicKey = rotation.newPublicKey,
-        )
-        if (rebound) {
-            RumorLog.i(TAG, "Identity rotation: ${rotation.oldUserId.take(16)}… → ${rotation.newUserId.take(16)}…")
-        }
     }
 
     /**
@@ -795,7 +706,6 @@ class GossipEngine(
                 enqueueRelayed(forwarded)
             }
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
-            MessageType.IDENTITY_ROTATION,
             MessageType.SELF_PRESENCE -> {
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
@@ -813,7 +723,7 @@ class GossipEngine(
         val ceiling = when (msg.type) {
             MessageType.BROADCAST, MessageType.PING, MessageType.PONG,
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
-            MessageType.IDENTITY_ROTATION, MessageType.SELF_PRESENCE,
+            MessageType.SELF_PRESENCE,
             MessageType.BRIDGE_VOUCHED -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,

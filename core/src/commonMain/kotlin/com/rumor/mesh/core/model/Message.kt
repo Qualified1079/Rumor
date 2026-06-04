@@ -162,17 +162,6 @@ enum class MessageType {
     /** Accept an incoming priority link request. Routed as DM back to originator. */
     @SerialName("priority_link_accept")  PRIORITY_LINK_ACCEPT,
     /**
-     * Signed announcement that the sender is migrating from an old identity
-     * (userId / Ed25519 key) to a new one. The outer [RumorMessage.signature]
-     * is by the *new* key (so existing relay-layer signature checks still
-     * verify against [RumorMessage.senderPublicKey]); the inner
-     * [IdentityRotationPayload.continuitySignature] is by the *old* key and
-     * proves the rotation is authorized (old-key holder consents). Recipients
-     * holding [IdentityRotationPayload.oldUserId] as a contact rebind to the
-     * new userId locally. See O41.
-     */
-    @SerialName("identity_rotation") IDENTITY_ROTATION,
-    /**
      * Self-presence beacon (O30 + O57). Sender declares its current [UserMode]
      * to the mesh — entry-pulse on mode-up (going Static/Free), exit-pulse on
      * mode-down (back to Mobile). Mesh peers consume this to weight the sender
@@ -279,7 +268,6 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.BLOCKLIST_DIFF,
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT,
-            MessageType.IDENTITY_ROTATION,
             MessageType.SELF_PRESENCE -> TrafficClass.INFRASTRUCTURE
             // A full blocklist snapshot is bulky sync data, not handshake-tier
             // traffic — only the small incremental diff stays INFRASTRUCTURE.

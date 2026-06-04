@@ -38,4 +38,6 @@ Policy summary (see `CLAUDE.md` O37 invariant 6):
 
 | Name | Retired in | Replaced by | Notes |
 |------|------------|-------------|-------|
-| _    | _          | _           | _     |
+| `"identity_rotation"` (MessageType serial name) | pre-v0.1 (no wire-format release) | (nothing) | Originally O41 — a signed announcement that the sender's userId/Ed25519 key migrated, with contacts auto-rebinding on receipt. Removed before any release because auto-rebind turns a stolen old key into permanent impersonation (attacker rotates to their own key, all contacts auto-rebind). Wire type name and the `rumor-identity-rotation-v1:` domain tag are reserved forever. Deletion-announcement use case moved to O69 (`IDENTITY_RETIRED`, no successor key, safe). |
+| `rumor-identity-rotation-v1:` (domain tag) | pre-v0.1 | (nothing) | See `"identity_rotation"` above. |
+| `ContactRepository.rebindIdentity()` (not on the wire but reserved for symmetry) | pre-v0.1 | (nothing) | Same — never re-add this method under this name. |
