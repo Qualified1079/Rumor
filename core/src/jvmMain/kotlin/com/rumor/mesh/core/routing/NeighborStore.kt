@@ -1,6 +1,6 @@
 package com.rumor.mesh.core.routing
 
-import java.util.concurrent.ConcurrentHashMap
+import com.rumor.mesh.core.platform.ConcurrentMap
 
 /**
  * In-memory cache of each peer's last-seen message-set overlap fraction.
@@ -18,7 +18,7 @@ class NeighborStore {
 
     private data class Entry(val overlapFraction: Float, val updatedAtMs: Long)
 
-    private val data = ConcurrentHashMap<String, Entry>()
+    private val data = ConcurrentMap<String, Entry>()
 
     /**
      * Record [overlapFraction] ∈ [0,1] for [peerId] using an exponential
@@ -59,7 +59,7 @@ class NeighborStore {
     /** Evict entries older than [olderThanMs]. Call periodically to avoid unbounded growth. */
     fun pruneStale(olderThanMs: Long) {
         val cutoff = System.currentTimeMillis() - olderThanMs
-        data.entries.removeIf { it.value.updatedAtMs < cutoff }
+        data.removeIf { _, v -> v.updatedAtMs < cutoff }
     }
 
     fun overlapFor(peerId: String): Float = data[peerId]?.overlapFraction ?: 0.5f

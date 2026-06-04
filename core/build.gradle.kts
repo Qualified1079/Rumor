@@ -26,6 +26,10 @@ kotlin {
             dependencies {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+                // Multiplatform atomics: AtomicLong / AtomicReference / atomic
+                // for the concurrency-primitive expect/actual surface. JetBrains-
+                // maintained, used widely in KMP libs.
+                implementation("org.jetbrains.kotlinx:atomicfu:0.23.1")
             }
         }
 

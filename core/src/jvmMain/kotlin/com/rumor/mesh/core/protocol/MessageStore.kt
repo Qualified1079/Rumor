@@ -9,7 +9,8 @@ import com.rumor.mesh.core.model.Contact
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.policy.StaticMode
 import kotlinx.coroutines.flow.Flow
-import java.util.concurrent.atomic.AtomicLong
+import com.rumor.mesh.core.platform.AtomicCounter
+import com.rumor.mesh.core.platform.ConcurrentMap
 
 private const val TAG = "MessageStore"
 private const val DEFAULT_BROADCAST_HOPS = 7
@@ -26,8 +27,8 @@ class MessageStore(
     private val staticMode: StaticMode? = null,
     private val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
-    private val _sigFailures = AtomicLong()
-    private val _rateLimited = AtomicLong()
+    private val _sigFailures = AtomicCounter()
+    private val _rateLimited = AtomicCounter()
     /** Count of messages dropped due to invalid Ed25519 signatures. */
     val sigFailureCount: Long get() = _sigFailures.get()
     /** Count of messages dropped at ingest because the sender exceeded the per-sender token bucket (O16). */
@@ -44,12 +45,12 @@ class MessageStore(
      * only stops them consuming OUR local resources.
      */
     private data class Bucket(@Volatile var windowStartMs: Long, @Volatile var count: Int)
-    private val buckets = java.util.concurrent.ConcurrentHashMap<String, Bucket>()
+    private val buckets = ConcurrentMap<String, Bucket>()
     private val INGEST_BUDGET_PER_SEC = 100
     private val INGEST_WINDOW_MS = 1_000L
 
     private fun acceptForRate(senderId: String, nowMs: Long): Boolean {
-        val b = buckets.computeIfAbsent(senderId) { Bucket(nowMs, 0) }
+        val b = buckets.getOrPut(senderId) { Bucket(nowMs, 0) }
         synchronized(b) {
             if (nowMs - b.windowStartMs >= INGEST_WINDOW_MS) {
                 b.windowStartMs = nowMs

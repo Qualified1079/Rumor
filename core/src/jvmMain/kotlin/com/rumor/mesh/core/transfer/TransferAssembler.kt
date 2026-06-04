@@ -20,7 +20,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import com.rumor.mesh.core.platform.Base64Codec
-import java.util.concurrent.ConcurrentHashMap
+import com.rumor.mesh.core.platform.ConcurrentMap
+import com.rumor.mesh.core.platform.ConcurrentSet
 import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "TransferAssembler"
@@ -39,14 +40,14 @@ class TransferAssembler(
     private val chunkRepo: ChunkRepository,
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val watchdogs = ConcurrentHashMap<String, Job>()
+    private val watchdogs = ConcurrentMap<String, Job>()
 
     /**
      * O18: transferIds the user paused locally. Incoming CHUNKs for these are
      * dropped at ingest; the watchdog is left running so a pending transfer
      * doesn't time out while paused. Resume re-enables ingest.
      */
-    private val paused: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val paused = ConcurrentSet<String>()
 
     private val _assembledTransfers = MutableSharedFlow<AssembledTransfer>(extraBufferCapacity = 32)
     val assembledTransfers: SharedFlow<AssembledTransfer> = _assembledTransfers

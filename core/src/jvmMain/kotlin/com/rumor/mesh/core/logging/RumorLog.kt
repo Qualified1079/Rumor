@@ -1,12 +1,9 @@
 package com.rumor.mesh.core.logging
 
+import com.rumor.mesh.core.platform.RwLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.ArrayDeque
-import java.util.concurrent.locks.ReentrantReadWriteLock
-import kotlin.concurrent.read
-import kotlin.concurrent.write
 
 enum class LogLevel { VERBOSE, DEBUG, INFO, WARN, ERROR }
 
@@ -42,8 +39,8 @@ object RumorLog {
     @Volatile var debugMode: Boolean = false
     @Volatile var sink: LogSink = ConsoleSink
 
-    private val ring = ArrayDeque<LogEntry>(RING_CAPACITY)
-    private val lock = ReentrantReadWriteLock()
+    private val ring = ArrayDeque<LogEntry>()
+    private val lock = RwLock()
 
     private val _entries = MutableStateFlow<List<LogEntry>>(emptyList())
     val entries: StateFlow<List<LogEntry>> = _entries.asStateFlow()
@@ -60,8 +57,8 @@ object RumorLog {
         val entry = LogEntry(level, tag, message, throwable)
 
         lock.write {
-            if (ring.size >= RING_CAPACITY) ring.poll()
-            ring.offer(entry)
+            if (ring.size >= RING_CAPACITY) ring.removeFirstOrNull()
+            ring.addLast(entry)
             _entries.value = ring.toList()
         }
 

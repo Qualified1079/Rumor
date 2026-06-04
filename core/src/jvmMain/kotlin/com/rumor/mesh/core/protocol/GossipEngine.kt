@@ -38,8 +38,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import com.rumor.mesh.core.platform.Uuid
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
+import com.rumor.mesh.core.platform.ConcurrentMap
+import com.rumor.mesh.core.platform.AtomicCounter
 import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "GossipEngine"
@@ -109,7 +109,7 @@ class GossipEngine(
     /** O12: injectable clock for deterministic replay. Defaults to wall-clock. */
     private val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
-    private val sequenceCounter = AtomicLong(clock.now())
+    private val sequenceCounter = AtomicCounter(clock.now())
 
     /**
      * Plaintext for outbound DMs keyed by message ID. The ephemeral X25519 private
@@ -139,7 +139,7 @@ class GossipEngine(
      * bridge plugin. See CLAUDE.md A4 — proper handling needs a re-verification
      * UI flow; until then we fail closed.
      */
-    private val bridgedSenderPins = ConcurrentHashMap<String, ByteArray>()
+    private val bridgedSenderPins = ConcurrentMap<String, ByteArray>()
 
     /** Relayed messages are buffered here before being committed to the scheduler. */
     private val relayBatcher = RelayBatcher(

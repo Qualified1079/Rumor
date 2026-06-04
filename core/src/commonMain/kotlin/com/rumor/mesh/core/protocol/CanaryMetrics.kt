@@ -2,7 +2,7 @@ package com.rumor.mesh.core.protocol
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.util.concurrent.atomic.AtomicLong
+import com.rumor.mesh.core.platform.AtomicCounter
 
 data class MetricsSnapshot(
     /** Total messages received over the wire (including duplicates). */
@@ -33,14 +33,14 @@ data class MetricsSnapshot(
  * state into [flow]; callers can rate-limit how often they call it.
  */
 class CanaryMetrics {
-    private val _dedupTotal     = AtomicLong()
-    private val _dedupHits      = AtomicLong()
-    private val _sigFailures    = AtomicLong()
-    private val _exchSuccesses  = AtomicLong()
-    private val _exchFailures   = AtomicLong()
-    private val _relayedMsgs    = AtomicLong()
-    private val _rttSum         = AtomicLong()
-    private val _rttCount       = AtomicLong()
+    private val _dedupTotal     = AtomicCounter()
+    private val _dedupHits      = AtomicCounter()
+    private val _sigFailures    = AtomicCounter()
+    private val _exchSuccesses  = AtomicCounter()
+    private val _exchFailures   = AtomicCounter()
+    private val _relayedMsgs    = AtomicCounter()
+    private val _rttSum         = AtomicCounter()
+    private val _rttCount       = AtomicCounter()
 
     private val _flow = MutableStateFlow(MetricsSnapshot(0,0,0,0,0,0,0,0))
     val flow: StateFlow<MetricsSnapshot> = _flow

@@ -7,7 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import java.util.concurrent.ConcurrentHashMap
+import com.rumor.mesh.core.platform.ConcurrentMap
 
 /**
  * Tier-1 routing substrate (O29). Records "I received a message from
@@ -34,7 +34,7 @@ class BreadcrumbCache(
      * the lifetime of this process. Cold-start after app launch: empty until
      * something arrives.
      */
-    private val snapshot = ConcurrentHashMap<String, List<String>>()
+    private val snapshot = ConcurrentMap<String, List<String>>()
     private val SNAPSHOT_LIMIT = 5
 
     fun record(targetUserId: String, fromPeerId: String, hopCount: Int = 1) {

@@ -20,6 +20,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import com.rumor.mesh.core.platform.Base64Codec
+import com.rumor.mesh.core.platform.ConcurrentSet
 import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "TransferSender"
@@ -44,7 +45,7 @@ class TransferSender(
      * and marks the transfer ABANDONED on the next chunk-request that
      * would otherwise have fired.
      */
-    private val cancelledByReceiver = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val cancelledByReceiver = ConcurrentSet<String>()
 
     init {
         scope.launch {
