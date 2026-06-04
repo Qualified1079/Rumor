@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.logging
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.platform.RwLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,7 +13,7 @@ data class LogEntry(
     val tag: String,
     val message: String,
     val throwable: Throwable? = null,
-    val timestampMs: Long = System.currentTimeMillis(),
+    val timestampMs: Long = SystemClock.now(),
 )
 
 fun interface LogSink {
@@ -23,7 +24,7 @@ fun interface LogSink {
 object ConsoleSink : LogSink {
     override fun emit(level: LogLevel, tag: String, message: String, throwable: Throwable?) {
         println("[${level.name}] $tag: $message")
-        throwable?.printStackTrace(System.out)
+        throwable?.let { println(it.stackTraceToString()) }
     }
 }
 

@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.scheduling
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.data.ScheduledMessageRepository
 import com.rumor.mesh.core.logging.RumorLog
@@ -49,7 +50,7 @@ class MessageScheduler(
         if (pollJob?.isActive == true) return
         pollJob = scope.launch {
             while (isActive) {
-                runCatching { fireDue(System.currentTimeMillis()) }
+                runCatching { fireDue(SystemClock.now()) }
                     .onFailure { RumorLog.w(TAG, "tick failed", it) }
                 delay(tickIntervalMs)
             }

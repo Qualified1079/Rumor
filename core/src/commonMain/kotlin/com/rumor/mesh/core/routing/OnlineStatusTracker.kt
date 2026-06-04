@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.routing
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.model.OnlineStatus
 import com.rumor.mesh.core.model.PeerPresence
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +18,7 @@ class OnlineStatusTracker {
 
     @Synchronized
     fun recordDirectContact(userId: String) {
-        lastSeen[userId] = System.currentTimeMillis()
+        lastSeen[userId] = SystemClock.now()
         recompute()
     }
 
@@ -32,14 +33,14 @@ class OnlineStatusTracker {
 
     @Synchronized
     fun currentSnapshot(): Map<String, Long> {
-        val cutoff = System.currentTimeMillis() - RECENTLY_WINDOW_MS
+        val cutoff = SystemClock.now() - RECENTLY_WINDOW_MS
         return lastSeen.filterValues { it >= cutoff }
     }
 
     @Synchronized
     fun statusFor(userId: String): OnlineStatus {
         val ts = lastSeen[userId] ?: return OnlineStatus.AWAY
-        val age = System.currentTimeMillis() - ts
+        val age = SystemClock.now() - ts
         return when {
             age <= ONLINE_WINDOW_MS -> OnlineStatus.ONLINE
             age <= RECENTLY_WINDOW_MS -> OnlineStatus.RECENTLY
@@ -48,7 +49,7 @@ class OnlineStatusTracker {
     }
 
     private fun recompute() {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.now()
         val updated = lastSeen.mapValues { (userId, ts) ->
             val status = when {
                 now - ts <= ONLINE_WINDOW_MS -> OnlineStatus.ONLINE

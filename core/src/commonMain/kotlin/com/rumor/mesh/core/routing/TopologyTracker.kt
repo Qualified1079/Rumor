@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.routing
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.data.RouteRepository
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.Route
@@ -42,14 +43,14 @@ class TopologyTracker(
         scope.launch {
             val existing = routeRepo.getForPeer(peerId)
             val newRoute = if (existing == null) {
-                Route(peerId, latencyMs, hopCount, System.currentTimeMillis(), 1, bytesTransferred)
+                Route(peerId, latencyMs, hopCount, SystemClock.now(), 1, bytesTransferred)
             } else {
                 val smoothed = (existing.latencyMs * 7 + latencyMs) / 8
                 Route(
                     peerId,
                     smoothed,
                     hopCount,
-                    System.currentTimeMillis(),
+                    SystemClock.now(),
                     existing.sessionCount + 1,
                     existing.bytesRelayed + bytesTransferred,
                 )
@@ -72,9 +73,9 @@ class TopologyTracker(
         scope.launch {
             val existing = routeRepo.getForPeer(peerId)
             val updated = if (existing == null) {
-                Route(peerId, 0L, 0, System.currentTimeMillis(), 0, 0L, failureCount = 1)
+                Route(peerId, 0L, 0, SystemClock.now(), 0, 0L, failureCount = 1)
             } else {
-                existing.copy(failureCount = existing.failureCount + 1, lastUpdatedMs = System.currentTimeMillis())
+                existing.copy(failureCount = existing.failureCount + 1, lastUpdatedMs = SystemClock.now())
             }
             routeRepo.upsert(updated)
             RumorLog.d(TAG, "Session FAILED with ${peerId.take(8)}… (failureCount=${updated.failureCount})")
@@ -111,7 +112,7 @@ class TopologyTracker(
 
     fun pruneStale() {
         scope.launch {
-            routeRepo.pruneStale(System.currentTimeMillis() - STALE_THRESHOLD_MS)
+            routeRepo.pruneStale(SystemClock.now() - STALE_THRESHOLD_MS)
             neighborStore.pruneStale(STALE_THRESHOLD_MS)
         }
     }

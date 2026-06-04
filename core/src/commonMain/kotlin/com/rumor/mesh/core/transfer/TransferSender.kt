@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.transfer
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.data.ChunkRecord
 import com.rumor.mesh.core.data.ChunkRepository
 import com.rumor.mesh.core.data.TransferRecord
@@ -84,7 +85,7 @@ class TransferSender(
         if (existing.status == com.rumor.mesh.core.model.TransferStatus.IN_PROGRESS) {
             transferRepo.upsert(existing.copy(
                 status = com.rumor.mesh.core.model.TransferStatus.ABANDONED,
-                completedAtMs = System.currentTimeMillis(),
+                completedAtMs = SystemClock.now(),
             ))
         }
     }
@@ -114,7 +115,7 @@ class TransferSender(
                 contentHash = metadata.contentHash,
                 recipientId = recipientId,
                 senderId = identity.userId,
-                startedAtMs = System.currentTimeMillis(),
+                startedAtMs = SystemClock.now(),
                 completedAtMs = null,
                 status = TransferStatus.IN_PROGRESS,
             )

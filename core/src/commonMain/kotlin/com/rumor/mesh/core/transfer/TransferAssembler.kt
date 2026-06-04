@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.transfer
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.data.ChunkRecord
 import com.rumor.mesh.core.data.ChunkRepository
 import com.rumor.mesh.core.data.TransferRecord
@@ -71,7 +72,7 @@ class TransferAssembler(
         transfer.senderId?.let { gossipEngine.composeTransferCancel(transferId, it) }
         transferRepo.upsert(transfer.copy(
             status = TransferStatus.ABANDONED,
-            completedAtMs = System.currentTimeMillis(),
+            completedAtMs = SystemClock.now(),
         ))
         chunkRepo.deleteAllForTransfer(transferId)
     }
@@ -116,7 +117,7 @@ class TransferAssembler(
                 contentHash = meta.contentHash,
                 recipientId = meta.recipientId,
                 senderId = senderUserId,
-                startedAtMs = System.currentTimeMillis(),
+                startedAtMs = SystemClock.now(),
                 completedAtMs = null,
                 status = TransferStatus.IN_PROGRESS,
             )
@@ -133,7 +134,7 @@ class TransferAssembler(
                 transferId = chunk.transferId,
                 chunkIndex = chunk.chunkIndex,
                 data = Base64Codec.decode(chunk.data),
-                receivedAtMs = System.currentTimeMillis(),
+                receivedAtMs = SystemClock.now(),
                 ackedAtMs = null,
             )
         )
@@ -163,7 +164,7 @@ class TransferAssembler(
             return
         }
         watchdogs.remove(transferId)?.cancel()
-        transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, System.currentTimeMillis())
+        transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, SystemClock.now())
         RumorLog.i(TAG, "Transfer ${transferId.take(8)}… complete (${data.size}B)")
         _assembledTransfers.emit(AssembledTransfer(meta, data))
     }
@@ -185,7 +186,7 @@ class TransferAssembler(
             val transfer = transferRepo.getById(transferId)
             if (transfer?.status == TransferStatus.IN_PROGRESS) {
                 RumorLog.w(TAG, "Transfer ${transferId.take(8)}… abandoned after $NACK_MAX_RETRIES retries")
-                transferRepo.updateStatus(transferId, TransferStatus.ABANDONED, System.currentTimeMillis())
+                transferRepo.updateStatus(transferId, TransferStatus.ABANDONED, SystemClock.now())
             }
             watchdogs.remove(transferId)
         }

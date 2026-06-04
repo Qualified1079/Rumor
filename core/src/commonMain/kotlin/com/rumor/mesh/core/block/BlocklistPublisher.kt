@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.block
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
 import com.rumor.mesh.core.data.BlockEntryRepository
@@ -22,7 +23,7 @@ class BlocklistPublisher(
             return null
         }
         val entries = blockEntryRepo.getActiveIds().sorted()
-        val version = System.currentTimeMillis()
+        val version = SystemClock.now()
         val signed = blocklistSignableBytes(identity.userId, version, entries)
         val sig = CryptoManager.sign(signed, identity.privateKeyBytes)
         return Blocklist(
@@ -36,7 +37,7 @@ class BlocklistPublisher(
     suspend fun publishDiff(
         fromVersion: Long,
         previousEntries: List<String>,
-        toVersion: Long = System.currentTimeMillis(),
+        toVersion: Long = SystemClock.now(),
     ): BlocklistDiff? {
         val identity = identityProvider.identity.value ?: return null
         val current = blockEntryRepo.getActiveIds().toSet()

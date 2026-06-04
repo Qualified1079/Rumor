@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.data
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.model.BlockEntry
 import com.rumor.mesh.core.model.BlocklistEntry
 import com.rumor.mesh.core.model.BlocklistMode
@@ -8,9 +9,9 @@ import com.rumor.mesh.core.model.SubscribedBlocklist
 interface BlockEntryRepository {
     suspend fun upsert(entry: BlockEntry)
     suspend fun delete(userId: String)
-    suspend fun getActive(now: Long = System.currentTimeMillis()): List<BlockEntry>
-    suspend fun getActiveIds(now: Long = System.currentTimeMillis()): List<String>
-    suspend fun pruneExpired(now: Long = System.currentTimeMillis()): Int
+    suspend fun getActive(now: Long = SystemClock.now()): List<BlockEntry>
+    suspend fun getActiveIds(now: Long = SystemClock.now()): List<String>
+    suspend fun pruneExpired(now: Long = SystemClock.now()): Int
 }
 
 interface SubscribedBlocklistRepository {

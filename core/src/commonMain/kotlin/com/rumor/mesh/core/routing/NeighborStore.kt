@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.routing
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.platform.ConcurrentMap
 
 /**
@@ -25,7 +26,7 @@ class NeighborStore {
      * moving average (α=0.25) so short spikes don't dominate the score.
      */
     fun update(peerId: String, overlapFraction: Float) {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.now()
         val prev = data[peerId]?.overlapFraction ?: overlapFraction
         val smoothed = prev * 0.75f + overlapFraction * 0.25f
         data[peerId] = Entry(smoothed, now)
@@ -58,7 +59,7 @@ class NeighborStore {
 
     /** Evict entries older than [olderThanMs]. Call periodically to avoid unbounded growth. */
     fun pruneStale(olderThanMs: Long) {
-        val cutoff = System.currentTimeMillis() - olderThanMs
+        val cutoff = SystemClock.now() - olderThanMs
         data.removeIf { _, v -> v.updatedAtMs < cutoff }
     }
 

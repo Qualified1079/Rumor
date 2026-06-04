@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.routing
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.data.BreadcrumbRepository
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.Breadcrumb
@@ -49,7 +50,7 @@ class BreadcrumbCache(
                 targetUserId = targetUserId,
                 arrivedFromPeerId = fromPeerId,
                 hopCount = hopCount,
-                recordedAtMs = System.currentTimeMillis(),
+                recordedAtMs = SystemClock.now(),
             )
             breadcrumbRepo.upsert(crumb)
             breadcrumbRepo.pruneForTarget(targetUserId)
@@ -82,7 +83,7 @@ class BreadcrumbCache(
 
     fun pruneOld() {
         scope.launch {
-            breadcrumbRepo.pruneOld(System.currentTimeMillis() - 24 * 60 * 60 * 1000L)
+            breadcrumbRepo.pruneOld(SystemClock.now() - 24 * 60 * 60 * 1000L)
         }
     }
 }

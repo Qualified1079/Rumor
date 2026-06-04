@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.block
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.data.BlocklistEntryRepository
 import com.rumor.mesh.core.data.SubscribedBlocklistRepository
@@ -23,7 +24,7 @@ class BlocklistSubscriber(
                 publisherPublicKey = com.rumor.mesh.core.platform.Base64Codec.encode(publisherPublicKey),
                 mode = mode,
                 currentVersion = 0,
-                subscribedAtMs = System.currentTimeMillis(),
+                subscribedAtMs = SystemClock.now(),
                 lastAppliedAtMs = 0,
             )
         )
@@ -49,7 +50,7 @@ class BlocklistSubscriber(
             BlocklistEntry(snapshot.publisherId, it)
         })
         subscribedBlocklistRepo.upsert(
-            sub.copy(currentVersion = snapshot.version, lastAppliedAtMs = System.currentTimeMillis())
+            sub.copy(currentVersion = snapshot.version, lastAppliedAtMs = SystemClock.now())
         )
         return true
     }
@@ -70,7 +71,7 @@ class BlocklistSubscriber(
             blocklistEntryRepo.deleteEntries(diff.publisherId, diff.removed)
         }
         subscribedBlocklistRepo.upsert(
-            sub.copy(currentVersion = diff.toVersion, lastAppliedAtMs = System.currentTimeMillis())
+            sub.copy(currentVersion = diff.toVersion, lastAppliedAtMs = SystemClock.now())
         )
         return true
     }

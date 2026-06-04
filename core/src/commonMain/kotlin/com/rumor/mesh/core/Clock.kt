@@ -14,10 +14,18 @@ package com.rumor.mesh.core
  * survived eviction one tick later, leaking into divergent offer batches.
  * O12 escalation.
  *
- * The interface lives in commonMain; the platform-specific implementation
- * ([SystemClock]) stays in jvmMain (uses `System.currentTimeMillis()`) until
- * a platform shim is added in Phase 1c.
+ * Both [Clock] and its production singleton [SystemClock] live in commonMain
+ * via `expect`/`actual`; the JVM `actual` delegates to
+ * `System.currentTimeMillis()`. Non-JVM `actual`s call the platform's
+ * monotonic wall-clock API (`CFAbsoluteTimeGetCurrent`, `clock_gettime`, etc).
  */
 fun interface Clock {
     fun now(): Long
 }
+
+/**
+ * Production singleton bound to the platform wall clock. Common code can
+ * reference `SystemClock.now()` directly; sim and tests inject their own
+ * [Clock] implementation where determinism matters.
+ */
+expect object SystemClock : Clock

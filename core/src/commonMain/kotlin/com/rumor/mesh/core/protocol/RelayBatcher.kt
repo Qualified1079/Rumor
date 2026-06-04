@@ -6,6 +6,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.random.Random
 
 /**
  * Buffers relayed (not locally-composed) messages and flushes them in random
@@ -27,12 +28,12 @@ internal class RelayBatcher(
     private val onFlush: (List<RumorMessage>) -> Unit,
 ) {
     private val pending = Channel<RumorMessage>(Channel.UNLIMITED)
-    private val rng = java.util.Random()
 
     init {
         scope.launch {
             while (true) {
-                delay(minWindowMs + (abs(rng.nextLong()) % spreadMs))
+                // Non-CSPRNG fine here — this is timing jitter, not security material.
+                delay(minWindowMs + (abs(Random.nextLong()) % spreadMs))
                 val batch = buildList {
                     while (true) add(pending.tryReceive().getOrNull() ?: break)
                 }

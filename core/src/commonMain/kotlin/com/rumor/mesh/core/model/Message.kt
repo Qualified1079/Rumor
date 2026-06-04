@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.model
 
+import com.rumor.mesh.core.SystemClock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -45,7 +46,7 @@ data class RumorMessage(
     val trustLevel: TrustLevel = TrustLevel.VERIFIED,
     /** Unix epoch millis when this node first saw the message. Not propagated. */
     @kotlinx.serialization.Transient
-    val receivedAtMs: Long = System.currentTimeMillis(),
+    val receivedAtMs: Long = SystemClock.now(),
     /** Whether the local user has read this message. Not propagated. */
     @kotlinx.serialization.Transient
     val isRead: Boolean = false,
