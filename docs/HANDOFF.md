@@ -6,109 +6,107 @@
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm` is the working branch. All commits
-below were pushed to it. **Wall clock when this note was written:**
-2026-06-05 13:24 UTC.
+`claude/practical-archimedes-wmySm` is the working branch. **Wall clock
+when this note was written:** 2026-06-05 13:31 UTC.
 
 ## What I closed / advanced this session
 
 | Commit | Row | Result |
 |---|---|---|
-| `bf4cb3a` | **O39 → G25** | (Done by the OTHER instance — not me.) Per-message key lifecycle audit; zeroize sender + receiver ephemeral keys; fourth `SourceInvariantTest` guard. |
-| `f95ade4` | **O84 → G26** | `docs/CRYPTO_PRIMITIVES_AUDIT.md`. Surfaced **O87** (signWithLocalKey) and **O88** (in-thread plugin widget) as new follow-ups. |
-| `a8d012e` | **F-Droid groundwork** | `docs/FDROID_BUILD.md` + `fastlane/metadata/android/en-US/` stubs + CI uses `./gradlew`. |
-| `76d9f4f` | **O67 → PART (substrate)** | `KeywordFilter.kt` model + matcher + 12 tests. |
-| `2295950` | **O76 → PART (padding half)** | `PaddingBuckets.kt` + 9 tests. Compression layer + wire integration are the followup. |
-| `e3ed605` | Coordination doc | `docs/MULTI_INSTANCE_COORDINATION.md` codifies the protocol. |
-| `740cfcd` | **O67 publish/verify** | `KeywordFilterPublisher` + `KeywordFilterVerifier` + 8 round-trip / tamper tests. |
-| `<this>` | **O67 wire layer complete** | `KeywordFilterSubscriber` + `KeywordFilterGossipBridge` + `KeywordFilterRepository` (two interfaces) + 10 subscriber tests + `MessageType.KEYWORD_FILTER_PUBLISH` wired into trafficClass (TRANSFER_SETUP), GossipEngine relay branch, GossipEngine clampTtl, exhaustive when guard in `TrafficClassInvariantTest`. `FilterSubscription` now carries `publisherPublicKey` + `lastAppliedVersion` so subscriptions survive process restart. |
+| `bf4cb3a` | **O39 → G25** | (Other instance, not me.) Per-message key zeroize + 4th SourceInvariant guard. |
+| `f95ade4` | **O84 → G26** | `docs/CRYPTO_PRIMITIVES_AUDIT.md`. Surfaced O87 + O88. |
+| `a8d012e` | **F-Droid groundwork** | `docs/FDROID_BUILD.md` + fastlane stubs + CI ./gradlew. |
+| `76d9f4f` | **O67 substrate** | Model + matcher + 12 tests. |
+| `2295950` | **O76 padding half** | `PaddingBuckets.kt` + 9 tests. |
+| `e3ed605` | Coordination doc | `docs/MULTI_INSTANCE_COORDINATION.md`. |
+| `740cfcd` | **O67 publish/verify** | `KeywordFilterPublisher` + `KeywordFilterVerifier` + 8 tests. |
+| `4d1f10e` | **O67 wire layer complete** | `KeywordFilterSubscriber` + `KeywordFilterGossipBridge` + repos + MessageType.KEYWORD_FILTER_PUBLISH + 10 subscriber tests. |
+| `<this>` | **O76 compression layer + composed codec** | `core/platform/Compression.kt` expect/actual (JVM via java.util.zip raw deflate; iOS stub pending libcompression cinterop) + `core/wire/CompressedPaddedCodec.kt` composing compress+pad / unpad+decompress + 9 compression tests + 7 codec tests. **Total 24 tests on the O76 surface now.** |
 
 ## What I considered and rejected
 
-- **Storing subscription tracking state (`publisherKey`, `lastAppliedVersion`)
-  in a third repository.** Would've been cleaner separation but the
-  fields are tiny and fit naturally inside `FilterSubscription`. Adding
-  a third storage shape for ~16 bytes of tracking metadata felt like
-  overengineering. Documented inline as "subscriber-internal tracking,
-  not part of override semantics."
-- **Splitting `KeywordFilterList` into per-entry rows like `BlocklistEntry`.**
-  Blocklists have thousands of entries; keyword filter lists have dozens.
-  Storing the whole signed list as a single row keyed by publisherId
-  matches usage (matcher consumes the list as a unit) and avoids the
-  per-row deletion / re-insert churn the per-entry shape requires.
-- **Adding gossip-bridge tests with a real `GossipEngine`.** Would need
-  a full engine fixture (identity, MessageStore, scheduler, transport
-  fake) — disproportionate setup for what's effectively a 50-line
-  routing wrapper. The publisher / verifier / subscriber paths are all
-  unit-tested separately; the gossip bridge is the trivial composition.
-  If a real bug surfaces, that's the moment to invest in the fixture.
-- **A `BlocklistDiff`-style diff variant.** Keyword filter lists are
-  expected to churn at hours-to-days cadence (a moderator adds a slur,
-  promotes a WARN to BLOCK), not per-minute like a popular block
-  publisher. Full snapshots at TRANSFER_SETUP cost are fine; revisit
-  if real-world churn justifies it.
-- **Compression layer for O76 in this batch.** Would need
-  `expect`/`actual` (`java.util.zip.Deflater` on JVM, TBD on Native).
-  Bigger pickup; left for a focused commit.
+- **GossipEngine integration in this batch (calling `encodeForWire` from
+  `composeBroadcast` / `composeDirect`).** Would touch HELLO
+  `supportedFeatures` negotiation, the wire-format `_ext` layer, AEAD
+  associated-data plumbing for `originalLength`, and the chunker
+  fallback for >64 KB. Each piece is small but together they're another
+  multi-file refactor on top of an already-large session. The codec is
+  a pure function — landing it cleanly first means the next instance can
+  do the GossipEngine wiring as a focused change without also designing
+  the codec API.
+- **zstd / brotli over raw deflate.** zstd would shrink better (~10–20%
+  more on text) but needs a third-party native dep (`zstd-jni` on JVM,
+  `zstd.framework` on iOS, varies elsewhere). Raw deflate ships in every
+  platform's stdlib — Android's `java.util.zip`, iOS's
+  `libcompression.dylib`, Linux's `zlib`. Portability beats marginal
+  ratio for our cross-platform / MCU-eventual surface.
+- **gzip framing.** Adds 10–18 bytes of header/trailer per message; on
+  the 64 B bucket that's a meaningful tax. Raw deflate is the right
+  default; the wire format gives us its own framing.
+- **Streaming compression.** No use case — each message is whole; the
+  chunker takes over above 64 KB. Streaming would also reopen the
+  CRIME/BREACH cross-message-context risk that the
+  "one-fresh-compression-per-message" rule explicitly avoids.
 
 ## Suggested next moves
 
-1. **O76 compression layer.** Spec is in CLAUDE.md and
-   `core/wire/PaddingBuckets.kt` docstring. Add
-   `core/src/commonMain/.../wire/Compression.kt` with `expect fun deflate` /
-   `expect fun inflate`, JVM actual using `java.util.zip.Deflater` with
-   raw deflate (no zlib wrapper). Leave iOS/Native actual as
-   `NotImplementedError("compression: pending compress-step shim")`.
-   Then integrate compress-then-pad into `GossipEngine.composeBroadcast`
-   / `composeDirect` for TEXT contentType only (skip BINARY/FILE per
-   CRIME/BREACH constraint in the PaddingBuckets docstring). HELLO
-   `supportedFeatures: ["compression-v1"]` capability negotiation
-   gates whether compression is applied on a given exchange.
+1. **O76 GossipEngine integration** is the obvious next step. Add
+   `_ext` fields `compressed: Boolean` + `bucketIndex: Byte` to the
+   message wrapper; HELLO `supportedFeatures: ["compression-v1"]`
+   capability negotiation; gate on TEXT contentType in
+   `composeBroadcast` / `composeDirect`; `originalLength` rides in
+   AEAD-protected associated data (NOT `_ext`, so a relay can't flip
+   it without breaking the tag); receiver-side `decodeFromWire` call
+   after AEAD-decrypt. Chunker fallback above 64 KB is in scope.
 
-2. **O67 Android Room adapters.** `KeywordFilterListRepository` +
-   `FilterSubscriptionRepository` interfaces are in `:core/commonMain`;
-   the `:app` Room adapters and the `:simulator` in-memory stubs both
-   need to land before any code path uses these for real. Per the
-   CLAUDE.md "DI (Koin) wiring" section — update `AppModule.kt`,
-   `InMemoryRepos.kt`. Room schema bump (current version: 5 → 6).
+2. **O67 Android Room adapters.** The interfaces are in commonMain;
+   `:app/data/adapter/` needs `KeywordFilterListRepositoryAdapter` +
+   `FilterSubscriptionRepositoryAdapter` (Room) and
+   `:simulator/.../InMemoryRepos.kt` needs the equivalent in-memory
+   stubs. Room schema bump (current version 5 → 6). DI wiring in
+   `AppModule.kt`.
 
-3. **O87 `PluginContext.signWithLocalKey`.** 4-line addition. Thread
-   `IdentityManager` into `PluginContextImpl`, expose
-   `signWithLocalKey(bytes): ByteArray`, throw on locked identity.
+3. **O87 `PluginContext.signWithLocalKey`.** 4 lines per the audit
+   doc.
 
-4. **LICENSE file at repo root.** Listed in FDROID_BUILD.md as the
-   biggest open prerequisite. Ask the user to choose between
-   GPL-3.0-or-later and AGPL-3.0 before adding.
+4. **LICENSE file.** Still gated on user choice between GPL-3.0-or-later
+   and AGPL-3.0.
 
-5. **O67 UI list editor.** Compose surface where a user composes their
-   own filter list, signs it, optionally publishes to the mesh.
-   Followed by built-in default lists onboarding flow. Lower priority
-   than the wire layer was — this is the user-facing tip of the
-   pyramid that the substrate enables.
+5. **iOS Compression actual.** Apple's `libcompression.dylib` exposes
+   raw deflate via `compression_stream` + `COMPRESSION_ZLIB` algorithm
+   (despite the name, raw deflate is selectable). cinterop-reachable.
+   Same xtool/Mac gate as the rest of the iOS port; until then, iOS
+   peers simply won't advertise `compression-v1`.
 
 ## Backlog state at handoff
 
 - **Counts:** 11 PART · 14 DECISION · 45 TODO (CODE 23 · SIM 2 · UI 9 · EMU 4 · HW 7). Total 70 open rows.
 - **Completed gaps:** G1–G26.
-- **Open rows touched this session:** O67 (PART, full wire layer added), O76 (PART, padding added), O84 (closed → G26), O87 + O88 (new).
-- **`Counts as of this writing` line in CLAUDE.md is still accurate at 70.** The O67 work moved the row text but not the row tag or the totals.
+- **Open rows touched this session:** O67 (PART, full wire layer added),
+  O76 (PART, compression layer + composed codec added), O84 (closed →
+  G26), O87 + O88 (new).
+- **`Counts as of this writing` in CLAUDE.md remains 70.** Row tags
+  unchanged this commit (O76 was already PART; codec didn't promote
+  it).
 
 ## What's NOT updated and may be stale
 
 - `docs/FDROID_BUILD.md` checklist still names `LICENSE` as missing —
-  still missing. Asking the user is gated by user availability; don't
-  add a LICENSE file without their choice.
-- The O67 backlog row text now reflects "wire layer complete" but
-  doesn't list the remaining open work explicitly — see the row in
-  CLAUDE.md for the (long) "Not done" section.
+  still missing.
+- iOS Compression actual stubs `NotImplementedError`. Anyone enabling
+  `compression-v1` in HELLO `supportedFeatures` on iOS without the
+  cinterop wiring will crash at the first compose call. The capability
+  string must remain unadvertised on iOS until the actual is real.
 
 ## Tooling status
 
-- `./gradlew :core:jvmTest` — green this session (verified after every
-  batch).
-- `./gradlew :app:testDebugUnitTest` — green this session.
-- `./gradlew :simulator:test` — green this session.
-- All three modules compile and test together as of `<this>`.
+- `./gradlew :core:jvmTest` — green this session.
+- `./gradlew :app:testDebugUnitTest` — green earlier this session (last
+  run after the O67 wire commit).
+- `./gradlew :simulator:test` — green earlier this session.
+- Compression / codec tests added today are all in `jvmTest` (require
+  JVM `java.util.zip`); commonTest can't host them yet because the iOS
+  actual throws.
 
 ## Canary
 
