@@ -96,6 +96,17 @@ class GossipSession(
          */
         const val COMPRESSION_FEATURE: String = "compression-v1"
         /**
+         * Route advertisements in HELLO (O31). When BOTH peers advertise this
+         * flag, the HelloProof signs the v2 challenge bytes
+         * ([helloChallengeBytesV2]) including the sender's
+         * `recentlyExchangedWith` list. Stays out of
+         * [LOCAL_SUPPORTED_FEATURES] until the per-handshake negotiation +
+         * recent-exchange tracker is wired through. Sender-side population
+         * also needs the per-contact opt-out mechanism (contacts marked
+         * "don't list me" filter out before populating).
+         */
+        const val ROUTE_ADV_FEATURE: String = "route-adv-v1"
+        /**
          * Capability flags this build advertises. Empty for v0.1 production —
          * RBSR ([RBSR_FEATURE]) is opt-in per session for now via the
          * `supportedFeatures` constructor parameter, until wire-locked against

@@ -44,6 +44,18 @@ sealed class GossipPacket {
          * the feature is not advertised. Nostr-style additive feature detection.
          */
         val supportedFeatures: List<String> = emptyList(),
+        /**
+         * O31 — top-N userIds this peer has recently completed gossip exchanges
+         * with. Lets receivers learn "a path through this peer plausibly reaches
+         * X" without polling. Field MUST be empty unless the sender advertises
+         * `route-adv-v1` in [supportedFeatures] AND the receiver does too —
+         * gated this way because populating the field changes the bytes covered
+         * by the HelloProof signature (see [helloChallengeBytes]). Per-contact
+         * opt-out at the sender's discretion (a contact marked
+         * "don't list me in route advertisements" is filtered out before
+         * populating). Capped at ~20 entries for size; ~640 bytes worst case.
+         */
+        val recentlyExchangedWith: List<String> = emptyList(),
         @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
     ) : GossipPacket()
 
@@ -178,4 +190,35 @@ fun helloChallengeBytes(
     append(maxProtocolVersion)
     append('|')
     append(supportedFeatures.sorted().joinToString(","))
+}.toByteArray(Charsets.UTF_8)
+
+/**
+ * O31 v2 challenge bytes — adds the route-advertisement list to the
+ * signed transcript so a MITM cannot strip [recentlyExchangedWith].
+ *
+ * Used when BOTH peers advertise `route-adv-v1` in [Hello.supportedFeatures].
+ * Per-session negotiation: the side composing its HelloProof checks
+ * whether the peer's Hello included the flag; if not, it falls back to
+ * [helloChallengeBytes] v1 (with empty `recentlyExchangedWith` on its
+ * own Hello). Mirror the rbsr-v1 / rbsr-v2 capability-gated pattern.
+ *
+ * Field order is fixed; never reorder without bumping `rumor-hello-v3:`.
+ */
+fun helloChallengeBytesV2(
+    nonceBase64: String,
+    protocolVersion: Int,
+    maxProtocolVersion: Int,
+    supportedFeatures: List<String>,
+    recentlyExchangedWith: List<String>,
+): ByteArray = buildString {
+    append("rumor-hello-v2:")
+    append(nonceBase64)
+    append('|')
+    append(protocolVersion)
+    append('|')
+    append(maxProtocolVersion)
+    append('|')
+    append(supportedFeatures.sorted().joinToString(","))
+    append('|')
+    append(recentlyExchangedWith.sorted().joinToString(","))
 }.toByteArray(Charsets.UTF_8)
