@@ -11,6 +11,11 @@ import com.rumor.mesh.core.model.PeerPresence
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.MessageStore
 import com.rumor.mesh.core.routing.OnlineStatusTracker
+import com.rumor.mesh.core.wire.CompressedPaddedCodec
+import com.rumor.mesh.core.wire.PaddingBuckets
+import com.rumor.mesh.core.wire.compressionAad
+import com.rumor.mesh.core.wire.compressionOriginalLength
+import com.rumor.mesh.core.wire.isCompressed
 import com.rumor.mesh.data.ContactDao
 import com.rumor.mesh.data.ContactEntity
 import com.rumor.mesh.service.MeshControllerHolder
@@ -115,7 +120,7 @@ class ThreadViewModel(
             type == MessageType.TRANSFER_METADATA -> "[transfer]"
             ct == null -> payload?.content ?: ""
             isFromMe -> controllerHolder.controller().sentPlaintextFor(id) ?: "[sent]"
-            else -> decryptPayload(ct, identity.privateKeyBytes)
+            else -> decryptPayload(this, ct, identity.privateKeyBytes)
         }
         return DisplayMessage(raw = this, body = body, isFromMe = isFromMe)
     }
@@ -123,8 +128,14 @@ class ThreadViewModel(
     /**
      * Wire format: "{ephemeralPubKeyBase64}.{ivAndCiphertextBase64}"
      * Shared secret = X25519(localPrivKey, ephemeralPub).
+     *
+     * O76 path: when `_ext.c = true`, the plaintext bytes coming out of
+     * AES-GCM are a padded deflate stream — unpad with originalLength
+     * (recovered from `_ext.cl`, integrity-bound via AAD) then inflate.
+     * The AAD must be `compressionAad(originalLength)` or the GCM tag
+     * check fails.
      */
-    private fun decryptPayload(encryptedPayload: String, localPrivKey: ByteArray): String =
+    private fun decryptPayload(msg: RumorMessage, encryptedPayload: String, localPrivKey: ByteArray): String =
         runCatching {
             val dotIdx = encryptedPayload.indexOf('.')
             require(dotIdx > 0) { "malformed payload" }
@@ -132,7 +143,18 @@ class ThreadViewModel(
             val sharedKey = CryptoManager.x25519Agreement(localPrivKey, ephemeralPub)
             try {
                 val ct = CryptoManager.AesGcmCiphertext.fromBase64(encryptedPayload.substring(dotIdx + 1))
-                CryptoManager.aesGcmDecrypt(ct, sharedKey).toString(Charsets.UTF_8)
+                val aad = if (msg.isCompressed) compressionAad(msg.compressionOriginalLength) else ByteArray(0)
+                val decrypted = CryptoManager.aesGcmDecrypt(ct, sharedKey, aad)
+                if (msg.isCompressed) {
+                    val inflated = CompressedPaddedCodec.decodeFromWire(
+                        bytes = decrypted,
+                        originalLength = msg.compressionOriginalLength,
+                        maxOutputBytes = PaddingBuckets.MAX_SINGLE_MESSAGE,
+                    ) ?: return "[decompression failed]"
+                    inflated.decodeToString()
+                } else {
+                    decrypted.toString(Charsets.UTF_8)
+                }
             } finally {
                 // O39: zero the derived AES key on the way out. localPrivKey is the
                 // long-term static — caller owns its lifecycle; we don't touch it.

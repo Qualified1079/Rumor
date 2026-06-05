@@ -4,7 +4,7 @@
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm`. **Wall clock at write:** 2026-06-05 14:22 UTC.
+`claude/practical-archimedes-wmySm`. **Wall clock at write:** 2026-06-05 14:34 UTC.
 
 ## Commits this session (chronological)
 
@@ -21,69 +21,82 @@
 | `bcddd88` | **O76 compression layer** | Compression expect/actual + CompressedPaddedCodec. |
 | `664c856` | **O87 → G27** | `signWithLocalKey`. |
 | `72ff7c1` | **O67 Android persistence** | Room v6 + DAOs + adapters + DI. |
-| `<this>` | **G15 Android Room adapter + O76 scaffolding** | ScheduledMessageEntity/Dao/Adapter (Room v7); MessageScheduler now wired in AppModule; CompressedPaddedExt with `_ext` accessors (`c`/`cb`/`cl` short keys) + 3 round-trip tests; GossipSession.COMPRESSION_FEATURE constant defined but deliberately not in LOCAL_SUPPORTED_FEATURES; SentAtMsLintTest allowlist extended for the new ext-helper test. |
+| `3343909` | **G15 Android Room + O76 scaffolding** | ScheduledMessage Room v7 + ext-helper accessors. |
+| `d175cfe` | **O76 AEAD-AD wiring** | PlatformCrypto/CryptoManager take `aad`; Swift bridge spec updated; AAD-bearing golden vector pinned. |
+| `<this>` | **O76 receive path live** | `ThreadViewModel.decryptPayload` reads `_ext.c`, computes `compressionAad(cl)`, runs AAD-bound AEAD-decrypt, calls `CompressedPaddedCodec.decodeFromWire`. End-to-end `CompressedAeadRoundTripTest` covers happy-path round-trip + tampered-AAD fail + canonical format pin + empty-plaintext edge. |
 
 ## What I considered and rejected (this batch)
 
-- **Flipping O76 compression-v1 on the wire today.** Cannot honor the
-  capability advertising without AEAD AD wiring — `originalLength` in
-  `_ext` would be flippable by a relay, opening a DoS path (cap
-  mismatch on inflate, wasted CPU). Real fix requires
-  `PlatformCrypto.aesGcmEncrypt/Decrypt` to accept `aad: ByteArray`
-  and the JVM + iOS Swift bridge to thread it through. Documented in
-  `CompressedPaddedExt.kt` header — that's where the next instance
-  should look first.
-- **Writing ext-helper accessors in `core/model/Message.kt` next to
-  the TTL helpers.** Keeping them in `core/wire/` because compression
-  is a wire-format/codec concern, not a protocol concern; readers of
-  the codec see the full picture in one place.
+- **Flipping `COMPRESSION_FEATURE` into `LOCAL_SUPPORTED_FEATURES` now.**
+  Advertising a capability you can produce but the wider network can't
+  read silently breaks peers running pre-receive-path builds. Standard
+  "receive everywhere first, then compose" deployment pattern. Once
+  the receive path is broadly deployed (any release that includes this
+  commit), a future commit can wire the compose-side gate.
+- **Wiring compose-side compression behind a per-recipient flag.**
+  Would need either a `RecipientFeatureCache` (where you store "X
+  supports compression-v1" from the last HELLO with that peer) or a
+  session-tier negotiation. Either is a clean piece of work but it's
+  not necessary today — receive path alone is the right structural
+  prerequisite. Compose can wait for the cache.
+- **Broadcast compression.** Currently DM-only by design: broadcasts
+  have no AEAD layer to bind `cl` into; padding-plaintext leaks `cl`
+  to any observer. Compress-without-pad has bandwidth merit but it's
+  a separate decision (could land later as a `compression-broadcast-v1`
+  feature flag).
+- **Robolectric ViewModel test for the new decryptPayload branch.**
+  The end-to-end correctness is covered by
+  `CompressedAeadRoundTripTest` at the codec/AEAD level; what would be
+  added by a ViewModel test is just "yes ThreadViewModel calls the
+  helper" which the visible code already proves. Saving the
+  Robolectric setup cost for a real bug.
 
 ## Suggested next moves
 
-1. **O76 AEAD-AD wiring** is the gating change before compression
-   ships. `PlatformCrypto` API needs an `aad: ByteArray` param;
-   `Cipher.updateAAD` on JVM; `AES.GCM.seal(_, authenticating:)` on
-   iOS. Once that lands, the compose path can pack
-   `originalLength` (4 bytes) as AAD; receiver re-derives and the
-   tag check guarantees no relay tampered with it. Then flip
-   `COMPRESSION_FEATURE` into `LOCAL_SUPPORTED_FEATURES`.
+1. **O76 compose-side flip.** Recipient-feature cache or session-tier
+   negotiation; gate `composeDirect` on the gate; wire
+   `withCompressionMetadata` + `compressionAad`; add a contract test
+   that confirms compose+receive round-trip works on the GossipEngine
+   side (not just the codec).
 
-2. **MessageScheduler lifecycle hook in MeshService.** The DI wiring
-   is done; nobody calls `scheduler.start()` yet. Drop one line in
-   `MeshService.onCreate` (or similar) to start the poll loop, and
-   one in `onDestroy` to stop it.
+2. **Chunker fallback above 64 KB.** Today
+   `CompressedPaddedCodec.encodeForWire` returns null if compressed
+   bytes exceed `MAX_SINGLE_MESSAGE`. Caller should fall back to the
+   existing file-transfer chunker with TextAssembler stitching the
+   chunks back into a single logical message — no "fragment 3 of 5"
+   UI per O76 spec.
 
-3. **O88 in-thread plugin display widget.** UI work; Compose
-   composable injection point.
+3. **MessageScheduler lifecycle hook in MeshService.** Two-line wire.
 
-4. **LICENSE file.** Gated on user choice (GPL-3.0-or-later vs AGPL-3.0).
+4. **O88 in-thread plugin display widget.** UI work.
 
-5. **O67 UI list editor + default-list onboarding.** The plumbing is
-   complete end-to-end; only the surface is left.
+5. **LICENSE file.** Gated on user choice.
 
 ## Backlog state at handoff
 
 - **Counts:** 11 PART · 14 DECISION · 44 TODO (CODE 22 · SIM 2 · UI 9 · EMU 4 · HW 7). Total 69.
 - **Completed gaps:** G1–G27.
-- **G15 row text** updated this commit to note "Room adapter shipped on Android."
-- **`Counts as of this writing` in CLAUDE.md** stays at 69 — no row tags moved this batch (G15 was already closed; O76 stays PART; the Room work on G15 is a finished-followup-on-a-closed-row).
+- **O76 row text updated** to reflect the AEAD-AD wiring + receive path
+  landing; row tag stays PART (compose-side flip is the gate).
+- **G15 row** updated mid-session to note Android Room adapter
+  shipping; tag was already closed (G15) and stays so.
 
 ## What's NOT updated and may be stale
 
 - `docs/FDROID_BUILD.md` still names `LICENSE` as missing.
-- iOS Compression actual stubs `NotImplementedError`.
-- `MessageScheduler.start()` is wired in DI but nothing calls it yet —
-  the schedule fires would not happen on Android until the lifecycle
-  hook lands.
-- `CompressedPaddedExt` accessors are wired but not consumed by
-  `GossipEngine` or `ThreadViewModel` — wire-format integration is
-  scaffolded, not active.
+- iOS `Compression` actual + `PlatformCrypto.aesGcm*` iOS actuals
+  remain `NotImplementedError`. Both gated on the Swift bridge
+  landing per the iOS port plan.
+- `MessageScheduler.start()` is wired in DI but no lifecycle hook
+  in `MeshService` calls it yet.
+- `LOCAL_SUPPORTED_FEATURES` in `GossipSession` is still empty in
+  production. Per design until both compression-v1 halves are wired.
 
 ## Tooling status
 
-- `:core:jvmTest` — green.
-- `:app:testDebugUnitTest` — green (G6 Koin verify covered the new
-  scheduler binding).
+- `:core:jvmTest` — green (32+ new tests this session across O67/O76).
+- `:app:testDebugUnitTest` — green (Koin DI verify caught one wiring
+  bug, fixed in the same batch).
 - `:simulator:test` — green.
 
 ## Canary
