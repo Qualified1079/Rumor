@@ -712,6 +712,7 @@ class GossipEngine(
                 enqueueRelayed(forwarded)
             }
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
+            MessageType.KEYWORD_FILTER_PUBLISH,
             MessageType.SELF_PRESENCE -> {
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
@@ -729,6 +730,7 @@ class GossipEngine(
         val ceiling = when (msg.type) {
             MessageType.BROADCAST, MessageType.PING, MessageType.PONG,
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
+            MessageType.KEYWORD_FILTER_PUBLISH,
             MessageType.SELF_PRESENCE,
             MessageType.BRIDGE_VOUCHED -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,

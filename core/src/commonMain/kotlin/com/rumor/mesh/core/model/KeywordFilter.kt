@@ -105,6 +105,15 @@ data class FilterSubscription(
      * without advertising the political/social commitment of subscribing.
      */
     val gossipShare: Boolean = true,
+    /**
+     * Base64-encoded publisher Ed25519 pubkey. Subscriber-internal
+     * tracking state — needed to verify inbound list snapshots against
+     * the right key. Persisted alongside the override layer so a
+     * subscription survives across process restarts.
+     */
+    val publisherPublicKey: String = "",
+    /** Highest version we've applied so far (monotonicity gate). */
+    val lastAppliedVersion: Long = 0L,
 )
 
 /**

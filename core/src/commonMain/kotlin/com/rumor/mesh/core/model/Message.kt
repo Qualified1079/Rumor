@@ -185,6 +185,15 @@ enum class MessageType {
      * transfer record is marked ABANDONED on both sides.
      */
     @SerialName("transfer_cancel") TRANSFER_CANCEL,
+    /**
+     * Signed full keyword-filter list snapshot from a publisher (O67).
+     * Subscribers verify the publisher's Ed25519 signature, apply
+     * monotonic version check, store. Display-layer filter — relay path
+     * is unaffected. Snapshot-only in v1 (no diff variant); list churn
+     * is expected to be low so the bandwidth cost of full snapshots is
+     * acceptable. Payload is a JSON-serialized [KeywordFilterList].
+     */
+    @SerialName("keyword_filter_publish") KEYWORD_FILTER_PUBLISH,
 }
 
 @Serializable
@@ -272,7 +281,8 @@ val RumorMessage.trafficClass: TrafficClass
             // A full blocklist snapshot is bulky sync data, not handshake-tier
             // traffic — only the small incremental diff stays INFRASTRUCTURE.
             MessageType.TRANSFER_METADATA,
-            MessageType.BLOCKLIST_PUBLISH -> TrafficClass.TRANSFER_SETUP
+            MessageType.BLOCKLIST_PUBLISH,
+            MessageType.KEYWORD_FILTER_PUBLISH -> TrafficClass.TRANSFER_SETUP
             MessageType.CHUNK             -> TrafficClass.BULK
             MessageType.BROADCAST,
             MessageType.DIRECT,
