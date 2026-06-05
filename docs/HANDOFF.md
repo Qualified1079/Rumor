@@ -6,107 +6,103 @@
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm` is the working branch. **Wall clock
-when this note was written:** 2026-06-05 13:31 UTC.
+`claude/practical-archimedes-wmySm`. **Wall clock when this note was
+written:** 2026-06-05 13:45 UTC.
 
-## What I closed / advanced this session
+## What I closed / advanced this session (all commits)
 
 | Commit | Row | Result |
 |---|---|---|
-| `bf4cb3a` | **O39 → G25** | (Other instance, not me.) Per-message key zeroize + 4th SourceInvariant guard. |
+| `bf4cb3a` | **O39 → G25** | (Other instance.) Per-message key zeroize + 4th SourceInvariant guard. |
 | `f95ade4` | **O84 → G26** | `docs/CRYPTO_PRIMITIVES_AUDIT.md`. Surfaced O87 + O88. |
-| `a8d012e` | **F-Droid groundwork** | `docs/FDROID_BUILD.md` + fastlane stubs + CI ./gradlew. |
+| `a8d012e` | **F-Droid groundwork** | `docs/FDROID_BUILD.md` + fastlane stubs + CI `./gradlew`. |
 | `76d9f4f` | **O67 substrate** | Model + matcher + 12 tests. |
 | `2295950` | **O76 padding half** | `PaddingBuckets.kt` + 9 tests. |
 | `e3ed605` | Coordination doc | `docs/MULTI_INSTANCE_COORDINATION.md`. |
 | `740cfcd` | **O67 publish/verify** | `KeywordFilterPublisher` + `KeywordFilterVerifier` + 8 tests. |
-| `4d1f10e` | **O67 wire layer complete** | `KeywordFilterSubscriber` + `KeywordFilterGossipBridge` + repos + MessageType.KEYWORD_FILTER_PUBLISH + 10 subscriber tests. |
-| `<this>` | **O76 compression layer + composed codec** | `core/platform/Compression.kt` expect/actual (JVM via java.util.zip raw deflate; iOS stub pending libcompression cinterop) + `core/wire/CompressedPaddedCodec.kt` composing compress+pad / unpad+decompress + 9 compression tests + 7 codec tests. **Total 24 tests on the O76 surface now.** |
+| `4d1f10e` | **O67 wire layer** | Subscriber + GossipBridge + repos + MessageType + 10 tests. |
+| `bcddd88` | **O76 compression layer** | `Compression` expect/actual + `CompressedPaddedCodec` + 16 tests. |
+| `664c856` | **O87 → G27** | `PluginContext.signWithLocalKey`. |
+| `<this>` | **O67 Android persistence + DI** | Room v6: KeywordFilterListEntity + FilterSubscriptionEntity (JSON-blob shape) + DAOs + adapters. AppModule wired. Simulator in-memory stubs. `FilterSubscription` + `FilterSubscriptionMode` marked `@Serializable` to support JSON blob storage. Gossip bridge had its optional `onListApplied` lambda dropped — Koin verify (G6) caught it as an unresolvable Function1 dep; UI re-reads `subscribedListsForMatcher()` per render anyway. |
 
 ## What I considered and rejected
 
-- **GossipEngine integration in this batch (calling `encodeForWire` from
-  `composeBroadcast` / `composeDirect`).** Would touch HELLO
-  `supportedFeatures` negotiation, the wire-format `_ext` layer, AEAD
-  associated-data plumbing for `originalLength`, and the chunker
-  fallback for >64 KB. Each piece is small but together they're another
-  multi-file refactor on top of an already-large session. The codec is
-  a pure function — landing it cleanly first means the next instance can
-  do the GossipEngine wiring as a focused change without also designing
-  the codec API.
-- **zstd / brotli over raw deflate.** zstd would shrink better (~10–20%
-  more on text) but needs a third-party native dep (`zstd-jni` on JVM,
-  `zstd.framework` on iOS, varies elsewhere). Raw deflate ships in every
-  platform's stdlib — Android's `java.util.zip`, iOS's
-  `libcompression.dylib`, Linux's `zlib`. Portability beats marginal
-  ratio for our cross-platform / MCU-eventual surface.
-- **gzip framing.** Adds 10–18 bytes of header/trailer per message; on
-  the 64 B bucket that's a meaningful tax. Raw deflate is the right
-  default; the wire format gives us its own framing.
-- **Streaming compression.** No use case — each message is whole; the
-  chunker takes over above 64 KB. Streaming would also reopen the
-  CRIME/BREACH cross-message-context risk that the
-  "one-fresh-compression-per-message" rule explicitly avoids.
+- **Expanded typed columns for KeywordFilterList / FilterSubscription
+  storage.** `List<FilterEntry>`, `Map<String, FilterAction>`, and
+  `Set<String>` are not Room-native; either a child-table refactor
+  (3+ extra tables) or per-field JSON converters would be required.
+  Storing the whole signed object as a JSON blob per row is the
+  smallest amount of code that achieves the same persistence
+  semantics — we never query inside these blobs (the matcher reads
+  whole-lists into memory on every render), and the wire-format /
+  storage-format mapping is 1:1 so deserialization regressions
+  surface immediately. Trade-off accepted in `KeywordFilterEntities.kt`
+  docstring: a corrupted blob nukes one subscription rather than one
+  field; adapter logs+null on parse failure.
+- **A `SharedFlow<KeywordFilterList>` on KeywordFilterGossipBridge for
+  "list applied" notifications.** Originally had a constructor-injected
+  `onListApplied: ((KeywordFilterList) -> Unit)?` lambda but Koin's
+  Verify reflection doesn't see default values on Function1 params,
+  so the DI verify test failed. Dropped the parameter; UI consumers
+  re-read `subscribedListsForMatcher()` on every render so the hook
+  isn't strictly needed. Documented inline that if a hook becomes
+  useful, prefer a SharedFlow over a constructor lambda.
+- **GossipEngine integration for O76 compression.** The codec is
+  shipped; wiring it into `composeBroadcast` / `composeDirect`
+  requires HELLO `supportedFeatures` negotiation, `_ext` fields,
+  AEAD associated-data plumbing for `originalLength`, and a chunker
+  fallback above 64 KB. Bigger refactor than fits in a single batch.
 
 ## Suggested next moves
 
-1. **O76 GossipEngine integration** is the obvious next step. Add
-   `_ext` fields `compressed: Boolean` + `bucketIndex: Byte` to the
-   message wrapper; HELLO `supportedFeatures: ["compression-v1"]`
-   capability negotiation; gate on TEXT contentType in
-   `composeBroadcast` / `composeDirect`; `originalLength` rides in
-   AEAD-protected associated data (NOT `_ext`, so a relay can't flip
-   it without breaking the tag); receiver-side `decodeFromWire` call
-   after AEAD-decrypt. Chunker fallback above 64 KB is in scope.
+1. **O76 GossipEngine integration.** Codec shipped; need HELLO
+   `supportedFeatures: ["compression-v1"]` negotiation,
+   `composeBroadcast` / `composeDirect` calling `encodeForWire` for
+   TEXT contentType only, `originalLength` in AEAD-protected
+   associated data, receiver `decodeFromWire`, chunker fallback >64 KB.
 
-2. **O67 Android Room adapters.** The interfaces are in commonMain;
-   `:app/data/adapter/` needs `KeywordFilterListRepositoryAdapter` +
-   `FilterSubscriptionRepositoryAdapter` (Room) and
-   `:simulator/.../InMemoryRepos.kt` needs the equivalent in-memory
-   stubs. Room schema bump (current version 5 → 6). DI wiring in
-   `AppModule.kt`.
+2. **O88 in-thread plugin display widget.** O84 audit's second
+   follow-up. `@Composable PluginDisplay(message)?` declared by
+   plugins; falls back to default if none claims the type.
 
-3. **O87 `PluginContext.signWithLocalKey`.** 4 lines per the audit
-   doc.
+3. **LICENSE file.** Still gated on user choice (GPL-3.0-or-later or
+   AGPL-3.0). FDROID_BUILD.md submission checklist is otherwise
+   green.
 
-4. **LICENSE file.** Still gated on user choice between GPL-3.0-or-later
-   and AGPL-3.0.
+4. **O67 UI list editor + default-list onboarding.** The whole
+   wire/Room/DI stack is ready; this is the last piece before the
+   feature is user-visible.
 
-5. **iOS Compression actual.** Apple's `libcompression.dylib` exposes
-   raw deflate via `compression_stream` + `COMPRESSION_ZLIB` algorithm
-   (despite the name, raw deflate is selectable). cinterop-reachable.
-   Same xtool/Mac gate as the rest of the iOS port; until then, iOS
-   peers simply won't advertise `compression-v1`.
+5. **iOS Compression actual.** Apple's libcompression has raw
+   deflate via `COMPRESSION_ZLIB`. Same xtool/Mac gate as the rest
+   of the iOS port.
 
 ## Backlog state at handoff
 
-- **Counts:** 11 PART · 14 DECISION · 45 TODO (CODE 23 · SIM 2 · UI 9 · EMU 4 · HW 7). Total 70 open rows.
-- **Completed gaps:** G1–G26.
-- **Open rows touched this session:** O67 (PART, full wire layer added),
-  O76 (PART, compression layer + composed codec added), O84 (closed →
-  G26), O87 + O88 (new).
-- **`Counts as of this writing` in CLAUDE.md remains 70.** Row tags
-  unchanged this commit (O76 was already PART; codec didn't promote
-  it).
+- **Counts:** 11 PART · 14 DECISION · 44 TODO (CODE 22 · SIM 2 · UI 9 · EMU 4 · HW 7). Total 69.
+- **Completed gaps:** G1–G27.
+- **Open rows touched this session:** O67 (PART, full Android wire stack), O76 (PART, compression layer + codec), O84 (closed → G26), O87 (closed → G27), O88 (new).
 
 ## What's NOT updated and may be stale
 
-- `docs/FDROID_BUILD.md` checklist still names `LICENSE` as missing —
-  still missing.
-- iOS Compression actual stubs `NotImplementedError`. Anyone enabling
-  `compression-v1` in HELLO `supportedFeatures` on iOS without the
-  cinterop wiring will crash at the first compose call. The capability
-  string must remain unadvertised on iOS until the actual is real.
+- `docs/FDROID_BUILD.md` still names `LICENSE` as missing.
+- iOS Compression actual stubs `NotImplementedError`. The
+  `compression-v1` HELLO capability must stay unadvertised on iOS
+  until the libcompression cinterop lands.
+- O67 UI is the only piece between today's state and a user-visible
+  keyword filter feature on Android. The plumbing is all there.
 
 ## Tooling status
 
 - `./gradlew :core:jvmTest` — green this session.
-- `./gradlew :app:testDebugUnitTest` — green earlier this session (last
-  run after the O67 wire commit).
-- `./gradlew :simulator:test` — green earlier this session.
-- Compression / codec tests added today are all in `jvmTest` (require
-  JVM `java.util.zip`); commonTest can't host them yet because the iOS
-  actual throws.
+- `./gradlew :app:testDebugUnitTest` — green this session (G6 Koin
+  DI verify in particular caught a real wiring bug mid-batch on this
+  commit).
+- `./gradlew :simulator:test` — green this session.
+- Room schema v6 hasn't been exported to disk for schema-history
+  checks; that's a `room.schemaLocation` config item we haven't
+  wired (KSP warns about it on every build but the warning is
+  benign for the dev configuration).
 
 ## Canary
 

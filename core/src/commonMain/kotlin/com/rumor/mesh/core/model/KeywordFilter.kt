@@ -80,6 +80,7 @@ enum class MatchKind {
 }
 
 /** Subscription mode mirroring [BlocklistMode] for symmetry. */
+@Serializable
 enum class FilterSubscriptionMode { ONE_TIME, CONTINUOUS }
 
 /**
@@ -89,6 +90,7 @@ enum class FilterSubscriptionMode { ONE_TIME, CONTINUOUS }
  * userIds, opt-out without unsubscribing). Stored alongside the
  * verified list copy.
  */
+@Serializable
 data class FilterSubscription(
     val listPublisherId: String,
     val listName: String,

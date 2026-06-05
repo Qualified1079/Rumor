@@ -35,8 +35,6 @@ class KeywordFilterGossipBridge(
     private val gossipEngine: GossipEngine,
     private val publisher: KeywordFilterPublisher,
     private val subscriber: KeywordFilterSubscriber,
-    /** Optional notification hook ("a new filter list was applied") for the UI. */
-    private val onListApplied: ((KeywordFilterList) -> Unit)? = null,
 ) {
     private val TAG = "KeywordFilterGossipBridge"
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -55,7 +53,11 @@ class KeywordFilterGossipBridge(
         val list = runCatching { WireJson.decodeFromString<KeywordFilterList>(json) }.getOrNull() ?: return
         if (subscriber.applyList(list)) {
             RumorLog.i(TAG, "Applied v${list.version} from ${list.publisherId.take(16)}…")
-            onListApplied?.invoke(list)
+            // UI consumers re-read subscribedListsForMatcher() on every
+            // render, so an "applied" notification hook isn't strictly
+            // needed; if one becomes useful, prefer a SharedFlow on the
+            // bridge over a constructor-injected callback (Koin verify
+            // doesn't see default-valued lambda params).
         }
     }
 

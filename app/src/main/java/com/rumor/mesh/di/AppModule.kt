@@ -6,6 +6,11 @@ import com.rumor.mesh.core.block.BlocklistPublisher
 import com.rumor.mesh.core.block.BlocklistSubscriber
 import com.rumor.mesh.core.data.BlockEntryRepository
 import com.rumor.mesh.core.data.BlocklistEntryRepository
+import com.rumor.mesh.core.data.FilterSubscriptionRepository
+import com.rumor.mesh.core.data.KeywordFilterListRepository
+import com.rumor.mesh.core.filter.KeywordFilterGossipBridge
+import com.rumor.mesh.core.filter.KeywordFilterPublisher
+import com.rumor.mesh.core.filter.KeywordFilterSubscriber
 import com.rumor.mesh.core.data.BreadcrumbRepository
 import com.rumor.mesh.core.data.SubscribedBlocklistRepository
 import com.rumor.mesh.core.data.ChunkRepository
@@ -37,6 +42,8 @@ import com.rumor.mesh.data.RumorDatabase
 import com.rumor.mesh.data.adapter.BreadcrumbRepositoryAdapter
 import com.rumor.mesh.data.adapter.BlockEntryRepositoryAdapter
 import com.rumor.mesh.data.adapter.BlocklistEntryRepositoryAdapter
+import com.rumor.mesh.data.adapter.FilterSubscriptionRepositoryAdapter
+import com.rumor.mesh.data.adapter.KeywordFilterListRepositoryAdapter
 import com.rumor.mesh.data.adapter.ChunkRepositoryAdapter
 import com.rumor.mesh.data.adapter.ContactRepositoryAdapter
 import com.rumor.mesh.data.adapter.MessageRepositoryAdapter
@@ -93,6 +100,10 @@ val appModule = module {
     single<BlockEntryRepository>        { BlockEntryRepositoryAdapter(get<RumorDatabase>().blockEntryDao()) }
     single<SubscribedBlocklistRepository> { SubscribedBlocklistRepositoryAdapter(get<RumorDatabase>().subscribedBlocklistDao()) }
     single<BlocklistEntryRepository>    { BlocklistEntryRepositoryAdapter(get<RumorDatabase>().blocklistEntryDao()) }
+    single { get<RumorDatabase>().keywordFilterListDao() }
+    single { get<RumorDatabase>().filterSubscriptionDao() }
+    single<KeywordFilterListRepository>  { KeywordFilterListRepositoryAdapter(get()) }
+    single<FilterSubscriptionRepository> { FilterSubscriptionRepositoryAdapter(get()) }
 
     // ── Identity ──────────────────────────────────────────────────────────────
     single { IdentityManager(androidContext()) }
@@ -128,6 +139,11 @@ val appModule = module {
 
     // ── Blocklist gossip bridge ───────────────────────────────────────────────
     single { BlocklistGossipBridge(get(), get(), get(), get()) }
+
+    // ── Keyword filters (O67) ─────────────────────────────────────────────────
+    single { KeywordFilterPublisher(get<IdentityProvider>()) }
+    single { KeywordFilterSubscriber(get<KeywordFilterListRepository>(), get<FilterSubscriptionRepository>()) }
+    single { KeywordFilterGossipBridge(get(), get(), get()) }
 
     // ── Transport ─────────────────────────────────────────────────────────────
     single { BleDiscoveryManager(androidContext(), get<StaticMode>()) }

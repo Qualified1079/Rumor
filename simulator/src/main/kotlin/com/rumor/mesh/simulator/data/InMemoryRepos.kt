@@ -211,6 +211,24 @@ class InMemoryBlocklistEntryRepository : BlocklistEntryRepository {
     }
 }
 
+// ── KeywordFilterRepository (O67) ─────────────────────────────────────────────
+
+class InMemoryKeywordFilterListRepository : com.rumor.mesh.core.data.KeywordFilterListRepository {
+    private val lists = ConcurrentHashMap<String, com.rumor.mesh.core.model.KeywordFilterList>()
+    override suspend fun upsert(list: com.rumor.mesh.core.model.KeywordFilterList) { lists[list.publisherId] = list }
+    override suspend fun get(publisherId: String) = lists[publisherId]
+    override suspend fun getAll() = lists.values.toList()
+    override suspend fun delete(publisherId: String) { lists.remove(publisherId) }
+}
+
+class InMemoryFilterSubscriptionRepository : com.rumor.mesh.core.data.FilterSubscriptionRepository {
+    private val subs = ConcurrentHashMap<String, com.rumor.mesh.core.model.FilterSubscription>()
+    override suspend fun upsert(sub: com.rumor.mesh.core.model.FilterSubscription) { subs[sub.listPublisherId] = sub }
+    override suspend fun get(publisherId: String) = subs[publisherId]
+    override suspend fun getAll() = subs.values.toList()
+    override suspend fun delete(publisherId: String) { subs.remove(publisherId) }
+}
+
 // ── TransferRepository ────────────────────────────────────────────────────────
 
 class InMemoryTransferRepository : TransferRepository {
