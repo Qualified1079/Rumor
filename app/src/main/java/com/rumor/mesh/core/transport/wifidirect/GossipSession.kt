@@ -147,9 +147,21 @@ class GossipSession(
                 is GossipPacket.IdList -> peerSummary.ids.toHashSet().let { set ->
                     { id: String -> id in set }
                 }
-                is GossipPacket.Bloom -> BloomFilterData.deserialize(
-                    peerSummary.filter, peerSummary.expectedItems,
-                ).let { f -> { id: String -> f.mightContain(id) } }
+                is GossipPacket.Bloom -> {
+                    val bloom = BloomFilterData.tryDeserialize(
+                        peerSummary.filter, peerSummary.expectedItems,
+                    )
+                    if (bloom != null) {
+                        { id: String -> bloom.mightContain(id) }
+                    } else {
+                        // Peer-supplied expectedItems forced an allocation failure.
+                        // Drop the bloom and treat the peer as knowing nothing —
+                        // we'll over-offer this one exchange instead of crashing.
+                        RumorLog.w(TAG, "Rejected adversarial bloom; over-offering this exchange")
+                        val empty: (String) -> Boolean = { false }
+                        empty
+                    }
+                }
                 else -> return@withTimeout null
             }
 

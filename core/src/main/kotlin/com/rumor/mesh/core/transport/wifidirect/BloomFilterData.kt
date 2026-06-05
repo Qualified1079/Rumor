@@ -80,6 +80,24 @@ class BloomFilterData(
             return filter
         }
 
+        /**
+         * Adversary-safe deserialize. A peer can put any [expectedItems] on the wire,
+         * including values that would force a multi-GB allocation. Returns null when
+         * construction fails for any reason; callers should treat that as "peer
+         * advertised nothing" and over-offer this exchange rather than crash.
+         * Hard caps are deliberately avoided — a large but legitimate bloom should
+         * be allowed in principle; we only refuse what actually fails to allocate.
+         */
+        fun tryDeserialize(b64: String, expectedItems: Int): BloomFilterData? = try {
+            if (expectedItems <= 0) null else deserialize(b64, expectedItems)
+        } catch (e: OutOfMemoryError) {
+            null
+        } catch (e: IllegalArgumentException) {
+            null
+        } catch (e: NegativeArraySizeException) {
+            null
+        }
+
         private fun optimalBitCount(n: Int, p: Double) =
             ceil(-n * ln(p) / (ln(2.0) * ln(2.0))).toInt().coerceAtLeast(64)
 
