@@ -130,7 +130,13 @@ class ThreadViewModel(
             require(dotIdx > 0) { "malformed payload" }
             val ephemeralPub = encryptedPayload.substring(0, dotIdx).fromBase64()
             val sharedKey = CryptoManager.x25519Agreement(localPrivKey, ephemeralPub)
-            val ct = CryptoManager.AesGcmCiphertext.fromBase64(encryptedPayload.substring(dotIdx + 1))
-            CryptoManager.aesGcmDecrypt(ct, sharedKey).toString(Charsets.UTF_8)
+            try {
+                val ct = CryptoManager.AesGcmCiphertext.fromBase64(encryptedPayload.substring(dotIdx + 1))
+                CryptoManager.aesGcmDecrypt(ct, sharedKey).toString(Charsets.UTF_8)
+            } finally {
+                // O39: zero the derived AES key on the way out. localPrivKey is the
+                // long-term static — caller owns its lifecycle; we don't touch it.
+                sharedKey.fill(0)
+            }
         }.getOrElse { "[decryption failed]" }
 }

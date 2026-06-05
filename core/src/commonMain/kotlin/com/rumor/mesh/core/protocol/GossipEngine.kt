@@ -295,6 +295,12 @@ class GossipEngine(
             val ct = CryptoManager.aesGcmEncrypt(text.toByteArray(Charsets.UTF_8), sharedKey)
             encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
             rawCiphertext = null
+            // O39 sender-side FS: actively zero the ephemeral private and the derived
+            // AES key before they wait for GC. Bytes that live in the heap until GC
+            // remain readable by a process-memory dump up to that point; zero-fill
+            // makes the FS-after-send guarantee a property of the code, not luck.
+            ephemeral.privateKeyBytes.fill(0)
+            sharedKey.fill(0)
         }
         val msg = buildMessage(
             identity = identity,

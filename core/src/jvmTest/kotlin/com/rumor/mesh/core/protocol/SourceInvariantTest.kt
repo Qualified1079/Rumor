@@ -158,6 +158,50 @@ class SourceInvariantTest {
         }
     }
 
+    /**
+     * **Architecture invariant 4 (O39): per-message ephemeral key material is
+     * actively zeroed after use in `composeDirect`.**
+     *
+     * Sender-side forward secrecy depends on the ephemeral X25519 private and
+     * the derived AES key not surviving past the AEAD call. Kotlin doesn't zero
+     * local `ByteArray`s; bytes sit on the heap until GC and remain readable in
+     * a process-memory dump until then. The explicit `.fill(0)` makes the FS
+     * window a property of the code, not luck. If a refactor removes these calls,
+     * a memory snapshot taken seconds after a DM is sent can recover the
+     * ephemeral private and re-derive the AEAD key.
+     *
+     * If this test fails: `composeDirect` lost the `ephemeral.privateKeyBytes
+     * .fill(0)` or `sharedKey.fill(0)` line. Verify the zeroing still happens
+     * AFTER the AEAD call (zeroing before makes encryption fail with zero key),
+     * then update the regex.
+     */
+    @Test
+    fun `composeDirect zeros ephemeral private and shared key after use`() {
+        val privFillPattern = Regex("""ephemeral\.privateKeyBytes\.fill\(\s*0\s*\)""")
+        val sharedFillPattern = Regex("""sharedKey\.fill\(\s*0\s*\)""")
+        if (!privFillPattern.containsMatchIn(gossipEngine)) {
+            fail(
+                """
+                |Could not find `ephemeral.privateKeyBytes.fill(0)` in GossipEngine.kt.
+                |Without this, the ephemeral X25519 private key sits on the heap until
+                |GC after every DM compose — a process-memory dump in that window
+                |recovers it and lets the attacker re-derive every AEAD key for every
+                |outbound DM in that batch. O39 audit (now G25) made the zeroing
+                |explicit; do not remove it.
+                |""".trimMargin()
+            )
+        }
+        if (!sharedFillPattern.containsMatchIn(gossipEngine)) {
+            fail(
+                """
+                |Could not find `sharedKey.fill(0)` in GossipEngine.kt. The derived
+                |AEAD key must be zeroed after the AES-GCM call in composeDirect; see
+                |O39 (G25). Without it the sender-side FS guarantee leaks until GC.
+                |""".trimMargin()
+            )
+        }
+    }
+
     /** Walk up from cwd looking for the repo root (settings.gradle.kts marker). */
     private fun findRepoRoot(): File {
         var dir: File? = File(".").canonicalFile
