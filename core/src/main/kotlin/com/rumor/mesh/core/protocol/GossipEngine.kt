@@ -162,6 +162,7 @@ class GossipEngine(
     fun onExchangeFailed(peerId: String) {
         scope.launch {
             canaryMetrics.recordExchange(success = false, rttMs = 0)
+            if (peerId.isNotEmpty()) topologyTracker.recordFailure(peerId)
             RumorLog.d(TAG, "Exchange failed with ${peerId.take(8)}…")
         }
     }

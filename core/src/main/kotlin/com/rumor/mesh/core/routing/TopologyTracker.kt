@@ -46,12 +46,13 @@ class TopologyTracker(
             } else {
                 val smoothed = (existing.latencyMs * 7 + latencyMs) / 8
                 Route(
-                    peerId,
-                    smoothed,
-                    hopCount,
-                    System.currentTimeMillis(),
-                    existing.sessionCount + 1,
-                    existing.bytesRelayed + bytesTransferred,
+                    peerId           = peerId,
+                    latencyMs        = smoothed,
+                    hopCount         = hopCount,
+                    lastUpdatedMs    = System.currentTimeMillis(),
+                    sessionCount     = existing.sessionCount + 1,
+                    bytesRelayed     = existing.bytesRelayed + bytesTransferred,
+                    failureCount     = existing.failureCount,
                 )
             }
             routeRepo.upsert(newRoute)
@@ -62,8 +63,30 @@ class TopologyTracker(
     }
 
     /**
-     * Peers to prefer for gossip — ranked by cumulative bytes transferred then
-     * session count; latency is not used (see [recordSession]).
+     * Record an exchange attempt that ended without a successful session result.
+     * Increments [Route.failureCount], which de-weights this peer in [preferredPeers]
+     * via the `bytesRelayed / (1 + failureCount)` ranking. Unknown peers seed a
+     * minimal route so the first failure is captured even if no successful session
+     * has yet occurred.
+     */
+    fun recordFailure(peerId: String) {
+        scope.launch {
+            val existing = routeRepo.getForPeer(peerId)
+            val now = System.currentTimeMillis()
+            val newRoute = if (existing == null) {
+                Route(peerId, latencyMs = 0, hopCount = 1, lastUpdatedMs = now, sessionCount = 0, bytesRelayed = 0, failureCount = 1)
+            } else {
+                existing.copy(failureCount = existing.failureCount + 1, lastUpdatedMs = now)
+            }
+            routeRepo.upsert(newRoute)
+            RumorLog.d(TAG, "Failure with ${peerId.take(8)}… failures=${newRoute.failureCount}")
+        }
+    }
+
+    /**
+     * Peers to prefer for gossip — ranked by reliability-adjusted throughput
+     * (`bytesRelayed / (1 + failureCount)`) then session count. Latency is
+     * stored but not ranked on (see [recordSession]).
      */
     suspend fun preferredPeers(limit: Int = 20): List<String> =
         routeRepo.getPreferred(limit).map { it.peerId }

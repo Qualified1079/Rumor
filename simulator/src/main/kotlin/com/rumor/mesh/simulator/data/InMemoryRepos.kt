@@ -121,7 +121,7 @@ class InMemoryRouteRepository : RouteRepository {
     override suspend fun getPreferred(limit: Int): List<Route> =
         routes.values
             .sortedWith(
-                compareByDescending<Route> { it.bytesRelayed }
+                compareByDescending<Route> { it.bytesRelayed.toDouble() / (1 + it.failureCount) }
                     .thenByDescending { it.sessionCount }
                     .thenByDescending { it.lastUpdatedMs }
             )

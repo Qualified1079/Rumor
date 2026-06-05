@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.rumor.mesh.BuildConfig
 
 @Database(
@@ -19,7 +21,7 @@ import com.rumor.mesh.BuildConfig
         TransferEntity::class,
         ChunkEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -37,8 +39,16 @@ abstract class RumorDatabase : RoomDatabase() {
     companion object {
         private const val DB_NAME = "rumor.db"
 
+        // Adds the failureCount column to routes for reliability-weighted ranking (O3).
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE routes ADD COLUMN failureCount INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun create(context: Context): RumorDatabase =
             Room.databaseBuilder(context, RumorDatabase::class.java, DB_NAME)
+                .addMigrations(MIGRATION_4_5)
                 .apply {
                     // Release builds must have explicit migrations — silently
                     // wiping user data on a schema bump is unacceptable in

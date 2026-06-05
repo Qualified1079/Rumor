@@ -9,10 +9,14 @@ interface RouteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(route: RouteEntity)
 
-    // Primary rank: cumulative bytes transferred (high-throughput peers first).
+    // Primary rank: reliability-adjusted throughput — bytes / (1 + failures).
     // Secondary: session count; tertiary: recency. latencyMs is stored for
     // diagnostics only — noisy on BLE/Wi-Fi Direct (measures discovery timing).
-    @Query("SELECT * FROM routes ORDER BY bytesRelayed DESC, sessionCount DESC, lastUpdatedMs DESC LIMIT :limit")
+    @Query(
+        "SELECT * FROM routes " +
+        "ORDER BY (bytesRelayed * 1.0) / (1 + failureCount) DESC, " +
+        "sessionCount DESC, lastUpdatedMs DESC LIMIT :limit"
+    )
     suspend fun getPreferred(limit: Int = 20): List<RouteEntity>
 
     @Query("SELECT * FROM routes ORDER BY lastUpdatedMs DESC")
