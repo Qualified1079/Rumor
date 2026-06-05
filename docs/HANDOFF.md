@@ -4,133 +4,159 @@
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm`. **Wall clock at write:** 2026-06-05 14:37 UTC.
+`claude/practical-archimedes-wmySm`. **Wall clock at write:** 2026-06-05 20:09 UTC.
 
-## Commits this session (chronological)
+## This session's commits (chronological)
 
-| Commit | Row(s) | Result |
+| Commit | Row | Result |
 |---|---|---|
-| `bf4cb3a` | **O39 → G25** | (Other instance.) Per-message key zeroize + 4th SourceInvariant guard. |
-| `f95ade4` | **O84 → G26** | `docs/CRYPTO_PRIMITIVES_AUDIT.md`; surfaced O87 + O88. |
-| `a8d012e` | F-Droid groundwork | `docs/FDROID_BUILD.md` + fastlane stubs + CI `./gradlew`. |
-| `76d9f4f` | **O67 substrate** | KeywordFilter model + matcher + 12 tests. |
-| `2295950` | **O76 padding** | PaddingBuckets + 9 tests. |
-| `e3ed605` | Coordination doc | `MULTI_INSTANCE_COORDINATION.md`. |
-| `740cfcd` | **O67 publish/verify** | Publisher + Verifier + 8 tests. |
-| `4d1f10e` | **O67 wire layer** | Subscriber + GossipBridge + repos + MessageType + 10 tests. |
-| `bcddd88` | **O76 compression layer** | Compression expect/actual + CompressedPaddedCodec + 16 tests. |
-| `664c856` | **O87 → G27** | `PluginContext.signWithLocalKey`. |
-| `72ff7c1` | **O67 Android persistence** | Room v6 + DAOs + adapters + DI. |
-| `3343909` | **G15 Android Room + O76 scaffolding** | ScheduledMessage Room v7 + ext-helper accessors + COMPRESSION_FEATURE const. |
-| `d175cfe` | **O76 AEAD-AD wiring** | PlatformCrypto/CryptoManager take aad; Swift bridge spec updated; AAD-bearing golden vector pinned. |
-| `59995d2` | **O76 receive path live** | ThreadViewModel reads compressed DMs; CompressedAeadRoundTripTest covers happy + tamper + format pin + empty cases. |
-| `341c20a` | **G15 scheduler lifecycle** | MeshService.startMesh/stopMesh wire MessageScheduler.start()/stop(). |
+| `9251f95` | **O40 → G28** | Signed delete-on-ACK end-to-end (model + verifier + GossipEngine compose/relay/ingest + 7 tests). |
+| `067baaf` | **O31 → PART**, O48 doc | Hello.recentlyExchangedWith + helloChallengeBytesV2; O48 row noted as blocked on O5. |
+| `19cf42c` | **O42 v2 alignment** | SortedListRbsrStorage(formula) + RBSR_V2_FEATURE + GossipSession session-negotiation matrix. |
+| `641c634` | O28 fuzz | KeywordFilterList + MessageDeletePayload parsers. |
+| `d8079c9` | **O53 → PART** | HMAC-SHA-256 (RFC 4231 vectors) + SealedSenderTag.tagFor + 11 tests. |
+| `fefe688` | **O38 → PART** | PrekeyPublish wire shape + PrekeyVerifier + 7 tests + fuzz harness. |
+| `a2a3d80` | **O79 → PART** | Room/Invite/Action wire types + 3 domain tags + 5 tests + 3 fuzz harnesses. |
 
-Session output: 14 commits, ~600 lines of production code + ~900 lines of test code, **8 backlog rows advanced** (O67 → fully wired Android stack; O76 → padding + compression layer + AEAD-AD + receive path; O84 → closed G26; O87 → closed G27; G15 → Android Room + lifecycle; F-Droid groundwork; coordination protocol).
+7 commits, 8 backlog rows advanced (1 closed, 5 to PART, 1 doc fix, 1 fuzz coverage extension). 30+ new tests.
 
-## What I considered and rejected this session (consolidated)
+## What I considered and rejected
 
-- **Flipping O76 `COMPRESSION_FEATURE` into `LOCAL_SUPPORTED_FEATURES`.**
-  Receive path lives, compose path doesn't. Standard "receive
-  everywhere first, then compose" pattern.
-- **GossipEngine compose-side compression today.** Needs per-recipient
-  feature awareness (a `Contact.lastKnownSupportedFeatures` field, or
-  a session-tier cache, populated after a successful HELLO). That's
-  an architectural choice deserving a focused commit, not a tail end.
-- **Robolectric ViewModel test for the new O76 receive branch.**
-  Codec-level + AEAD-level round-trip in `CompressedAeadRoundTripTest`
-  covers correctness. ViewModel test would only confirm "yes the
-  helper is wired" — visible code already proves that.
-- **Expanded typed columns for KeywordFilterList/FilterSubscription
-  Room storage.** JSON-blob per row beats child-table refactor when
-  the matcher consumes lists as a unit and we never query inside the
-  blob.
-- **`SharedFlow<KeywordFilterList>` `onListApplied` hook on the
-  gossip bridge.** Koin verify caught the default-valued Function1
-  param mid-batch; dropped the hook. UI re-reads per render.
-- **`expect val EMPTY_AAD` constant in PlatformCrypto.** Adding a
-  constant inside `expect object` means each actual has to define
-  it. `ByteArray(0)` inline is one fewer cross-platform contract.
-- **Broadcast compression (O76 path).** DMs only by design today —
-  broadcasts have no AEAD layer to bind `cl` into; padding plaintext
-  leaks `cl` to any observer. Compress-without-pad has bandwidth
-  merit but is a separate feature-flag decision.
+- **Pushing O76 compose-side flip without your design input on the
+  peer-feature cache location.** See questions below.
+- **O38 rotation scheduler / sender prekey cache / composeDirect
+  prekey selection.** These are local-state and scheduler plumbing,
+  not protocol design — bounded but multi-commit work. Substrate
+  shipped; integration is the next focused commit on this row.
+- **O53 wire integration (compose-path stamping `_ext.t`, relay
+  matching against pre-computed tag set).** The cryptographic
+  substrate is now bounded; the routing changes need design
+  decisions about coexistence-with-plaintext-recipientId vs
+  wire-break, plus the per-contact shared-key derivation (HKDF
+  helper would need adding to PlatformCrypto).
+- **O48 bridge-asserted-pubkey migration.** Confirmed blocked on
+  O5 (DM bridging) — MeshCore channel-broadcast wire format
+  carries only `senderName`, no pubkey to hash. Row text updated
+  to flag the dependency.
+- **O77 massive 500-node 24-hour scenario.** Needs ≥32 GB RAM
+  (probably won't fit in the dev environment available); skipped.
+- **O79 routing integration + MessageType.ROOM_* enum entries.**
+  Depends on whether non-subscribers see roomId in clear or via
+  O53-style tags — design question. Substrate shipped; routing
+  follows when that's decided.
 
-## Suggested next moves (in priority order, with reasoning)
+## Suggested next moves
 
-1. **O76 compose-side flip.** The structural piece left for O76 to
-   ship. Decide where peer feature awareness lives — either:
-   - Additive field on `Contact` (`lastKnownSupportedFeatures: List<String>`),
-     populated by a successful HELLO via the existing
-     `WifiDirectTransport`/`GossipSession` callback path.
-   - Session-tier `recipientFeatureCache: Map<UserId, List<String>>`
-     scoped to `GossipEngine`.
-   The Contact field is more persistent (survives reboots) but
-   touches Room schema. The session cache is simpler but loses state
-   across the GossipEngine lifetime. Once the cache exists, gate
-   `composeDirect` on `peerSupportsCompression()` and emit
-   compressed payloads. Then flip `LOCAL_SUPPORTED_FEATURES = listOf(
-   COMPRESSION_FEATURE)`. Receive path is already live (this session).
+1. **O38 rotation scheduler + sender cache + composeDirect
+   selection.** Substrate is in place; the remaining work is
+   per-contact prekey cache (in-memory or Room-backed), a
+   scheduler that fires on a cadence to broadcast fresh prekeys
+   and delete expired private keys, and modifying composeDirect
+   to DH against the cached prekey when one is valid.
 
-2. **Chunker fallback for >64 KB compressed text.** Today
-   `CompressedPaddedCodec.encodeForWire` returns null on >64 KB
-   compressed size. composeDirect needs to detect that and fall back
-   to the existing chunker, marked TEXT-typed, with a TextAssembler
-   on the receive side stitching chunks into a single logical
-   message. Per O76 spec: no UI ever exposes "your message was
-   chunked."
+2. **O76 compose-side flip.** Requires the peer-feature-cache
+   decision (question below).
 
-3. **O67 UI list editor + default-list onboarding.** All plumbing
-   complete. Compose surface where the user authors / signs /
-   shares filter lists, plus an onboarding flow for the three
-   default lists (slurs default-BLOCK; NSFW text default-WARN;
-   gore text default-WARN). Content sourcing for the defaults is
-   the open question; can ship UI with empty defaults and let
-   users opt in.
+3. **O67 default-list seeding + UI.** Backlog row notes content
+   sourcing for slurs/NSFW/gore lists is TBD — needs editorial
+   judgment.
 
-4. **O88 in-thread plugin display widget.** O84 audit follow-up.
-   `@Composable PluginDisplay(message: RumorMessage)?` declared by
-   plugins, falls back to default rendering.
+4. **O79 routing decisions.** See questions below.
 
-5. **LICENSE file at repo root.** Still gated on user choice
-   (GPL-3.0-or-later vs AGPL-3.0). FDROID_BUILD.md is otherwise
-   green.
-
-6. **iOS PlatformCrypto + Compression actuals.** Same xtool/Mac
-   gate as the rest of the iOS port. The Swift bridge spec is
-   updated for the AAD parameter and the AAD-bearing golden vector
-   is pinned, so the first iOS test run will surface any
-   incompatibility immediately.
+5. **iOS PlatformCrypto / Compression actuals.** Same xtool/Mac
+   gate as before.
 
 ## Backlog state at handoff
 
-- **Counts:** 11 PART · 14 DECISION · 44 TODO (CODE 22 · SIM 2 · UI 9 · EMU 4 · HW 7). Total 69.
-- **Completed gaps:** G1–G27.
-- **Rows touched this session:** O67 (PART → fully wired Android stack); O76 (PART → padding + compression + AEAD-AD + receive path); O84 (closed → G26); O87 (closed → G27); G15 (Android Room + lifecycle); O88 (new follow-up).
-- **`Counts as of this writing` in CLAUDE.md stays at 69.**
+- **Counts:** 15 PART · 14 DECISION · 39 TODO (CODE 17 · SIM 2 · UI 9 · EMU 4 · HW 7). Total 68 open rows.
+- **Completed gaps:** G1–G28.
+- **Rows touched this session:** O31 (PART), O38 (PART), O40 (closed → G28), O42 (v2 wired through, row tag stays PART), O48 (doc fix), O53 (PART), O79 (PART). Plus G24 lint allowlist additions for new test fixtures.
 
 ## What's NOT updated and may be stale
 
 - `docs/FDROID_BUILD.md` still names `LICENSE` as missing.
-- iOS `PlatformCrypto.aesGcm*` and `Compression` actuals still throw
-  `NotImplementedError`. Gated on the Swift bridge landing.
-- `LOCAL_SUPPORTED_FEATURES` in `GossipSession` is still empty in
-  production. By design — both halves of `compression-v1` must be
-  wired before advertising.
-- Default keyword filter lists (slurs/NSFW/gore) are not yet seeded.
-  The subscriber path will accept them when an authoring publisher
-  signs and broadcasts them; ship-time decision required for
-  what/whose lists get default-applied.
+- iOS `PlatformCrypto.aesGcm*` and `Compression` actuals still
+  throw `NotImplementedError`. Gated on the Swift bridge.
+- `LOCAL_SUPPORTED_FEATURES` in `GossipSession` is still empty
+  in production. By design until per-feature integration is
+  complete (compression-v1, rbsr-v1, rbsr-v2, route-adv-v1).
 
 ## Tooling status
 
-- `:core:jvmTest` — green at HEAD.
-- `:app:testDebugUnitTest` — green. Koin DI verify (G6) caught one
-  real wiring bug mid-session (default-valued Function1 lambda) —
-  fixed by removing the lambda parameter.
+- `:core:jvmTest` — green at HEAD (`a2a3d80`).
+- `:app:testDebugUnitTest` — green.
 - `:simulator:test` — green.
 
 ## Canary
 
 "By Order Of The High Magnate" used on every commit message this
 session.
+
+## Questions for the user (waiting on these before unblocking specific rows)
+
+### Compose-side O76 (compression-v1) flip
+
+The receive path is live (commit `59995d2` from the previous
+session); the compose path needs to know whether a recipient
+supports compression-v1. Two reasonable architectures:
+
+  **A. Additive `Contact.lastKnownSupportedFeatures: List<String>`
+  field, populated by a successful HELLO via the
+  WifiDirectTransport / GossipSession callback path.**
+  - Survives reboots (Room-backed).
+  - Touches Room schema (v7 → v8) + adapter + simulator stub.
+  - Slight staleness window: a contact's HELLO features get
+    cached on first contact in a given build; if they upgrade
+    capability, we don't notice until the next live HELLO.
+
+  **B. Session-tier `recipientFeatureCache: Map<UserId, List<String>>`
+  inside GossipEngine.**
+  - Simpler — no Room migration.
+  - Resets on process restart; first-message-after-restart
+    falls back to the uncompressed path until we've handshaken.
+
+Which do you prefer? Either works correctly; the trade-off is
+persistence-and-staleness vs simplicity.
+
+### O67 default keyword filter lists
+
+Backlog row says ship default lists for slurs (default BLOCK),
+NSFW text (default WARN), and graphic-violence text (default
+WARN). Content sourcing is the open question:
+
+  1. Are you OK with English-only at first launch (with the
+     l10n gap flagged honestly in onboarding copy)?
+  2. Should the slur list draw from an existing curated list
+     (e.g. Wiktionary's English profanity category, or a more
+     considered source you have in mind) or do you want to
+     curate it yourself?
+  3. Should there be a default user-authored publisher
+     associated with the bundled lists (signed by a Rumor
+     project key), or are the defaults shipped unsigned as a
+     special case?
+
+### O79 Rooms routing
+
+Two architectural questions before wiring MessageType.ROOM_*:
+
+  1. **roomId visibility on the wire.** When a Room message
+     is composed and broadcast, do non-subscribers see the
+     roomId in clear (simplifies routing — relays know which
+     subset of peers might care) or via an O53-style tag
+     derived from the room key (better privacy — observers
+     can't enumerate roomIds; relays must trial-match against
+     per-room keys they hold)?
+
+  2. **Membership state source-of-truth.** Is current
+     membership derivable from the gossiped events stream
+     (RoomCreate + cumulative invites/joins/leaves/bans) or
+     does it need a separate persisted membership table per
+     Room? The derivable approach is simpler but reconciling
+     a long-offline node's view is harder; the persisted
+     approach is more straightforward to query but introduces
+     a state-divergence risk across peers.
+
+### LICENSE
+
+Still pending. GPL-3.0-or-later vs AGPL-3.0 — your call.
+F-Droid submission checklist is otherwise green.
