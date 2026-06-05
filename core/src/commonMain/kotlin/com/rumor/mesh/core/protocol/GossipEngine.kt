@@ -446,6 +446,42 @@ class GossipEngine(
      * mode). The receiver decides how to weight this list given its own
      * O58 visibility settings.
      */
+    /**
+     * Compose a signed delete-on-ACK request for a DIRECT message you
+     * either authored or were the recipient of (O40).
+     *
+     * Returns null if (a) identity is locked, (b) the target message
+     * isn't in the local store, or (c) the local userId doesn't match
+     * either the target's senderId or recipientId. Anything else is
+     * the caller broadcasting a delete they aren't authorized to issue
+     * — relays would reject it anyway, so we don't compose.
+     */
+    suspend fun composeMessageDelete(messageId: String): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val target = messageStore.getById(messageId) ?: return null
+        if (identity.userId != target.senderId && identity.userId != target.recipientId) return null
+
+        val issuerPubKeyB64 = com.rumor.mesh.core.platform.Base64Codec.encode(identity.publicKeyBytes)
+        val signed = com.rumor.mesh.core.model.messageDeleteSignableBytes(messageId, issuerPubKeyB64)
+        val sigBytes = com.rumor.mesh.core.crypto.CryptoManager.sign(signed, identity.privateKeyBytes)
+        val payload = com.rumor.mesh.core.model.MessageDeletePayload(
+            messageId = messageId,
+            issuerPublicKey = issuerPubKeyB64,
+            signature = com.rumor.mesh.core.platform.Base64Codec.encode(sigBytes),
+        )
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.MESSAGE_DELETE,
+            hopsToLive = DEFAULT_BROADCAST_HOPS,
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(payload)),
+        )
+        // Purge locally first — the relayed broadcast will purge it
+        // everywhere else as it propagates.
+        messageStore.deleteById(messageId)
+        enqueueImmediate(msg)
+        return msg
+    }
+
     fun composeSelfPresence(
         mode: UserMode,
         recentlyExchangedWith: List<String> = emptyList(),
@@ -616,12 +652,39 @@ class GossipEngine(
             scope.launch { contactRepo.setPriorityPeer(msg.senderId, true) }
         }
 
+        // O40: signed delete-on-ACK request. Verify the issuer is the
+        // sender or recipient of the targeted message, then purge from
+        // the local store. The relay path below still propagates the
+        // MESSAGE_DELETE itself so downstream nodes also purge.
+        if (msg.type == MessageType.MESSAGE_DELETE) {
+            scope.launch { handleMessageDelete(msg) }
+        }
+
         // O41: identity rotation. The outer signature on `msg` is by the *new*
         // key (already verified above). We additionally check the *inner*
         // continuity signature against the existing contact's old public key —
         // proves the rotation is authorized by the old-key holder. Only then
         emitToInbox(msg)
         relay(msg, autoRelayIds)
+    }
+
+    private suspend fun handleMessageDelete(msg: RumorMessage) {
+        val json = msg.payload?.content ?: return
+        val payload = runCatching {
+            WireJson.decodeFromString<com.rumor.mesh.core.model.MessageDeletePayload>(json)
+        }.getOrNull() ?: return
+        val result = MessageDeleteVerifier.verify(payload) { id -> messageStore.getById(id) }
+        when (result) {
+            is MessageDeleteVerifier.Result.Authorized -> {
+                if (result.target != null) {
+                    messageStore.deleteById(payload.messageId)
+                    RumorLog.i("GossipEngine", "O40 delete applied for ${payload.messageId}")
+                }
+            }
+            is MessageDeleteVerifier.Result.Rejected -> {
+                RumorLog.w("GossipEngine", "O40 delete rejected: ${result.reason}")
+            }
+        }
     }
 
     /**
@@ -713,7 +776,8 @@ class GossipEngine(
             }
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
             MessageType.KEYWORD_FILTER_PUBLISH,
-            MessageType.SELF_PRESENCE -> {
+            MessageType.SELF_PRESENCE,
+            MessageType.MESSAGE_DELETE -> {
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
@@ -732,6 +796,7 @@ class GossipEngine(
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
             MessageType.KEYWORD_FILTER_PUBLISH,
             MessageType.SELF_PRESENCE,
+            MessageType.MESSAGE_DELETE,
             MessageType.BRIDGE_VOUCHED -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,

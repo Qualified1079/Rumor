@@ -27,6 +27,18 @@ class MessageStore(
     private val staticMode: StaticMode? = null,
     private val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
+    /**
+     * O40 — purge a specific id from the local store. The id stays in
+     * the dedup set so the same ciphertext can't be re-ingested via
+     * gossip exchange. No-op if the id isn't present.
+     */
+    suspend fun deleteById(id: String) {
+        messageRepo.deleteById(id)
+        // Dedup set already records the id (it was previously ingested).
+    }
+
+    /** Read access for callers that compose by id (O40 delete-on-ACK authorization check). */
+    suspend fun getById(id: String): RumorMessage? = messageRepo.getById(id)
     private val _sigFailures = AtomicCounter()
     private val _rateLimited = AtomicCounter()
     /** Count of messages dropped due to invalid Ed25519 signatures. */

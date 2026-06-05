@@ -194,6 +194,19 @@ enum class MessageType {
      * acceptable. Payload is a JSON-serialized [KeywordFilterList].
      */
     @SerialName("keyword_filter_publish") KEYWORD_FILTER_PUBLISH,
+    /**
+     * Signed delete-on-ACK request (O40). Recipient (or original sender)
+     * of a DIRECT message authorizes relays to purge the named messageId
+     * from their stores, tightening the forward-secrecy exposure window
+     * for stored ciphertext. Relays honor the request if (a) the signing
+     * sender matches the original DM's `senderId` OR matches its
+     * `recipientId`, AND (b) the signature verifies against the
+     * stated `senderPublicKey`. Payload is a JSON-serialized
+     * [com.rumor.mesh.core.model.MessageDeletePayload]. The deleted
+     * messageId is kept in the dedup set so a future replay can't
+     * re-ingest it.
+     */
+    @SerialName("message_delete") MESSAGE_DELETE,
 }
 
 @Serializable
@@ -277,7 +290,8 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.BLOCKLIST_DIFF,
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT,
-            MessageType.SELF_PRESENCE -> TrafficClass.INFRASTRUCTURE
+            MessageType.SELF_PRESENCE,
+            MessageType.MESSAGE_DELETE -> TrafficClass.INFRASTRUCTURE
             // A full blocklist snapshot is bulky sync data, not handshake-tier
             // traffic — only the small incremental diff stays INFRASTRUCTURE.
             MessageType.TRANSFER_METADATA,

@@ -63,6 +63,8 @@ class SentAtMsLintTest {
         "core/src/jvmTest/kotlin/com/rumor/mesh/core/fuzz/SeedCorpusTest.kt",
         // O76 ext-helper test stamps a blank RumorMessage with sentAtMs=0L
         "core/src/commonTest/kotlin/com/rumor/mesh/core/wire/CompressedPaddedExtTest.kt",
+        // O40 delete-verifier test stamps blank DM RumorMessages with sentAtMs=0L
+        "core/src/commonTest/kotlin/com/rumor/mesh/core/protocol/MessageDeleteVerifierTest.kt",
         // This test file itself references the symbol in regex form
         "core/src/jvmTest/kotlin/com/rumor/mesh/core/model/SentAtMsLintTest.kt",
     )

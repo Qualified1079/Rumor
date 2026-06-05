@@ -56,6 +56,10 @@ interface MessageDao {
     @Query("UPDATE messages SET wasRelayed = 1 WHERE id = :id")
     suspend fun markRelayed(id: String)
 
+    /** O40 — purge a specific id (signed-DELETE flow). No-op if id is absent. */
+    @Query("DELETE FROM messages WHERE id = :id")
+    suspend fun deleteById(id: String)
+
     @Query("SELECT COUNT(*) FROM messages")
     suspend fun count(): Int
 

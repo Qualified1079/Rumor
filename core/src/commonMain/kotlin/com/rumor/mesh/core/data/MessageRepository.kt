@@ -10,6 +10,8 @@ interface MessageRepository {
     suspend fun evictOldest(count: Int)
     suspend fun markRead(id: String)
     suspend fun markRelayed(id: String)
+    /** O40 — purge a specific id (signed-DELETE flow). No-op if id is absent. */
+    suspend fun deleteById(id: String)
     fun observeBroadcasts(limit: Int = 200): Flow<List<RumorMessage>>
     fun observeThread(localUserId: String, peerId: String, limit: Int = 500): Flow<List<RumorMessage>>
     fun observeUnread(userId: String): Flow<List<RumorMessage>>

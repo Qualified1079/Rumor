@@ -67,6 +67,9 @@ class TrafficClassInvariantTest {
     @Test fun `SELF_PRESENCE is INFRASTRUCTURE`() =
         assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.SELF_PRESENCE).trafficClass)
 
+    @Test fun `MESSAGE_DELETE is INFRASTRUCTURE`() =
+        assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.MESSAGE_DELETE).trafficClass)
+
     // ── TRANSFER_SETUP-tier types ────────────────────────────────────────────
 
     @Test fun `TRANSFER_METADATA is TRANSFER_SETUP`() =
@@ -160,6 +163,7 @@ class TrafficClassInvariantTest {
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT,
             MessageType.SELF_PRESENCE,
+            MessageType.MESSAGE_DELETE,
             MessageType.TRANSFER_METADATA,
             MessageType.BLOCKLIST_PUBLISH,
             MessageType.KEYWORD_FILTER_PUBLISH,
