@@ -121,6 +121,12 @@ class WireParserFuzzers {
         runCatching { WireJson.decodeFromString<MessageDeletePayload>(json) }
     }
 
+    @FuzzTest
+    fun fuzzPrekeyPublish(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.PrekeyPublish>(json) }
+    }
+
     /**
      * BloomFilterData.deserialize is the known-troublesome path (O13): a
      * caller-controlled `expectedItems` can drive multi-GB allocations. Fuzz

@@ -207,6 +207,17 @@ enum class MessageType {
      * re-ingest it.
      */
     @SerialName("message_delete") MESSAGE_DELETE,
+    /**
+     * Signed short-lived X25519 prekey broadcast (O38). Receiver
+     * publishes fresh prekeys for receiver-side forward secrecy.
+     * Senders cache the freshest valid prekey for each known
+     * contact and DH against it instead of the long-term static —
+     * a relay holding stored ciphertext for an expired prekey can
+     * no longer decrypt even if the recipient's long-term key
+     * later leaks. Payload is a JSON-serialized
+     * [com.rumor.mesh.core.model.PrekeyPublish].
+     */
+    @SerialName("prekey_publish") PREKEY_PUBLISH,
 }
 
 @Serializable
@@ -296,7 +307,8 @@ val RumorMessage.trafficClass: TrafficClass
             // traffic — only the small incremental diff stays INFRASTRUCTURE.
             MessageType.TRANSFER_METADATA,
             MessageType.BLOCKLIST_PUBLISH,
-            MessageType.KEYWORD_FILTER_PUBLISH -> TrafficClass.TRANSFER_SETUP
+            MessageType.KEYWORD_FILTER_PUBLISH,
+            MessageType.PREKEY_PUBLISH -> TrafficClass.TRANSFER_SETUP
             MessageType.CHUNK             -> TrafficClass.BULK
             MessageType.BROADCAST,
             MessageType.DIRECT,

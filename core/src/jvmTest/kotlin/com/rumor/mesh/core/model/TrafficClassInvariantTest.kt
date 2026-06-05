@@ -81,6 +81,9 @@ class TrafficClassInvariantTest {
     @Test fun `KEYWORD_FILTER_PUBLISH is TRANSFER_SETUP (bulky snapshot)`() =
         assertEquals(TrafficClass.TRANSFER_SETUP, msg(MessageType.KEYWORD_FILTER_PUBLISH).trafficClass)
 
+    @Test fun `PREKEY_PUBLISH is TRANSFER_SETUP`() =
+        assertEquals(TrafficClass.TRANSFER_SETUP, msg(MessageType.PREKEY_PUBLISH).trafficClass)
+
     // ── BULK-tier types ──────────────────────────────────────────────────────
 
     @Test fun `CHUNK is BULK regardless of size`() =
@@ -167,6 +170,7 @@ class TrafficClassInvariantTest {
             MessageType.TRANSFER_METADATA,
             MessageType.BLOCKLIST_PUBLISH,
             MessageType.KEYWORD_FILTER_PUBLISH,
+            MessageType.PREKEY_PUBLISH,
             MessageType.CHUNK,
             MessageType.BROADCAST,
             MessageType.DIRECT,

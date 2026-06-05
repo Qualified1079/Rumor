@@ -777,7 +777,8 @@ class GossipEngine(
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
             MessageType.KEYWORD_FILTER_PUBLISH,
             MessageType.SELF_PRESENCE,
-            MessageType.MESSAGE_DELETE -> {
+            MessageType.MESSAGE_DELETE,
+            MessageType.PREKEY_PUBLISH -> {
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
@@ -797,6 +798,7 @@ class GossipEngine(
             MessageType.KEYWORD_FILTER_PUBLISH,
             MessageType.SELF_PRESENCE,
             MessageType.MESSAGE_DELETE,
+            MessageType.PREKEY_PUBLISH,
             MessageType.BRIDGE_VOUCHED -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,
