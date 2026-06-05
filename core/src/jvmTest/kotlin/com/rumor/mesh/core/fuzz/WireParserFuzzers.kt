@@ -8,6 +8,8 @@ import com.rumor.mesh.core.model.BridgeVouchedPayload
 import com.rumor.mesh.core.model.Chunk
 import com.rumor.mesh.core.model.ChunkRequest
 import com.rumor.mesh.core.model.GossipPacket
+import com.rumor.mesh.core.model.KeywordFilterList
+import com.rumor.mesh.core.model.MessageDeletePayload
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.SelfPresencePayload
 import com.rumor.mesh.core.model.TransferCancel
@@ -105,6 +107,18 @@ class WireParserFuzzers {
     fun fuzzRbsrFrameWire(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
         runCatching { WireJson.decodeFromString<RbsrFrameWire>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzKeywordFilterList(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<KeywordFilterList>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzMessageDeletePayload(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<MessageDeletePayload>(json) }
     }
 
     /**
