@@ -79,8 +79,18 @@ class GossipSession(
         const val LOCAL_PROTOCOL_VERSION: Int = 1
         /** Highest wire-format version this build can parse. Session uses `min(mine, theirs)`. */
         const val LOCAL_MAX_PROTOCOL_VERSION: Int = 1
-        /** Range-Based Set Reconciliation capability flag (O42). */
+        /** Range-Based Set Reconciliation capability flag (O42), v1 — Rumor-original XOR-of-domain-tagged-SHA256. */
         const val RBSR_FEATURE: String = "rbsr-v1"
+        /**
+         * O42 v2 — NIP-77 / hoytech-compatible fingerprint formula.
+         * Wins free byte-compat with strfry and any NIP-77 relay (unblocks
+         * O54 transport plugins and O72 Nostr fallback reusing the RBSR
+         * machinery). Selected when BOTH peers advertise `rbsr-v2`;
+         * fallback to v1 if only one peer advertises v2; fallback to
+         * bloom if neither does. Stays out of [LOCAL_SUPPORTED_FEATURES]
+         * until promote-to-default sim gate (see CLAUDE.md O42).
+         */
+        const val RBSR_V2_FEATURE: String = "rbsr-v2"
         /**
          * Per-message compression + padding capability flag (O76).
          *
@@ -216,9 +226,19 @@ class GossipSession(
             // `rbsr-v1` in HELLO AND we have an `rbsrItems` snapshot wired through.
             // Falls back to bloom/idlist on any precondition miss for clean
             // backwards compatibility with v0.1 peers.
-            val useRbsr = supportedFeatures.contains(RBSR_FEATURE) &&
-                hello.supportedFeatures.contains(RBSR_FEATURE) &&
+            // v2 wins when both advertise it; v1 if both advertise v1; bloom otherwise.
+            val useRbsrV2 = supportedFeatures.contains(RBSR_V2_FEATURE) &&
+                hello.supportedFeatures.contains(RBSR_V2_FEATURE) &&
                 rbsrItems != null
+            val useRbsr = useRbsrV2 || (
+                supportedFeatures.contains(RBSR_FEATURE) &&
+                    hello.supportedFeatures.contains(RBSR_FEATURE) &&
+                    rbsrItems != null
+                )
+            val rbsrFormula = if (useRbsrV2)
+                com.rumor.mesh.core.sync.FingerprintFormula.V2_NIP77
+            else
+                com.rumor.mesh.core.sync.FingerprintFormula.V1_XOR
 
             val theyNeed: List<RumorMessage>
             val weNeedIds: List<String>
@@ -226,7 +246,7 @@ class GossipSession(
 
             if (useRbsr) {
                 val rbsr = com.rumor.mesh.core.sync.Rbsr(
-                    com.rumor.mesh.core.sync.SortedListRbsrStorage(rbsrItems!!),
+                    com.rumor.mesh.core.sync.SortedListRbsrStorage(rbsrItems!!, rbsrFormula),
                 )
                 val peerHas = HashSet<String>()
                 val peerNeeds = HashSet<String>()

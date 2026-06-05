@@ -72,8 +72,18 @@ interface RbsrStorage {
         Rbsr.xorFingerprint(items(lower, upper))
 }
 
-/** Sorted in-memory storage. Useful for tests and small in-memory deltas. */
-class SortedListRbsrStorage(items: Collection<RbsrItem>) : RbsrStorage {
+/**
+ * Sorted in-memory storage. Useful for tests and small in-memory deltas.
+ *
+ * [formula] selects the fingerprint algorithm: default [FingerprintFormula.V1_XOR]
+ * preserves existing behavior; [FingerprintFormula.V2_NIP77] is byte-compatible
+ * with hoytech/negentropy and Nostr NIP-77 (selected when peers negotiate
+ * `rbsr-v2` in HELLO `supportedFeatures`).
+ */
+class SortedListRbsrStorage(
+    items: Collection<RbsrItem>,
+    private val formula: FingerprintFormula = FingerprintFormula.V1_XOR,
+) : RbsrStorage {
     private val sorted: List<RbsrItem> = items.sorted()
 
     override fun items(lower: RbsrBound, upper: RbsrBound): List<RbsrItem> =
@@ -86,6 +96,9 @@ class SortedListRbsrStorage(items: Collection<RbsrItem>) : RbsrStorage {
                 upper == RbsrBound.MAX
             lowOk && highOk
         }
+
+    override fun fingerprint(lower: RbsrBound, upper: RbsrBound): ByteArray =
+        Rbsr.fingerprint(items(lower, upper), formula)
 }
 
 /** Frame exchanged between peers during reconciliation. */
