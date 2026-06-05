@@ -1,0 +1,33 @@
+Rumor is a messenger that runs entirely on the devices using it. There is
+no server, no account, no phone number. Two phones running Rumor talk
+directly to each other over Bluetooth or Wi-Fi Direct. If a third phone is
+nearby, it relays messages between phones that can't reach each other
+directly — your message hops device to device until it arrives.
+
+This means Rumor keeps working when the internet doesn't: power outages,
+crowded events that overload cell towers, areas without coverage, or
+networks that have been deliberately cut. As long as there are phones
+running Rumor within radio range, messages move.
+
+Features:
+
+- Direct messages and broadcasts to nearby contacts
+- Group "Rooms" — text channels you can join, leave, or create
+- Bridges to existing radio networks (Meshtastic, MeshCore)
+- File transfer with pause and resume
+- Plugin support for extensions like content filters and bridges
+- End-to-end encryption on every direct message (X25519 + AES-GCM,
+  Ed25519 signatures)
+- No tracking, no telemetry, no third-party services
+
+What Rumor is not:
+
+- Not anonymous against an adversary in radio range. Anyone who can hear
+  Bluetooth can see that your device is broadcasting, the same way they
+  can see any other Bluetooth device.
+- Not a replacement for Signal when you have internet. Rumor's strength
+  is working without infrastructure.
+- Not a guarantee of delivery. Messages reach as far as the mesh extends.
+
+Rumor is free and open source. Built to work without depending on any
+particular company, server, or piece of infrastructure.
