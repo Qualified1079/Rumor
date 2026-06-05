@@ -8,6 +8,8 @@ import com.rumor.mesh.core.data.BlockEntryRepository
 import com.rumor.mesh.core.data.BlocklistEntryRepository
 import com.rumor.mesh.core.data.FilterSubscriptionRepository
 import com.rumor.mesh.core.data.KeywordFilterListRepository
+import com.rumor.mesh.core.data.ScheduledMessageRepository
+import com.rumor.mesh.core.scheduling.MessageScheduler
 import com.rumor.mesh.core.filter.KeywordFilterGossipBridge
 import com.rumor.mesh.core.filter.KeywordFilterPublisher
 import com.rumor.mesh.core.filter.KeywordFilterSubscriber
@@ -44,6 +46,7 @@ import com.rumor.mesh.data.adapter.BlockEntryRepositoryAdapter
 import com.rumor.mesh.data.adapter.BlocklistEntryRepositoryAdapter
 import com.rumor.mesh.data.adapter.FilterSubscriptionRepositoryAdapter
 import com.rumor.mesh.data.adapter.KeywordFilterListRepositoryAdapter
+import com.rumor.mesh.data.adapter.ScheduledMessageRepositoryAdapter
 import com.rumor.mesh.data.adapter.ChunkRepositoryAdapter
 import com.rumor.mesh.data.adapter.ContactRepositoryAdapter
 import com.rumor.mesh.data.adapter.MessageRepositoryAdapter
@@ -104,6 +107,8 @@ val appModule = module {
     single { get<RumorDatabase>().filterSubscriptionDao() }
     single<KeywordFilterListRepository>  { KeywordFilterListRepositoryAdapter(get()) }
     single<FilterSubscriptionRepository> { FilterSubscriptionRepositoryAdapter(get()) }
+    single { get<RumorDatabase>().scheduledMessageDao() }
+    single<ScheduledMessageRepository>   { ScheduledMessageRepositoryAdapter(get()) }
 
     // ── Identity ──────────────────────────────────────────────────────────────
     single { IdentityManager(androidContext()) }
@@ -144,6 +149,9 @@ val appModule = module {
     single { KeywordFilterPublisher(get<IdentityProvider>()) }
     single { KeywordFilterSubscriber(get<KeywordFilterListRepository>(), get<FilterSubscriptionRepository>()) }
     single { KeywordFilterGossipBridge(get(), get(), get()) }
+
+    // ── Scheduled messages (O22 / G15) ────────────────────────────────────────
+    single { MessageScheduler(get<ScheduledMessageRepository>(), get<GossipEngine>(), get<ContactRepository>()) }
 
     // ── Transport ─────────────────────────────────────────────────────────────
     single { BleDiscoveryManager(androidContext(), get<StaticMode>()) }

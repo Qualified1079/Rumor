@@ -82,6 +82,20 @@ class GossipSession(
         /** Range-Based Set Reconciliation capability flag (O42). */
         const val RBSR_FEATURE: String = "rbsr-v1"
         /**
+         * Per-message compression + padding capability flag (O76).
+         *
+         * Not yet honored by the compose path — gating it on requires the
+         * AEAD-AD wiring documented in `core/wire/CompressedPaddedExt.kt`
+         * to land first. The receive path will treat `_ext.c = true` as a
+         * signal to call `CompressedPaddedCodec.decodeFromWire`, but the
+         * receive integration is also pending.
+         *
+         * Stays out of [LOCAL_SUPPORTED_FEATURES] until both halves of the
+         * integration ship — advertising support without honoring it
+         * would silently break peers that DO honor it.
+         */
+        const val COMPRESSION_FEATURE: String = "compression-v1"
+        /**
          * Capability flags this build advertises. Empty for v0.1 production —
          * RBSR ([RBSR_FEATURE]) is opt-in per session for now via the
          * `supportedFeatures` constructor parameter, until wire-locked against

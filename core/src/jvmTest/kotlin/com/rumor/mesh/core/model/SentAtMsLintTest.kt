@@ -61,6 +61,8 @@ class SentAtMsLintTest {
         // Test fixtures (stamping demo messages, fuzz seed JSON literals)
         "core/src/jvmTest/kotlin/com/rumor/mesh/core/model/TrafficClassInvariantTest.kt",
         "core/src/jvmTest/kotlin/com/rumor/mesh/core/fuzz/SeedCorpusTest.kt",
+        // O76 ext-helper test stamps a blank RumorMessage with sentAtMs=0L
+        "core/src/commonTest/kotlin/com/rumor/mesh/core/wire/CompressedPaddedExtTest.kt",
         // This test file itself references the symbol in regex form
         "core/src/jvmTest/kotlin/com/rumor/mesh/core/model/SentAtMsLintTest.kt",
     )
