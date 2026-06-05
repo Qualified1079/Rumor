@@ -89,13 +89,26 @@ object CryptoManager {
         }
     }
 
-    fun aesGcmEncrypt(plaintext: ByteArray, keyBytes: ByteArray): AesGcmCiphertext {
+    /**
+     * AES-256-GCM encrypt with optional associated data ([aad]).
+     *
+     * Empty [aad] (the default, and the legacy behavior) produces output
+     * identical to a pre-AAD call — AES-GCM with empty AAD is defined
+     * equivalent to AES-GCM without AAD. Non-empty AAD binds the bytes
+     * to the authentication tag; the same [aad] must be supplied at
+     * decrypt time or the tag check fails.
+     *
+     * Used by O76 to bind `originalLength` (the pre-pad post-compress
+     * byte count) so a relay can't tamper with it without breaking
+     * the message.
+     */
+    fun aesGcmEncrypt(plaintext: ByteArray, keyBytes: ByteArray, aad: ByteArray = ByteArray(0)): AesGcmCiphertext {
         val iv = PlatformRandom.nextBytes(12)
-        return AesGcmCiphertext(iv, PlatformCrypto.aesGcmEncrypt(plaintext, keyBytes, iv))
+        return AesGcmCiphertext(iv, PlatformCrypto.aesGcmEncrypt(plaintext, keyBytes, iv, aad))
     }
 
-    fun aesGcmDecrypt(ct: AesGcmCiphertext, keyBytes: ByteArray): ByteArray =
-        PlatformCrypto.aesGcmDecrypt(ct.ciphertext, keyBytes, ct.iv)
+    fun aesGcmDecrypt(ct: AesGcmCiphertext, keyBytes: ByteArray, aad: ByteArray = ByteArray(0)): ByteArray =
+        PlatformCrypto.aesGcmDecrypt(ct.ciphertext, keyBytes, ct.iv, aad)
 
     // ── PBKDF2 passphrase → key ──────────────────────────────────────────────
 

@@ -53,7 +53,7 @@ class GoldenVectorsPrinter {
         val aesKey = ByteArray(32) { (it * 7).toByte() }
         val aesIv = ByteArray(12) { (it * 13).toByte() }
         val plain = "the quick brown fox jumps over the lazy dog".encodeToByteArray()
-        val ct = PlatformCrypto.aesGcmEncrypt(plain, aesKey, aesIv)
+        val ct = PlatformCrypto.aesGcmEncrypt(plain, aesKey, aesIv, ByteArray(0))
         println("aesgcm_ct_demo=" + ct.toHex())
 
         // Ed25519 sign with a known private key. Note Ed25519 is deterministic
@@ -233,7 +233,7 @@ class CryptoGoldenVectorsTest {
         val key = ByteArray(32) { (it * 7).toByte() }
         val iv = ByteArray(12) { (it * 13).toByte() }
         val plain = "the quick brown fox jumps over the lazy dog".encodeToByteArray()
-        val ct = PlatformCrypto.aesGcmEncrypt(plain, key, iv)
+        val ct = PlatformCrypto.aesGcmEncrypt(plain, key, iv, ByteArray(0))
         assertEquals(
             "3c060db30e7df1ce9dd7be634b7cfb8d722a13cdf69485ccf86df1a47a11700d" +
                 "bbe409124d9a7ab44c6d572fdefe6ff3466e7bbd502586adc4e828",
@@ -242,6 +242,32 @@ class CryptoGoldenVectorsTest {
                 "Includes the 128-bit GCM tag — any change in tag width / cipher " +
                 "params breaks DM decryption."
         )
+    }
+
+    @Test
+    fun `aes256gcm with non-empty AAD differs from empty AAD path`() {
+        val key = ByteArray(32) { (it * 7).toByte() }
+        val iv = ByteArray(12) { (it * 13).toByte() }
+        val plain = "the quick brown fox jumps over the lazy dog".encodeToByteArray()
+        val noAad = PlatformCrypto.aesGcmEncrypt(plain, key, iv, ByteArray(0))
+        val withAad = PlatformCrypto.aesGcmEncrypt(plain, key, iv, "rumor-o76:42".encodeToByteArray())
+        // AES-GCM ciphertext bytes are identical (AAD doesn't affect the
+        // CTR-mode body); only the 16-byte tag changes. Verify the body
+        // matches and the tag differs.
+        val bodyLen = plain.size
+        assertEquals(noAad.sliceArray(0 until bodyLen).toHex(), withAad.sliceArray(0 until bodyLen).toHex(),
+            "GCM body should be AAD-invariant (CTR mode)")
+        // Tag is the last 16 bytes.
+        val tagNoAad = noAad.sliceArray(bodyLen until noAad.size).toHex()
+        val tagWithAad = withAad.sliceArray(bodyLen until withAad.size).toHex()
+        kotlin.test.assertNotEquals(tagNoAad, tagWithAad,
+            "AAD should bind to the tag — same plaintext + key + IV but different AAD must yield a different tag.")
+        // Pinned tag with this specific AAD — drift means the iOS Swift bridge
+        // is passing AAD differently than JVM's Cipher.updateAAD.
+        assertEquals("8636cbbbccc7c802b1cc8f283fba1c52", tagWithAad,
+            "AES-256-GCM AAD-bearing tag drifted — check that the AAD is fed " +
+                "via updateAAD (JVM) or AES.GCM.seal(_, authenticating:) (iOS) " +
+                "BEFORE the doFinal/seal call.")
     }
 
     private fun ByteArray.toHex(): String =

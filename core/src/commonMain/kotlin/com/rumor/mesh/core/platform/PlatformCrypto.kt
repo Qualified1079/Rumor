@@ -43,11 +43,16 @@ expect object PlatformCrypto {
     /**
      * AES-256-GCM encrypt. [iv] is 12 bytes, [key] is 32 bytes. Tag is
      * appended to the ciphertext (16 bytes, 128-bit tag, the JCE default).
+     *
+     * [aad] is optional associated data — bytes covered by the tag but not
+     * encrypted. Empty AAD produces output identical to a no-AAD call
+     * (AES-GCM definition); pass `EMPTY_AAD` (or `ByteArray(0)`) for
+     * the legacy path. Used by O76 to bind `originalLength` to the tag.
      */
-    fun aesGcmEncrypt(plaintext: ByteArray, key: ByteArray, iv: ByteArray): ByteArray
+    fun aesGcmEncrypt(plaintext: ByteArray, key: ByteArray, iv: ByteArray, aad: ByteArray): ByteArray
 
-    /** Inverse of [aesGcmEncrypt]; throws on auth failure. */
-    fun aesGcmDecrypt(ciphertext: ByteArray, key: ByteArray, iv: ByteArray): ByteArray
+    /** Inverse of [aesGcmEncrypt]; throws on auth failure. [aad] must match what encrypt used. */
+    fun aesGcmDecrypt(ciphertext: ByteArray, key: ByteArray, iv: ByteArray, aad: ByteArray): ByteArray
 
     // ── PBKDF2-HMAC-SHA256 ───────────────────────────────────────────────────
 

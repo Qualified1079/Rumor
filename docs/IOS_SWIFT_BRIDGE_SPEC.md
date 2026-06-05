@@ -71,15 +71,17 @@ import Foundation
 
     /// Ciphertext returned is `body || tag` (16-byte 128-bit tag appended),
     /// matching the JVM `javax.crypto.Cipher` GCM convention. The IV is NOT
-    /// prefixed — it's passed alongside.
-    @objc public static func aesGcmEncrypt(_ plaintext: Data, key: Data, iv: Data) -> Data {
+    /// prefixed — it's passed alongside. [aad] is associated data covered
+    /// by the tag but not encrypted; pass empty `Data()` for the legacy
+    /// path. Used by O76 to bind originalLength to the tag.
+    @objc public static func aesGcmEncrypt(_ plaintext: Data, key: Data, iv: Data, aad: Data) -> Data {
         let k = SymmetricKey(data: key)
         let nonce = try! AES.GCM.Nonce(data: iv)
-        let sealed = try! AES.GCM.seal(plaintext, using: k, nonce: nonce)
+        let sealed = try! AES.GCM.seal(plaintext, using: k, nonce: nonce, authenticating: aad)
         return sealed.ciphertext + sealed.tag
     }
 
-    @objc public static func aesGcmDecrypt(_ ciphertext: Data, key: Data, iv: Data) -> Data {
+    @objc public static func aesGcmDecrypt(_ ciphertext: Data, key: Data, iv: Data, aad: Data) -> Data {
         let k = SymmetricKey(data: key)
         let nonce = try! AES.GCM.Nonce(data: iv)
         // Split body | tag (tag is the last 16 bytes per GCM convention)
@@ -87,7 +89,7 @@ import Foundation
         let body = ciphertext.subdata(in: 0..<tagStart)
         let tag = ciphertext.subdata(in: tagStart..<ciphertext.count)
         let box = try! AES.GCM.SealedBox(nonce: nonce, ciphertext: body, tag: tag)
-        return try! AES.GCM.open(box, using: k)
+        return try! AES.GCM.open(box, using: k, authenticating: aad)
     }
 }
 ```

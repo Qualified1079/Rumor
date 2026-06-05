@@ -58,9 +58,9 @@ actual object PlatformCrypto {
 
     actual fun x25519Agreement(ourPrivateKey: ByteArray, theirPublicKey: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
 
-    actual fun aesGcmEncrypt(plaintext: ByteArray, key: ByteArray, iv: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
+    actual fun aesGcmEncrypt(plaintext: ByteArray, key: ByteArray, iv: ByteArray, aad: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
 
-    actual fun aesGcmDecrypt(ciphertext: ByteArray, key: ByteArray, iv: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
+    actual fun aesGcmDecrypt(ciphertext: ByteArray, key: ByteArray, iv: ByteArray, aad: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
 
     actual fun pbkdf2HmacSha256(passphrase: String, salt: ByteArray, iterations: Int, outputBits: Int): ByteArray {
         val outLen = outputBits / 8

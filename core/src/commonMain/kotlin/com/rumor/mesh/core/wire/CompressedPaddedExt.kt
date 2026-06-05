@@ -24,23 +24,22 @@ import kotlinx.serialization.json.JsonPrimitive
  * `_ext` map is JSON-encoded on the wire — 4 bytes per key adds up at
  * scale. Field names are reserved forever per `RENAMED_FIELDS_NEVER_REUSE.md`.
  *
- * **Security gate before flipping the compose-path switch:**
+ * **AEAD associated-data binding (now wired):**
  *
- * `cl` (originalLength) MUST ride in AEAD-protected associated data
- * before this metadata can be trusted across the network. Today
- * `CryptoManager.aesGcmEncrypt` does not accept associated data; adding
- * it requires:
- *   - `PlatformCrypto.aesGcmEncrypt` / `aesGcmDecrypt` expect/actual
- *     gains an `aad: ByteArray` param.
- *   - JVM actual passes via `Cipher.updateAAD(aad)`.
- *   - iOS Swift bridge `AES.GCM.seal(_, authenticating: aad)`.
- *   - `CryptoGoldenVectorsTest` pins a new AAD-bearing vector.
+ * `cl` (originalLength) rides in AEAD-protected associated data so a
+ * relay cannot tamper with it. `CryptoManager.aesGcmEncrypt(plain, key,
+ * aad)` and `aesGcmDecrypt(ct, key, aad)` accept the AAD; the JVM
+ * actual feeds it via `Cipher.updateAAD`, the iOS Swift bridge via
+ * `AES.GCM.seal(_, authenticating: aad)`. `CryptoGoldenVectorsTest`
+ * pins a vector for the AAD-bearing path so a drift across platforms
+ * surfaces on the first iOS test run.
  *
- * Until that lands, a relay can flip `cl` on a passing message — at
- * worst causing a receive-side decode failure (the inflate budget
- * mismatch or a truncated stream), at best wasting CPU. Not an
- * integrity attack on the message contents (AEAD on the body still
- * has to verify), but a DoS opportunity worth closing first.
+ * Canonical AAD format for O76:
+ * ```
+ * "rumor-o76:" || ASCII-decimal(originalLength)
+ * ```
+ * Compose-path callers MUST use this exact serialization or the
+ * receiver's tag check fails. See [compressionAad].
  *
  * **Why placed in `core/wire/` and not `core/model/Message.kt`:**
  *
@@ -79,6 +78,14 @@ val RumorMessage.compressionBucketIndex: Int
 val RumorMessage.compressionOriginalLength: Int
     get() = (ext?.get(CompressedPaddedExt.KEY_ORIGINAL_LENGTH) as? JsonPrimitive)
         ?.content?.toIntOrNull() ?: -1
+
+/**
+ * Canonical AAD bytes for an O76-compressed payload. Bound to the AEAD
+ * tag so a relay can't flip the originalLength in `_ext` without
+ * breaking decryption. The format MUST be byte-stable across platforms.
+ */
+fun compressionAad(originalLength: Int): ByteArray =
+    "rumor-o76:$originalLength".encodeToByteArray()
 
 /**
  * Set the three compression-metadata fields in `_ext`, returning a new
