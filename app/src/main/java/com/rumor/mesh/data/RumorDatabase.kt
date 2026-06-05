@@ -27,8 +27,10 @@ import com.rumor.mesh.BuildConfig
     //     keyword-filter persistence (JSON-blob storage shape — see
     //     KeywordFilterEntities.kt for rationale).
     // v7: added ScheduledMessageEntity for O22 / G15 schedule persistence.
+    // v8: added ContactEntity.lastKnownSupportedFeatures (JSON string)
+    //     for O76 capability-negotiation cache.
     // Dev uses fallbackToDestructiveMigration so no migration code needed.
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

@@ -24,14 +24,16 @@ class ContactRepositoryAdapter(private val dao: ContactDao) : ContactRepository 
     override suspend fun getAutoRelayContacts(): List<Contact> = dao.getAutoRelayContacts().map(ContactEntity::toModel)
     override suspend fun setPriorityPeer(userId: String, enabled: Boolean) = dao.setPriorityPeer(userId, enabled)
     override suspend fun getPriorityPeers(): List<Contact> = dao.getPriorityPeers().map(ContactEntity::toModel)
+    override suspend fun setSupportedFeatures(userId: String, jsonEncodedFeatures: String) =
+        dao.setSupportedFeatures(userId, jsonEncodedFeatures)
 }
 
 private fun Contact.toEntity() = ContactEntity(
     userId, publicKey, displayName, isVerified, autoRelay, alwaysSave, willingToCache, firstSeenMs, lastSeenMs,
-    isPriorityPeer,
+    isPriorityPeer, lastKnownSupportedFeatures,
 )
 
 private fun ContactEntity.toModel() = Contact(
     userId, publicKey, displayName, isVerified, autoRelay, alwaysSave, willingToCache, firstSeenMs, lastSeenMs,
-    isPriorityPeer,
+    isPriorityPeer, lastKnownSupportedFeatures,
 )

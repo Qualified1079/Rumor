@@ -52,6 +52,12 @@ data class ContactEntity(
     val firstSeenMs: Long,
     val lastSeenMs: Long,
     val isPriorityPeer: Boolean = false,
+    /**
+     * O76 / capability cache — JSON-encoded peer HELLO supportedFeatures.
+     * Empty string when unknown. See `Contact.lastKnownSupportedFeatures`
+     * docstring for rationale.
+     */
+    val lastKnownSupportedFeatures: String = "",
 )
 
 @Entity(

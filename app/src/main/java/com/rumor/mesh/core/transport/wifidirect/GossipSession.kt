@@ -124,7 +124,7 @@ class GossipSession(
          * RBSR path; production transport leaves it empty so the bloom path
          * remains canonical.
          */
-        val LOCAL_SUPPORTED_FEATURES: List<String> = emptyList()
+        val LOCAL_SUPPORTED_FEATURES: List<String> = listOf(COMPRESSION_FEATURE)
     }
 
     data class SessionResult(
@@ -144,6 +144,14 @@ class GossipSession(
          * for diversity-aware relay selection.
          */
         val peerOverlapFraction: Float = 0.5f,
+        /**
+         * O76 / capability cache. The peer's HELLO `supportedFeatures` as
+         * received in this session. Caller writes this into
+         * `Contact.lastKnownSupportedFeatures` (JSON-encoded) so future
+         * compose paths can gate on per-feature support without a fresh
+         * handshake.
+         */
+        val peerSupportedFeatures: List<String> = emptyList(),
     )
 
     suspend fun run(): SessionResult? = withTimeout(SESSION_TIMEOUT_MS) {
@@ -357,6 +365,7 @@ class GossipSession(
                 durationMs          = duration,
                 bytesTransferred    = bytesTransferred,
                 peerOverlapFraction = overlapFraction,
+                peerSupportedFeatures = hello.supportedFeatures,
             )
         } catch (e: Exception) {
             RumorLog.w(TAG, "Session error", e)

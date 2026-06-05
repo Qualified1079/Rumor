@@ -39,6 +39,7 @@ import com.rumor.mesh.core.platform.Uuid
 import com.rumor.mesh.core.platform.ConcurrentMap
 import com.rumor.mesh.core.platform.AtomicCounter
 import com.rumor.mesh.core.wire.WireJson
+import com.rumor.mesh.core.wire.withCompressionMetadata
 
 private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_HOPS = 7
@@ -160,6 +161,19 @@ class GossipEngine(
                     overlapFraction  = result.peerOverlapFraction,
                 )
                 onlineStatusTracker.recordDirectContact(result.peerUserId)
+                // O76 capability cache — store the peer's advertised features
+                // for use by future compose-side feature gating. JSON-encoded
+                // list; setSupportedFeatures is a no-op if the contact isn't
+                // on file yet.
+                if (result.source == ExchangeSource.WIFI_DIRECT) {
+                    val json = WireJson.encodeToString(
+                        kotlinx.serialization.builtins.ListSerializer(
+                            kotlinx.serialization.serializer<String>()
+                        ),
+                        result.peerSupportedFeatures,
+                    )
+                    contactRepo.setSupportedFeatures(result.peerUserId, json)
+                }
             }
             onlineStatusTracker.mergeRemoteStatus(result.peerOnlineUsers)
 
@@ -285,15 +299,34 @@ class GossipEngine(
         val envelope = dmEnvelopeRegistry.forRecipient(recipientId)
         val encryptedPayload: String
         val rawCiphertext: ByteArray?
+        // O76 — set only on the native-envelope path when compression succeeded.
+        var compressionMeta: Pair<Int, Int>? = null
         if (envelope != null) {
             val ct = envelope.encrypt(recipientId, recipientPublicKey, text.toByteArray(Charsets.UTF_8))
             encryptedPayload = "${envelope.envelopeId}:${ct.toBase64()}"
             rawCiphertext = ct
         } else {
+            // O76 compose-side flip: compress + pad TEXT plaintext, AEAD with
+            // compressionAad as associated data so a relay cannot tamper with
+            // originalLength. compression-v1 is in LOCAL_SUPPORTED_FEATURES so
+            // every Rumor build can decode; no per-recipient gate needed for v1.
+            val plaintextBytes = text.toByteArray(Charsets.UTF_8)
+            val encoded = com.rumor.mesh.core.wire.CompressedPaddedCodec.encodeForWire(plaintextBytes)
             val ephemeral = CryptoManager.generateX25519KeyPair()
             val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientPublicKey)
-            val ct = CryptoManager.aesGcmEncrypt(text.toByteArray(Charsets.UTF_8), sharedKey)
-            encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
+            if (encoded != null) {
+                val aad = com.rumor.mesh.core.wire.compressionAad(encoded.originalLength)
+                val ct = CryptoManager.aesGcmEncrypt(encoded.bytes, sharedKey, aad)
+                encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
+                compressionMeta = Pair(encoded.bucketIndex, encoded.originalLength)
+            } else {
+                // Plaintext exceeded MAX_SINGLE_MESSAGE post-compress; fall back to
+                // uncompressed-and-unpadded path. Chunker fallback for >64 KB
+                // compressed text is the open follow-up.
+                val ct = CryptoManager.aesGcmEncrypt(plaintextBytes, sharedKey)
+                encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
+                compressionMeta = null
+            }
             rawCiphertext = null
             // O39 sender-side FS: actively zero the ephemeral private and the derived
             // AES key before they wait for GC. Bytes that live in the heap until GC
@@ -302,13 +335,16 @@ class GossipEngine(
             ephemeral.privateKeyBytes.fill(0)
             sharedKey.fill(0)
         }
-        val msg = buildMessage(
+        val baseMsg = buildMessage(
             identity = identity,
             type = MessageType.DIRECT,
             hopsToLive = DEFAULT_DIRECT_HOPS,
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
+        val msg = compressionMeta?.let { (bucket, origLen) ->
+            baseMsg.withCompressionMetadata(bucket, origLen)
+        } ?: baseMsg
         sentDmPlaintext.put(msg.id, text)
         if (envelope != null && rawCiphertext != null) {
             // Bridged DM: the bridge plugin picks this up via outboundBridgedDm and

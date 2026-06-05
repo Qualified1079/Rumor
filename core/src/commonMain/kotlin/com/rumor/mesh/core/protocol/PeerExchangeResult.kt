@@ -41,6 +41,13 @@ data class PeerExchangeResult(
      * Propagated to [NeighborStore] for diversity-aware peer selection.
      */
     val peerOverlapFraction: Float = 0.5f,
+    /**
+     * O76 / capability cache — peer's HELLO `supportedFeatures` from this
+     * exchange. Consumer caches into `Contact.lastKnownSupportedFeatures`
+     * so future compose paths can gate on per-feature support without a
+     * fresh handshake. Empty for non-WIFI_DIRECT sources.
+     */
+    val peerSupportedFeatures: List<String> = emptyList(),
 )
 
 enum class ExchangeSource {

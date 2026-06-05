@@ -19,4 +19,11 @@ interface ContactRepository {
     suspend fun getAutoRelayContacts(): List<Contact>
     suspend fun setPriorityPeer(userId: String, enabled: Boolean)
     suspend fun getPriorityPeers(): List<Contact>
+    /**
+     * O76 / capability cache — store the peer's HELLO supportedFeatures
+     * (JSON-encoded list) for this userId. Called by `GossipSession` on
+     * every completed handshake. No-op if the contact isn't on file
+     * (the cache is meaningful only for known contacts).
+     */
+    suspend fun setSupportedFeatures(userId: String, jsonEncodedFeatures: String)
 }

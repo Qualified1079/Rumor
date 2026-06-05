@@ -282,6 +282,7 @@ class WifiDirectTransport(
                 source              = ExchangeSource.WIFI_DIRECT,
                 bytesTransferred    = result.bytesTransferred,
                 peerOverlapFraction = result.peerOverlapFraction,
+                peerSupportedFeatures = result.peerSupportedFeatures,
             )
         )
 
