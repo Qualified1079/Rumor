@@ -92,7 +92,38 @@ reason.
   rereads `CLAUDE.md`. No automated way around this short of polling on
   every turn, which is wasteful.
 
-## Quick checklist before each commit
+## Async handoff via `docs/HANDOFF.md`
+
+When the other instance is asleep (not running) and you want to leave
+work in a state another instance can pick up cleanly later, write a
+**handoff note** to `docs/HANDOFF.md` describing:
+
+- What you closed this session (commit hashes + row numbers).
+- What you started but didn't finish (commit hash, what's left).
+- What you considered and rejected (so the next instance doesn't redo
+  the same dead-end analysis).
+- Suggested next moves with explicit reasoning, not bare lists. The
+  next instance can override but should be able to understand WHY.
+- Anything in the CLAUDE.md backlog that the current state has rendered
+  stale (a row you partially closed, a count that's drifted).
+
+The file is overwritten by each session — it is a per-handoff snapshot,
+not a rolling log. Git history is the rolling log.
+
+**When to update HANDOFF.md:**
+
+- At the end of a session where the user signalled the other instance
+  might wake up next.
+- When the user explicitly says "leave a note for the other instance."
+- NOT during steady-state co-working with both instances live — that's
+  what commit messages are for.
+
+The other instance, when it wakes, should `cat docs/HANDOFF.md` as one
+of its first reads — alongside `CLAUDE.md` and the recent `git log`.
+After absorbing the handoff, it can clear or rewrite the file with its
+own current state.
+
+
 
 - [ ] `git fetch && git log --oneline HEAD..origin/<branch>` — clean?
 - [ ] If new commits exist, `git pull --ff-only` and re-read the new
