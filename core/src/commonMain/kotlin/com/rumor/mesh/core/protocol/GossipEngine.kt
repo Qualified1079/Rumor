@@ -860,11 +860,17 @@ class GossipEngine(
             scope.launch { handleRoomMessage(msg) }
         }
 
-        // O41: identity rotation. The outer signature on `msg` is by the *new*
-        // key (already verified above). We additionally check the *inner*
-        // continuity signature against the existing contact's old public key —
-        // proves the rotation is authorized by the old-key holder. Only then
-        emitToInbox(msg)
+        // O79: ROOM_MESSAGE inbox emission is handled by handleRoomMessage above
+        // ONLY on subscription match. Skip the unconditional emit here so that
+        // non-subscribed nodes (relay-only) don't surface the message in their
+        // local inbox. Relay still happens unconditionally below.
+        if (msg.type != MessageType.ROOM_MESSAGE) {
+            // O41: identity rotation. The outer signature on `msg` is by the *new*
+            // key (already verified above). We additionally check the *inner*
+            // continuity signature against the existing contact's old public key —
+            // proves the rotation is authorized by the old-key holder. Only then
+            emitToInbox(msg)
+        }
         relay(msg, autoRelayIds)
     }
 

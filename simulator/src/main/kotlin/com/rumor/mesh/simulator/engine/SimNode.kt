@@ -60,6 +60,8 @@ class SimNode(
     private val transferRepo    = InMemoryTransferRepository()
     private val chunkRepo       = InMemoryChunkRepository()
     private val blockEntryRepo  = InMemoryBlockEntryRepository()
+    /** O79 — per-node room-subscription store, in-memory. Exposed so scenarios can add subscriptions. */
+    val roomSubscriptionRepo    = com.rumor.mesh.simulator.data.InMemoryRoomSubscriptionRepository()
     private val subscribedRepo  = InMemorySubscribedBlocklistRepository()
     private val blocklistRepo   = InMemoryBlocklistEntryRepository()
 
@@ -71,6 +73,28 @@ class SimNode(
     private val scheduler       = Scheduler()
     private val blockManager    = BlockManager(blockEntryRepo, subscribedRepo, blocklistRepo)
     private val inboxFilter     = PermissiveInboxFilter()
+
+    /**
+     * O79 receive-side subscription provider for ROOM_MESSAGE dispatch.
+     * Reads from [roomSubscriptionRepo] on every inbound room message;
+     * returns null for the X25519 static private (sim nodes don't yet
+     * derive X25519 from Ed25519 — same Rumor-wide gap noted in CLAUDE.md
+     * O79). OPEN rooms work end-to-end in scenarios; ENCRYPTED rooms get
+     * matched at the tag layer but the decrypt step is skipped.
+     */
+    private val roomSubscriptionProvider = object : GossipEngine.RoomSubscriptionProvider {
+        override fun openRoomIds(): List<String> = kotlinx.coroutines.runBlocking {
+            roomSubscriptionRepo.getAll()
+                .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.OPEN }
+                .map { it.roomId }
+        }
+        override fun encryptedRoomSubscriptions(): List<com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription> = kotlinx.coroutines.runBlocking {
+            roomSubscriptionRepo.getAll()
+                .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.ENCRYPTED }
+                .map { com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription(it.roomId, it.routingKey) }
+        }
+        override fun localX25519StaticPrivate(): ByteArray? = null
+    }
 
     val gossipEngine = GossipEngine(
         messageStore    = messageStore,
@@ -89,6 +113,7 @@ class SimNode(
         relayBatchMinWindowMs = 1L,
         relayBatchSpreadMs    = 1L,
         clock           = clock,
+        roomSubscriptionProvider = roomSubscriptionProvider,
     )
 
     val transferSender = TransferSender(gossipEngine, identityProvider, transferRepo, chunkRepo)
