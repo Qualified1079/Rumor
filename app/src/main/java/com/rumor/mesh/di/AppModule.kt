@@ -136,7 +136,20 @@ val appModule = module {
     single { DmEnvelopeRegistry() }
     single { com.rumor.mesh.core.protocol.CanaryMetrics() }
     single<com.rumor.mesh.core.Clock> { com.rumor.mesh.core.SystemClock }
-    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), canaryMetrics = get(), dmEnvelopeRegistry = get()) }
+    // O79 — no-op room-subscription provider until the
+    // RoomSubscriptionRepository adapter is wired in. Empty lists +
+    // null X25519 mean: ROOM_MESSAGE receive dispatch is structurally
+    // a no-op, but the relay path still propagates room messages
+    // through this node for the rest of the mesh's benefit.
+    single<GossipEngine.RoomSubscriptionProvider> {
+        object : GossipEngine.RoomSubscriptionProvider {
+            override fun openRoomIds(): List<String> = emptyList()
+            override fun encryptedRoomSubscriptions() =
+                emptyList<com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription>()
+            override fun localX25519StaticPrivate(): ByteArray? = null
+        }
+    }
+    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), canaryMetrics = get(), dmEnvelopeRegistry = get(), roomSubscriptionProvider = get<GossipEngine.RoomSubscriptionProvider>()) }
 
     // ── Transfer layer ────────────────────────────────────────────────────────
     single { TransferAssembler(get(), get(), get()) }

@@ -42,6 +42,7 @@ import com.rumor.mesh.core.wire.WireJson
 import com.rumor.mesh.core.wire.withCompressionMetadata
 import com.rumor.mesh.core.wire.withMentions
 import com.rumor.mesh.core.wire.withReplyTo
+import com.rumor.mesh.core.wire.roomRoutingTag
 import com.rumor.mesh.core.wire.withRoomRoutingTag
 
 private const val TAG = "GossipEngine"
@@ -110,7 +111,45 @@ class GossipEngine(
     private val relayBatchSpreadMs: Long = RelayBatcher.SPREAD_MS,
     /** O12: injectable clock for deterministic replay. Defaults to wall-clock. */
     private val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
+    /**
+     * O79 — optional subscription provider for ROOM_MESSAGE receive
+     * dispatch. When non-null, the engine consults this on every
+     * inbound ROOM_MESSAGE: the returned lists feed
+     * [com.rumor.mesh.core.protocol.RoomTagMatcher] for tag → roomId
+     * resolution, and on match the engine attempts
+     * [com.rumor.mesh.core.protocol.MultiRecipientEnvelopeCodec.decrypt]
+     * (for ENCRYPTED rooms) or pass-through to inbox (for OPEN).
+     *
+     * Null disables room-message receive dispatch — relay still
+     * happens (rooms are broadcast-tier traffic and propagate
+     * regardless of local subscription), the local inbox just won't
+     * see anything from rooms this node is in. Useful for nodes that
+     * are purely relay infrastructure with no local UI to display
+     * room messages.
+     *
+     * The provider returns a snapshot — caller may freely cache and
+     * refresh on subscription mutation. The receive path is itself
+     * synchronous in the dispatch step (matcher + decode); only the
+     * tag computation is meaningful CPU.
+     */
+    private val roomSubscriptionProvider: RoomSubscriptionProvider? = null,
 ) {
+    /** O79 receive-side subscription snapshot consumed by ROOM_MESSAGE dispatch. */
+    interface RoomSubscriptionProvider {
+        /** OPEN-mode roomIds the local user is subscribed to. */
+        fun openRoomIds(): List<String>
+        /** ENCRYPTED-mode subscriptions with their routing keys. */
+        fun encryptedRoomSubscriptions(): List<RoomTagMatcher.EncryptedRoomSubscription>
+        /**
+         * The local user's X25519 static private key for ENCRYPTED-room
+         * decryption. Returning null means decryption is not possible
+         * (identity locked, or this engine instance doesn't support
+         * receive-side room decryption). On null, ENCRYPTED room
+         * messages still match for routing purposes but the engine
+         * skips the decrypt step.
+         */
+        fun localX25519StaticPrivate(): ByteArray?
+    }
     private val sequenceCounter = AtomicCounter(clock.now())
 
     /**
@@ -811,12 +850,72 @@ class GossipEngine(
             scope.launch { handleMessageDelete(msg) }
         }
 
+        // O79: room message dispatch. Match the routing tag against the
+        // local subscription cache; on match, decrypt (ENCRYPTED) or
+        // pass through (OPEN), emit the resulting plaintext-bearing
+        // message to inbox. Relay still happens below regardless — room
+        // messages are broadcast-tier and propagate through the mesh
+        // even if this node isn't subscribed.
+        if (msg.type == MessageType.ROOM_MESSAGE) {
+            scope.launch { handleRoomMessage(msg) }
+        }
+
         // O41: identity rotation. The outer signature on `msg` is by the *new*
         // key (already verified above). We additionally check the *inner*
         // continuity signature against the existing contact's old public key —
         // proves the rotation is authorized by the old-key holder. Only then
         emitToInbox(msg)
         relay(msg, autoRelayIds)
+    }
+
+    /**
+     * O79 receive-side handler. No-op when [roomSubscriptionProvider]
+     * is null. On match:
+     *  - OPEN: emit the carrier message to inbox (its payload.content
+     *    is the plaintext already).
+     *  - ENCRYPTED: decrypt the inner envelope via
+     *    [MultiRecipientEnvelopeCodec.decrypt]; on success, emit a
+     *    synthetic message with the decrypted plaintext as
+     *    `payload.content`.
+     *  - No match: drop (the message was addressed to a room we're not
+     *    in; relay still happens elsewhere).
+     */
+    private suspend fun handleRoomMessage(msg: RumorMessage) {
+        val provider = roomSubscriptionProvider ?: return
+        val tagB64 = msg.roomRoutingTag ?: return
+        val tag = runCatching {
+            com.rumor.mesh.core.platform.Base64Codec.decode(tagB64)
+        }.getOrNull() ?: return
+
+        val match = RoomTagMatcher.match(
+            inboundTag = tag,
+            messageId = msg.id,
+            openSubscriptions = provider.openRoomIds(),
+            encryptedSubscriptions = provider.encryptedRoomSubscriptions(),
+        ) ?: return  // not subscribed; drop receive-side (relay still happened)
+
+        when (match) {
+            is RoomTagMatcher.MatchResult.OpenMatch -> {
+                // OPEN rooms — payload.content is plaintext, signed by sender,
+                // verified at outer-sig check earlier in processIncoming.
+                emitToInbox(msg)
+            }
+            is RoomTagMatcher.MatchResult.EncryptedMatch -> {
+                val xPriv = provider.localX25519StaticPrivate() ?: return
+                val envelopeJson = msg.encryptedPayload ?: return
+                val envelope = runCatching {
+                    WireJson.decodeFromString<com.rumor.mesh.core.model.MultiRecipientEnvelope>(envelopeJson)
+                }.getOrNull() ?: return
+                val localId = identityProvider.identity.value?.userId ?: return
+                val plaintext = MultiRecipientEnvelopeCodec.decrypt(envelope, localId, xPriv) ?: return
+                // Synthesize a plaintext-bearing carrier for inbox emission.
+                val synthetic = msg.copy(
+                    payload = MessagePayload(ContentType.TEXT, plaintext.decodeToString()),
+                    encryptedPayload = null,
+                )
+                emitToInbox(synthetic)
+            }
+        }
     }
 
     private suspend fun handleMessageDelete(msg: RumorMessage) {
