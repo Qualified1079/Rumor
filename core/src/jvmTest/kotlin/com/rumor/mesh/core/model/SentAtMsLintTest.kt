@@ -67,6 +67,8 @@ class SentAtMsLintTest {
         "core/src/commonTest/kotlin/com/rumor/mesh/core/protocol/MessageDeleteVerifierTest.kt",
         // O90 thread+mention ext-helper test stamps a blank RumorMessage with sentAtMs=0L
         "core/src/commonTest/kotlin/com/rumor/mesh/core/wire/ThreadAndMentionExtTest.kt",
+        // O79 room routing tag ext-helper test stamps a blank RumorMessage with sentAtMs=0L
+        "core/src/commonTest/kotlin/com/rumor/mesh/core/wire/RoomRoutingTagExtTest.kt",
         // This test file itself references the symbol in regex form
         "core/src/jvmTest/kotlin/com/rumor/mesh/core/model/SentAtMsLintTest.kt",
     )

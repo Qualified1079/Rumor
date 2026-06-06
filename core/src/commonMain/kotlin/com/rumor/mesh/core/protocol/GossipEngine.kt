@@ -42,6 +42,7 @@ import com.rumor.mesh.core.wire.WireJson
 import com.rumor.mesh.core.wire.withCompressionMetadata
 import com.rumor.mesh.core.wire.withMentions
 import com.rumor.mesh.core.wire.withReplyTo
+import com.rumor.mesh.core.wire.withRoomRoutingTag
 
 private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_HOPS = 7
@@ -552,6 +553,84 @@ class GossipEngine(
         messageStore.deleteById(messageId)
         enqueueImmediate(msg)
         return msg
+    }
+
+    /**
+     * Compose a Room-addressed message (O79).
+     *
+     * **Caller provides:**
+     *  - [routingTag] — opaque 16-byte routing identifier from
+     *    [com.rumor.mesh.core.protocol.RoomRoutingTag.openRoomTag]
+     *    (OPEN rooms) or [com.rumor.mesh.core.protocol.RoomRoutingTag.encryptedRoomTag]
+     *    (ENCRYPTED rooms). The plaintext roomId stays off the wire.
+     *  - [recipients] — for ENCRYPTED rooms, the list of authorized
+     *    receivers with their X25519 static public keys. Empty list
+     *    is treated as OPEN-mode (plaintext signed broadcast).
+     *  - [plaintext] — the message body to encrypt (or carry signed
+     *    plaintext for OPEN).
+     *
+     * **Why the caller provides recipients:** the events-derived
+     * membership projection is a separate concern from compose. UI
+     * code (or test fixtures) enumerates the current room membership
+     * and passes the recipient list explicitly. This keeps
+     * [GossipEngine] decoupled from room-membership storage.
+     *
+     * For ENCRYPTED rooms uses
+     * [com.rumor.mesh.core.protocol.MultiRecipientEnvelopeCodec.encrypt]
+     * under the hood with the sender's Ed25519 identity. The
+     * resulting [com.rumor.mesh.core.model.MultiRecipientEnvelope]
+     * is JSON-serialised into the message's `encryptedPayload`.
+     * For OPEN rooms the plaintext goes into `payload.content`.
+     *
+     * The 16-byte [routingTag] is Base64-encoded and stored in
+     * `_ext.rt`; the receiver's
+     * [com.rumor.mesh.core.protocol.RoomTagMatcher] consumes it.
+     *
+     * Returns null if identity is locked. Otherwise returns the
+     * outgoing [RumorMessage] (already enqueued for transport).
+     */
+    fun composeRoomMessage(
+        routingTag: ByteArray,
+        plaintext: String,
+        recipients: List<MultiRecipientEnvelopeCodec.Recipient> = emptyList(),
+        replyTo: String? = null,
+        mentions: List<String> = emptyList(),
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+
+        val baseMsg: RumorMessage = if (recipients.isEmpty()) {
+            // OPEN room — signed plaintext broadcast.
+            buildMessage(
+                identity = identity,
+                type = MessageType.ROOM_MESSAGE,
+                hopsToLive = DEFAULT_BROADCAST_HOPS,
+                payload = MessagePayload(ContentType.TEXT, plaintext),
+            )
+        } else {
+            // ENCRYPTED room — multi-recipient envelope.
+            val envelope = MultiRecipientEnvelopeCodec.encrypt(
+                plaintext = plaintext.toByteArray(Charsets.UTF_8),
+                senderEd25519Private = identity.privateKeyBytes,
+                senderId = identity.userId,
+                senderEd25519Public = identity.publicKeyBytes,
+                recipients = recipients,
+                roomRoutingTag = com.rumor.mesh.core.platform.Base64Codec.encode(routingTag),
+            )
+            buildMessage(
+                identity = identity,
+                type = MessageType.ROOM_MESSAGE,
+                hopsToLive = DEFAULT_BROADCAST_HOPS,
+                encryptedPayload = WireJson.encodeToString(envelope),
+            )
+        }
+
+        // Stamp the routing tag into _ext.rt + apply O90 thread/mention metadata.
+        val routedMsg = baseMsg.withRoomRoutingTag(
+            com.rumor.mesh.core.platform.Base64Codec.encode(routingTag)
+        ).applyThreadAndMentionExt(replyTo, mentions)
+
+        enqueueImmediate(routedMsg)
+        return routedMsg
     }
 
     fun composeSelfPresence(
