@@ -119,6 +119,14 @@ class TrafficClassInvariantTest {
         assertEquals(TrafficClass.REALTIME,
             msg(MessageType.BRIDGE_VOUCHED, ContentType.TEXT, contentLength = 100).trafficClass)
 
+    @Test fun `ROOM_MESSAGE with TEXT payload is REALTIME`() =
+        assertEquals(TrafficClass.REALTIME,
+            msg(MessageType.ROOM_MESSAGE, ContentType.TEXT, contentLength = 100).trafficClass)
+
+    @Test fun `ROOM_MESSAGE with CONTROL payload is INFRASTRUCTURE`() =
+        assertEquals(TrafficClass.INFRASTRUCTURE,
+            msg(MessageType.ROOM_MESSAGE, ContentType.CONTROL, contentLength = 100).trafficClass)
+
     // ── Size-ceiling demotion: the anti-spoofing invariant ────────────────────
 
     @Test fun `INFRA type over 16KB ceiling demotes to BULK`() {
@@ -175,6 +183,7 @@ class TrafficClassInvariantTest {
             MessageType.BROADCAST,
             MessageType.DIRECT,
             MessageType.BRIDGE_VOUCHED,
+            MessageType.ROOM_MESSAGE,
         )
         val missing = MessageType.values().toSet() - tested
         assertEquals(emptySet(), missing,

@@ -218,6 +218,33 @@ enum class MessageType {
      * [com.rumor.mesh.core.model.PrekeyPublish].
      */
     @SerialName("prekey_publish") PREKEY_PUBLISH,
+    /**
+     * Message addressed to a Room (O79). The wire wrapper carries no
+     * plaintext roomId — addressing is via an opaque routing tag in
+     * `_ext.rt` (computed by `RoomRoutingTag.openRoomTag` for OPEN
+     * rooms, or `RoomRoutingTag.encryptedRoomTag` for ENCRYPTED rooms).
+     * Observers without the appropriate key cannot enumerate roomIds.
+     *
+     * **Payload shape:**
+     *  - OPEN rooms: `payload.content` carries plaintext (signed but
+     *    not encrypted — OPEN rooms are publicly readable by
+     *    definition).
+     *  - ENCRYPTED rooms: `encryptedPayload` carries a JSON-serialized
+     *    [com.rumor.mesh.core.model.MultiRecipientEnvelope] — one
+     *    AES-encrypted body + N per-recipient key wraps. Decrypted via
+     *    [com.rumor.mesh.core.protocol.MultiRecipientEnvelopeCodec.decrypt].
+     *
+     * **Trust + routing:** the outer `RumorMessage.signature` is the
+     * sender's Ed25519 over the standard signableBytes. For ENCRYPTED
+     * rooms, the inner envelope ALSO has its own Ed25519 signature
+     * covering the recipient list — relays cannot extend/trim/permute
+     * recipients without breaking the inner signature even if they
+     * could somehow re-sign the outer.
+     *
+     * trafficClass routing follows BROADCAST/DIRECT (TEXT → REALTIME,
+     * media → BULK, CONTROL → INFRASTRUCTURE).
+     */
+    @SerialName("room_message") ROOM_MESSAGE,
 }
 
 @Serializable
@@ -312,7 +339,8 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.CHUNK             -> TrafficClass.BULK
             MessageType.BROADCAST,
             MessageType.DIRECT,
-            MessageType.BRIDGE_VOUCHED -> when (payload?.contentType) {
+            MessageType.BRIDGE_VOUCHED,
+            MessageType.ROOM_MESSAGE -> when (payload?.contentType) {
                 ContentType.IMAGE, ContentType.VOICE, ContentType.FILE -> TrafficClass.BULK
                 ContentType.CONTROL                                    -> TrafficClass.INFRASTRUCTURE
                 ContentType.TEXT, null                                 -> TrafficClass.REALTIME

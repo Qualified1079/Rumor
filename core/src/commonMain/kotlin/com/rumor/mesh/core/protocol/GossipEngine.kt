@@ -749,7 +749,14 @@ class GossipEngine(
         if (msg.trustLevel == TrustLevel.BRIDGED) return
         when (msg.type) {
             MessageType.BROADCAST,
-            MessageType.BRIDGE_VOUCHED -> {
+            MessageType.BRIDGE_VOUCHED,
+            MessageType.ROOM_MESSAGE -> {
+                // Room messages relay like broadcasts: every honest relay
+                // forwards regardless of subscription state. Routing is via
+                // the opaque tag in _ext.rt — only subscribed receivers
+                // recognize their own room's tag and emit to inbox; everyone
+                // else just propagates. autoRelay boost applies the same way
+                // as BROADCAST for room messages from priority-peer senders.
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 val boosted = if (msg.senderId in autoRelayIds) {
                     messageStore.boostHopsForManualRelay(forwarded)
@@ -835,7 +842,8 @@ class GossipEngine(
             MessageType.SELF_PRESENCE,
             MessageType.MESSAGE_DELETE,
             MessageType.PREKEY_PUBLISH,
-            MessageType.BRIDGE_VOUCHED -> MAX_BROADCAST_HOPS
+            MessageType.BRIDGE_VOUCHED,
+            MessageType.ROOM_MESSAGE -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,
             MessageType.TRANSFER_CANCEL,
