@@ -32,6 +32,19 @@ Policy summary (see `CLAUDE.md` O37 invariant 6):
 
 ---
 
+## Reserved-forward names
+
+Names reserved before a feature ships, so a future contributor can't
+accidentally claim them for a different purpose. When the feature lands,
+the reservation here is what guarantees the field name matches the
+backlog row that justified it.
+
+| Name | Reserved for | Notes |
+|------|---------------|-------|
+| `_ext.replyTo` (RumorMessage `_ext` field, `String`) | O90 thread metadata | Carries the parent messageId for thread-tree reconstruction in the UI. Unsigned (in `_ext`); local-display impact only. |
+| `_ext.mentions` (RumorMessage `_ext` field, `List<String>`) | O90 mention metadata | Carries userIds explicitly mentioned by the sender for notification-feed + cross-room mention aggregators. Unsigned. |
+| `rumor-project-default-lists-v1` (project signing key kind-id) | O67 default-lists publisher | See `docs/PROJECT_KEYS.md` policy — key not generated yet. |
+
 ## Retired names
 
 *(Empty as of v0.1. Add entries below as `| name | retired in | replaced by | notes |`.)*
