@@ -13,6 +13,36 @@ import kotlinx.coroutines.launch
 private const val TAG = "TopologyTracker"
 private val STALE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000L
 
+/**
+ * Persistent topology learner — what this node knows about its
+ * peers' relay performance over time.
+ *
+ * Two surfaces:
+ *
+ *  1. **[routeRepo]** — durable per-peer ranking material. Updated
+ *     on every completed exchange via [recordSession]. Tracks
+ *     `bytesRelayed`, `sessionCount`, and `failureCount`; the rank
+ *     formula is `bytesRelayed / (1 + failureCount)`, ordered
+ *     descending. Used by the relay layer to pick which peers to
+ *     prefer for a given outbound message (priority-peer status
+ *     wins ties).
+ *
+ *  2. **[neighborStore]** — short-window per-peer diversity score,
+ *     in-memory only. Tracks the peer's recent
+ *     [PeerExchangeResult.peerOverlapFraction] — a peer that always
+ *     has high overlap (already-knew-everything) gives novel data
+ *     less often, so the relay batcher prefers diverse peers.
+ *
+ * Per [STALE_THRESHOLD_MS] = 7 days: routes with no observed
+ * exchange in 7 days are considered stale and de-ranked. They're
+ * not deleted (the row may still be useful if the peer reappears),
+ * just down-weighted in selection.
+ *
+ * Latency is NOT used for routing (recorded for diagnostics only).
+ * The design decision is recorded in `CLAUDE.md` — on BLE / Wi-Fi
+ * Direct, observed latency is dominated by discovery timing, not
+ * relay performance.
+ */
 class TopologyTracker(
     private val routeRepo: RouteRepository,
     private val neighborStore: NeighborStore = NeighborStore(),

@@ -12,6 +12,34 @@ import kotlinx.coroutines.flow.asStateFlow
 private const val ONLINE_WINDOW_MS = 5 * 60 * 1000L
 private const val RECENTLY_WINDOW_MS = 30 * 60 * 1000L
 
+/**
+ * Tracks the per-userId "last seen" timestamp and derives a coarse
+ * [PeerPresence] for each known peer:
+ *  - **ONLINE** — direct contact within the last [ONLINE_WINDOW_MS]
+ *    (5 minutes by default).
+ *  - **RECENTLY_SEEN** — between 5 and 30 minutes ago.
+ *  - **OFFLINE** — more than [RECENTLY_WINDOW_MS] ago, or never seen.
+ *
+ * Two ingress paths:
+ *  - [recordDirectContact] — first-hand: this node just received a
+ *    verified message from the peer. Authoritative.
+ *  - [mergeRemoteStatus] — second-hand: a peer's exchange-time
+ *    snapshot of THEIR known peers. Used to learn about distant
+ *    nodes the local node hasn't seen directly. Latest-wall-clock
+ *    wins on merge.
+ *
+ * Recompute is synchronous on every mutation — the per-peer map is
+ * small (typically dozens of contacts, maybe thousands in extreme
+ * cases) and the StateFlow consumer renders the result. Thread-safe
+ * via [SynchronizedObject].
+ *
+ * Privacy note: presence beacons that propagate to non-direct peers
+ * are O30 / O58 Tier 3 territory and are not handled here — this
+ * tracker only summarises what THIS node has observed. The
+ * second-hand merge does carry presence information across hops,
+ * but only as a coarse "this peer told me they saw X at time T"
+ * signal — not full beacon propagation.
+ */
 class OnlineStatusTracker : SynchronizedObject() {
     private val lastSeen = mutableMapOf<String, Long>()
 
