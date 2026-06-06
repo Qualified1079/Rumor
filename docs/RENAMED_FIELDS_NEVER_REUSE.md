@@ -44,6 +44,11 @@ backlog row that justified it.
 | `_ext.replyTo` (RumorMessage `_ext` field, `String`) | O90 thread metadata | Carries the parent messageId for thread-tree reconstruction in the UI. Unsigned (in `_ext`); local-display impact only. |
 | `_ext.mentions` (RumorMessage `_ext` field, `List<String>`) | O90 mention metadata | Carries userIds explicitly mentioned by the sender for notification-feed + cross-room mention aggregators. Unsigned. |
 | `rumor-project-default-lists-v1` (project signing key kind-id) | O67 default-lists publisher | See `docs/PROJECT_KEYS.md` policy — key not generated yet. |
+| `rumor-room-envelope-v1:` (signable-bytes domain tag) | O79 multi-recipient envelope sig scope | Set in `multiRecipientEnvelopeSignableBytes`. Bumping requires `-v2:` and forces every envelope signature scheme to be regenerated. |
+| `rumor-room-wrap-v1:` (HKDF info prefix for per-recipient wrap keys) | O79 multi-recipient envelope wrap-key derivation | Used in `MultiRecipientEnvelopeCodec` as `info = "rumor-room-wrap-v1:" \|\| recipientId`. Domain-separates wrap keys from any other key derived from the same X25519 shared secret. |
+| `rumor-room-route-v1:` (SHA-256 prefix for OPEN room routing tags) | O79 OPEN room routing | Used in `RoomRoutingTag.openRoomTag`. |
+| `rumor-room-msg-tag-v1:` (HMAC prefix for ENCRYPTED room per-message routing tags) | O79 ENCRYPTED room routing | Used in `RoomRoutingTag.encryptedRoomTag`. |
+| `rumor-room-routing-key-v1` (HKDF info string for per-room routing key derivation) | O79 ENCRYPTED room routing-key derivation | Used in `RoomRoutingTag.deriveEncryptedRoomRoutingKey`. Domain-separates the routing key from any future content-encryption key derived from the same room shared secret. |
 
 ## Retired names
 
