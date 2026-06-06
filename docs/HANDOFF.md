@@ -8,9 +8,30 @@
 `claude/practical-archimedes-wmySm`. **Wall clock at write:** ~20:55 UTC
 2026-06-05.
 
-## Autonomous-session commits (chronological)
+## Session totals (autonomous-overnight + post-wake)
 
-19 commits, all on `claude/practical-archimedes-wmySm`, pushed.
+- **Autonomous-overnight (user asleep):** 27 commits — table below.
+- **Post-wake (user requested "continue, as you were"):**
+  - `a58d428`  Sim scenario for O79 ROOM_MESSAGE (3 tests). Caught a
+    real bug: unconditional `emitToInbox` after type handlers was
+    making non-subscribed nodes surface room messages locally. Fixed
+    by gating on `msg.type != ROOM_MESSAGE`.
+  - `cf36ddf`  CLAUDE.md sync — record the sim scenario + bug fix.
+  - `8f2454a`  **O91 filed** — real bug found while researching the
+    Ed25519/X25519 question raised during O79 work. Production DM
+    crypto between two real Rumor users does NOT round-trip (Ed25519
+    bytes silently treated as X25519 produce different shared secrets
+    on the two sides). `Ed25519AsX25519RoundtripTest` pins the broken
+    state; assertion flips when fixed.
+  - `9b57d99`  Sustaining: explicit imports for Base64Codec +
+    MultiRecipientEnvelope in GossipEngine (replaces 5 inline FQNs).
+  - `d24a7e1`  Robustness sim test for malformed routing tags.
+  - `2b4ec0b`  `docs/O79_PROTOCOL_SPEC.md` — byte-level spec for an
+    alternative implementation (iOS / Linux relay / etc).
+
+## Autonomous-overnight commits (chronological)
+
+27 commits, all on `claude/practical-archimedes-wmySm`, pushed.
 Each commit message includes an explicit **Rollback** note per the
 overnight-instructions request that experiments be documented for
 clean reversal.
