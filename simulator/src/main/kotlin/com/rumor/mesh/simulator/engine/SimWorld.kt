@@ -396,6 +396,12 @@ class SimWorld(val params: SimParamRegistry) {
     }
 }
 
+/**
+ * Aggregate per-tick health snapshot of the entire simulated world.
+ * Consumed by the dashboard for live charts and by assertion runners
+ * that fail-on-bound (e.g. heap stays under X MB during a long-uptime
+ * scenario per CLAUDE.md O77).
+ */
 data class WorldMetrics(
     val nodeCount: Int          = 0,
     val edgeCount: Int          = 0,
@@ -413,6 +419,12 @@ data class WorldMetrics(
     val rbsrExchangeCountThisTick: Int = 0,
 )
 
+/**
+ * Snapshot of one edge between two SimNodes — its conditioner
+ * parameters at this moment plus when it was last actively used
+ * for an exchange. Consumed by the dashboard's per-edge view and
+ * by partition/heal scenarios that assert on edge state.
+ */
 data class EdgeSnapshot(
     val from: Int,
     val to: Int,
@@ -422,6 +434,11 @@ data class EdgeSnapshot(
     val lastActiveAtMs: Long = -1L,
 )
 
+/**
+ * Snapshot of one SimNode's per-tick operational counters. Consumed by
+ * the dashboard's per-node view and by scenario assertions on node-
+ * level convergence (e.g. all nodes hold messages X+ after N ticks).
+ */
 data class NodeSnapshot(
     val index: Int,
     val userId: String,

@@ -29,6 +29,11 @@ class NetworkConditioner {
     fun snapshot() = ConditionerSnapshot(latencyMs, jitterMs, lossRate, bandwidthBytesPerSec, partitioned)
 }
 
+/**
+ * Immutable point-in-time snapshot of a [NetworkConditioner]'s parameters.
+ * Returned by `snapshot()` and consumed by the dashboard / scenario
+ * runner to record what conditions a given exchange ran under.
+ */
 data class ConditionerSnapshot(
     val latencyMs: Long,
     val jitterMs: Long,
