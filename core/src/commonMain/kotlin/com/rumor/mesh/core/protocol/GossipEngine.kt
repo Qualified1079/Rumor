@@ -40,6 +40,8 @@ import com.rumor.mesh.core.platform.ConcurrentMap
 import com.rumor.mesh.core.platform.AtomicCounter
 import com.rumor.mesh.core.wire.WireJson
 import com.rumor.mesh.core.wire.withCompressionMetadata
+import com.rumor.mesh.core.wire.withMentions
+import com.rumor.mesh.core.wire.withReplyTo
 
 private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_HOPS = 7
@@ -282,19 +284,53 @@ class GossipEngine(
 
     // ── Compose ───────────────────────────────────────────────────────────────
 
-    fun composeBroadcast(text: String): RumorMessage? {
+    /**
+     * @param replyTo Optional parent messageId for thread reconstruction
+     *   (O90). Carried in `_ext.replyTo`; unsigned (local-display only).
+     * @param mentions Optional userIds explicitly @-mentioned by the
+     *   sender (O90). Carried in `_ext.mentions`; unsigned (UI uses for
+     *   notification feeds + cross-room mention aggregators).
+     */
+    fun composeBroadcast(
+        text: String,
+        replyTo: String? = null,
+        mentions: List<String> = emptyList(),
+    ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
-        val msg = buildMessage(
+        val base = buildMessage(
             identity = identity,
             type = MessageType.BROADCAST,
             hopsToLive = DEFAULT_BROADCAST_HOPS,
             payload = MessagePayload(ContentType.TEXT, text),
         )
+        val msg = base.applyThreadAndMentionExt(replyTo, mentions)
         enqueueImmediate(msg)
         return msg
     }
 
-    fun composeDirect(recipientId: String, recipientPublicKey: ByteArray, text: String): RumorMessage? {
+    private fun RumorMessage.applyThreadAndMentionExt(
+        replyTo: String?,
+        mentions: List<String>,
+    ): RumorMessage {
+        var result = this
+        if (replyTo != null) result = result.withReplyTo(replyTo)
+        if (mentions.isNotEmpty()) result = result.withMentions(mentions)
+        return result
+    }
+
+    /**
+     * @param replyTo Optional parent messageId for thread reconstruction
+     *   (O90). Carried in `_ext.replyTo`; unsigned (local-display only).
+     * @param mentions Optional userIds explicitly @-mentioned by the
+     *   sender (O90). Carried in `_ext.mentions`; unsigned.
+     */
+    fun composeDirect(
+        recipientId: String,
+        recipientPublicKey: ByteArray,
+        text: String,
+        replyTo: String? = null,
+        mentions: List<String> = emptyList(),
+    ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
         val envelope = dmEnvelopeRegistry.forRecipient(recipientId)
         val encryptedPayload: String
@@ -342,9 +378,9 @@ class GossipEngine(
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
-        val msg = compressionMeta?.let { (bucket, origLen) ->
+        val msg = (compressionMeta?.let { (bucket, origLen) ->
             baseMsg.withCompressionMetadata(bucket, origLen)
-        } ?: baseMsg
+        } ?: baseMsg).applyThreadAndMentionExt(replyTo, mentions)
         sentDmPlaintext.put(msg.id, text)
         if (envelope != null && rawCiphertext != null) {
             // Bridged DM: the bridge plugin picks this up via outboundBridgedDm and
