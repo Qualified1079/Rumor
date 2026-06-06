@@ -4,6 +4,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import com.rumor.mesh.core.platform.AtomicCounter
 
+/**
+ * Point-in-time snapshot of the operational counters maintained by
+ * [CanaryMetrics]. Consumed by the debug-metrics UI screen and by
+ * unit tests asserting on counter behavior. Immutable — fresh
+ * snapshots are produced on each [CanaryMetrics.publish] call.
+ */
 data class MetricsSnapshot(
     /** Total messages received over the wire (including duplicates). */
     val dedupTotal: Long,

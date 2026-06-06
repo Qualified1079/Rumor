@@ -20,6 +20,31 @@ private const val EVICT_BATCH = 500
 /** A static node holds a far deeper backlog so it can serve peers that were offline longer. */
 private const val STATIC_CACHE_BOOST = 4
 
+/**
+ * Persistence + ingest gateway between the wire and the application
+ * layer. Three jobs:
+ *
+ *  1. **Dedup-gated ingest.** Inbound messages pass through
+ *     [DuplicateFilter] before signature verification or persistence
+ *     happens — saves the most expensive work on already-seen ids.
+ *  2. **Signature verification.** Every non-bridge message gets its
+ *     Ed25519 signature verified against the embedded
+ *     `senderPublicKey` before storage. Failures bump
+ *     [sigFailureCount] and the message is dropped — never persisted.
+ *  3. **Size-capped persistence + eviction.** Holds up to
+ *     [MAX_MESSAGES] (boosted by [STATIC_CACHE_BOOST] for static
+ *     nodes that serve longer-offline peers); on overflow,
+ *     [evictOldest] drops [EVICT_BATCH] of the oldest non-always-save
+ *     records.
+ *
+ * Also exposes a per-sender [INGEST_BUDGET_PER_SEC] token bucket (O16)
+ * so a single sender can't burn unbounded CPU + storage at this node.
+ * The relay path NEVER goes through this rate gate — only ingest.
+ *
+ * Relay path uses [decrementHops] which is rate-unconstrained: relays
+ * are shared infrastructure; we propagate everything, just trim the
+ * TTL by one.
+ */
 class MessageStore(
     private val messageRepo: MessageRepository,
     private val contactRepo: ContactRepository,
