@@ -136,17 +136,44 @@ val appModule = module {
     single { DmEnvelopeRegistry() }
     single { com.rumor.mesh.core.protocol.CanaryMetrics() }
     single<com.rumor.mesh.core.Clock> { com.rumor.mesh.core.SystemClock }
-    // O79 — no-op room-subscription provider until the
-    // RoomSubscriptionRepository adapter is wired in. Empty lists +
-    // null X25519 mean: ROOM_MESSAGE receive dispatch is structurally
-    // a no-op, but the relay path still propagates room messages
-    // through this node for the rest of the mesh's benefit.
+    // O79 RoomSubscriptionRepository — Room/SQLite-backed adapter.
+    single { get<RumorDatabase>().roomSubscriptionDao() }
+    single<com.rumor.mesh.core.data.RoomSubscriptionRepository> {
+        com.rumor.mesh.data.adapter.RoomSubscriptionRepositoryAdapter(get())
+    }
+
+    // O79 room-subscription provider — bridges the persistent
+    // RoomSubscriptionRepository to the synchronous
+    // RoomSubscriptionProvider contract the GossipEngine consumes
+    // on every ROOM_MESSAGE receive. Caching strategy: an in-memory
+    // snapshot refreshed on demand. For v1 (low subscription counts)
+    // we re-query the repo per inbound message and rely on Room's
+    // own caching layer; if profiling shows this matters we'll
+    // promote to an explicit in-memory projection cache invalidated
+    // on subscribe/unsubscribe.
+    //
+    // localX25519StaticPrivate returns null today — derivation of
+    // the user's X25519 static private from the Ed25519 identity is
+    // a separate piece of work (Curve25519 keys are not directly
+    // interchangeable between Ed25519 and X25519 forms). Until that
+    // lands, ENCRYPTED room messages are matched at the tag layer
+    // but the decrypt step is skipped — they're stored on this
+    // device as opaque envelopes, decryptable later when the X25519
+    // key derivation is wired.
     single<GossipEngine.RoomSubscriptionProvider> {
+        val repo = get<com.rumor.mesh.core.data.RoomSubscriptionRepository>()
         object : GossipEngine.RoomSubscriptionProvider {
-            override fun openRoomIds(): List<String> = emptyList()
-            override fun encryptedRoomSubscriptions() =
-                emptyList<com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription>()
-            override fun localX25519StaticPrivate(): ByteArray? = null
+            override fun openRoomIds(): List<String> = kotlinx.coroutines.runBlocking {
+                repo.getAll()
+                    .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.OPEN }
+                    .map { it.roomId }
+            }
+            override fun encryptedRoomSubscriptions(): List<com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription> = kotlinx.coroutines.runBlocking {
+                repo.getAll()
+                    .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.ENCRYPTED }
+                    .map { com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription(it.roomId, it.routingKey) }
+            }
+            override fun localX25519StaticPrivate(): ByteArray? = null  // see comment above
         }
     }
     single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), canaryMetrics = get(), dmEnvelopeRegistry = get(), roomSubscriptionProvider = get<GossipEngine.RoomSubscriptionProvider>()) }

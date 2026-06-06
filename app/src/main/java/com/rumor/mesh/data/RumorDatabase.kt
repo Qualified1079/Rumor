@@ -21,6 +21,7 @@ import com.rumor.mesh.BuildConfig
         KeywordFilterListEntity::class,
         FilterSubscriptionEntity::class,
         ScheduledMessageEntity::class,
+        RoomSubscriptionEntity::class,
     ],
     // v5: added RouteEntity.failureCount for O3 reliability-aware ranking.
     // v6: added KeywordFilterListEntity + FilterSubscriptionEntity for O67
@@ -29,8 +30,11 @@ import com.rumor.mesh.BuildConfig
     // v7: added ScheduledMessageEntity for O22 / G15 schedule persistence.
     // v8: added ContactEntity.lastKnownSupportedFeatures (JSON string)
     //     for O76 capability-negotiation cache.
+    // v9: added RoomSubscriptionEntity for O79 room-subscription
+    //     persistence (flat field shape — routing material only;
+    //     decryption material stays in IdentityManager).
     // Dev uses fallbackToDestructiveMigration so no migration code needed.
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -47,6 +51,7 @@ abstract class RumorDatabase : RoomDatabase() {
     abstract fun keywordFilterListDao(): KeywordFilterListDao
     abstract fun filterSubscriptionDao(): FilterSubscriptionDao
     abstract fun scheduledMessageDao(): ScheduledMessageDao
+    abstract fun roomSubscriptionDao(): RoomSubscriptionDao
 
     companion object {
         private const val DB_NAME = "rumor.db"

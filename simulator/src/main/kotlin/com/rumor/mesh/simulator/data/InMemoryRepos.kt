@@ -236,6 +236,16 @@ class InMemoryFilterSubscriptionRepository : com.rumor.mesh.core.data.FilterSubs
     override suspend fun delete(publisherId: String) { subs.remove(publisherId) }
 }
 
+class InMemoryRoomSubscriptionRepository : com.rumor.mesh.core.data.RoomSubscriptionRepository {
+    private val subs = ConcurrentHashMap<String, com.rumor.mesh.core.data.RoomSubscription>()
+    override suspend fun upsert(subscription: com.rumor.mesh.core.data.RoomSubscription) {
+        subs[subscription.roomId] = subscription
+    }
+    override suspend fun delete(roomId: String) { subs.remove(roomId) }
+    override suspend fun get(roomId: String) = subs[roomId]
+    override suspend fun getAll() = subs.values.toList()
+}
+
 // ── TransferRepository ────────────────────────────────────────────────────────
 
 class InMemoryTransferRepository : TransferRepository {
