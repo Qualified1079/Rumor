@@ -1,162 +1,133 @@
 # Handoff note
 
 > Per `docs/MULTI_INSTANCE_COORDINATION.md` async-handoff section.
+> This snapshot covers an autonomous-overnight session (user asleep).
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm`. **Wall clock at write:** 2026-06-05 20:09 UTC.
+`claude/practical-archimedes-wmySm`. **Wall clock at write:** ~20:55 UTC
+2026-06-05.
 
-## This session's commits (chronological)
+## Autonomous-session commits (chronological)
+
+13 commits, all on `claude/practical-archimedes-wmySm`, pushed.
+Each commit message includes an explicit **Rollback** note per the
+overnight-instructions request that experiments be documented for
+clean reversal.
 
 | Commit | Row | Result |
 |---|---|---|
-| `9251f95` | **O40 → G28** | Signed delete-on-ACK end-to-end (model + verifier + GossipEngine compose/relay/ingest + 7 tests). |
-| `067baaf` | **O31 → PART**, O48 doc | Hello.recentlyExchangedWith + helloChallengeBytesV2; O48 row noted as blocked on O5. |
-| `19cf42c` | **O42 v2 alignment** | SortedListRbsrStorage(formula) + RBSR_V2_FEATURE + GossipSession session-negotiation matrix. |
-| `641c634` | O28 fuzz | KeywordFilterList + MessageDeletePayload parsers. |
-| `d8079c9` | **O53 → PART** | HMAC-SHA-256 (RFC 4231 vectors) + SealedSenderTag.tagFor + 11 tests. |
-| `fefe688` | **O38 → PART** | PrekeyPublish wire shape + PrekeyVerifier + 7 tests + fuzz harness. |
-| `a2a3d80` | **O79 → PART** | Room/Invite/Action wire types + 3 domain tags + 5 tests + 3 fuzz harnesses. |
+| `af48fef` | CLAUDE.md decisions | Multi-recipient envelope chosen for ENCRYPTED rooms; O89 ratchet design problem collapsed; O90 (thread + mention `_ext` fields) filed. Names reserved in `docs/RENAMED_FIELDS_NEVER_REUSE.md`. |
+| `39c636b` | **O90 → PART** | `_ext.replyTo` + `_ext.mentions` accessors with copy helpers (`withReplyTo`, `withMentions`). 11 tests pin field names + wire format + round-trip + tamper. |
+| `d7b17fa` | **O79 wire substrate** | `MultiRecipientEnvelope` + `KeyWrap` data classes + signable bytes function. 10 tests pin sig scope (relay can't extend/trim/permute recipients). |
+| `42c27a1` | **HKDF-SHA-256** | RFC 5869 implementation over the existing `HmacSha256` primitive. 10 tests pin RFC 5869 vectors (case 1, case 3) + length/edge guards + domain-separation property. |
+| `ca77c28` | **O79 envelope codec** | `MultiRecipientEnvelopeCodec.encrypt` / `.decrypt` pure functions composing X25519 + HKDF + AES-256-GCM + Ed25519. 9 tests cover single + multi-recipient round-trips, non-recipient drops, tampered sig / appended slot / tampered ciphertext rejections, per-message FS (same input → different ciphertext). All key material zeroed in finally blocks. |
+| `ab2abae` | **O79 routing tag derivation** | `RoomRoutingTag.openRoomTag` (SHA-256 prefix) and `.encryptedRoomTag` (per-message HMAC) + `.deriveEncryptedRoomRoutingKey` (HKDF). 11 tests pin behavior + 4 domain tag separations. |
+| `b441b8a` | Reserve domain tags | 5 new entries in `RENAMED_FIELDS_NEVER_REUSE.md` (envelope sig scope, wrap-key HKDF info, OPEN routing prefix, ENCRYPTED routing HMAC prefix, routing-key HKDF info). |
+| `44c6f44` | **O79 receiver-side matcher** | `RoomTagMatcher.match` identifies which subscribed room an inbound tag is for. OPEN check runs first (cheaper); ENCRYPTED on miss. 10 tests cover all paths. |
+| `ae4e73f` | **O79 MessageType + relay** | `MessageType.ROOM_MESSAGE` enum entry. Traffic class follows BROADCAST/DIRECT/BRIDGE_VOUCHED content-driven branch. Relay alongside BROADCAST; clampTtl to MAX_BROADCAST_HOPS. 2 new traffic-class tests + exhaustiveness allowlist updated. |
+| `bc04b79` | CLAUDE.md O79 sync | Row's "Done" / "Not done" split updated to reflect protocol-layer completeness. |
+| `88d2bd0` | **O90 compose-side** | `GossipEngine.composeBroadcast` and `composeDirect` accept optional `replyTo: String?` and `mentions: List<String> = emptyList()` params. Default-empty fallback preserves existing call-site behavior; sim tests recompile cleanly. |
+| `df64401` | CLAUDE.md O90 sync | Row updated; remaining open item narrows to UI consumption. |
+| `6c9abbe` | **O79 RoomSubscriptionRepository** | Pure-interface contract + `RoomSubscription` validating data class + `RoomSubscriptionMode { OPEN, ENCRYPTED }`. 7 tests cover routing-key-length init guards + content-equality semantics. Impls not added; that's app/sim wiring for later. |
 
-7 commits, 8 backlog rows advanced (1 closed, 5 to PART, 1 doc fix, 1 fuzz coverage extension). 30+ new tests.
+## What this autonomous session accomplished
 
-## What I considered and rejected
+**O79 protocol primitives are complete and end-to-end tested.**
+The wire types, encrypt + decrypt codec, routing tag derivation
+(both OPEN and ENCRYPTED), receiver-side tag matcher, MessageType
++ traffic class + relay + clampTtl, and the subscription repository
+interface all landed.
 
-- **Pushing O76 compose-side flip without your design input on the
-  peer-feature cache location.** See questions below.
-- **O38 rotation scheduler / sender prekey cache / composeDirect
-  prekey selection.** These are local-state and scheduler plumbing,
-  not protocol design — bounded but multi-commit work. Substrate
-  shipped; integration is the next focused commit on this row.
-- **O53 wire integration (compose-path stamping `_ext.t`, relay
-  matching against pre-computed tag set).** The cryptographic
-  substrate is now bounded; the routing changes need design
-  decisions about coexistence-with-plaintext-recipientId vs
-  wire-break, plus the per-contact shared-key derivation (HKDF
-  helper would need adding to PlatformCrypto).
-- **O48 bridge-asserted-pubkey migration.** Confirmed blocked on
-  O5 (DM bridging) — MeshCore channel-broadcast wire format
-  carries only `senderName`, no pubkey to hash. Row text updated
-  to flag the dependency.
-- **O77 massive 500-node 24-hour scenario.** Needs ≥32 GB RAM
-  (probably won't fit in the dev environment available); skipped.
-- **O79 routing integration + MessageType.ROOM_* enum entries.**
-  Depends on whether non-subscribers see roomId in clear or via
-  O53-style tags — design question. Substrate shipped; routing
-  follows when that's decided.
+**O90 (thread + mention metadata) is complete except UI.**
+Substrate accessors, compose-side wiring, never-reuse name
+reservation all done.
 
-## Suggested next moves
+**O89 collapsed substantially.** The decision to use multi-
+recipient envelopes for ENCRYPTED rooms means there's no shared
+room key to ratchet, no rotation cascade, no catch-up-after-
+missing-rotation flow. O89 reduces to just write-enforcement via
+posting certificates.
 
-1. **O38 rotation scheduler + sender cache + composeDirect
-   selection.** Substrate is in place; the remaining work is
-   per-contact prekey cache (in-memory or Room-backed), a
-   scheduler that fires on a cadence to broadcast fresh prekeys
-   and delete expired private keys, and modifying composeDirect
-   to DH against the cached prekey when one is valid.
+**Apache 2.0 LICENSE + project signing key policy + Rooms threat
+model** were committed in the prior chat session (`9950316`).
 
-2. **O76 compose-side flip.** Requires the peer-feature-cache
-   decision (question below).
+## What's left for O79
 
-3. **O67 default-list seeding + UI.** Backlog row notes content
-   sourcing for slurs/NSFW/gore lists is TBD — needs editorial
-   judgment.
+Bounded code work, no design decisions remaining:
 
-4. **O79 routing decisions.** See questions below.
+- `GossipEngine.composeRoomMessage(roomId, plaintext, recipients,
+   replyTo?, mentions?)` helper that:
+   - Computes the routing tag via `RoomRoutingTag`
+   - Encrypts via `MultiRecipientEnvelopeCodec.encrypt` (ENCRYPTED)
+     or wraps as signed plaintext (OPEN)
+   - Sets `_ext.rt` to the routing tag
+   - Wraps in a `RumorMessage` with `type = ROOM_MESSAGE`
+- Receive-side dispatch in `processIncoming` for ROOM_MESSAGE:
+   - Pull `_ext.rt`; call `RoomTagMatcher.match`
+   - On match: decrypt via codec (ENCRYPTED) or pass through (OPEN)
+   - Emit plaintext to inbox
+- App-layer `RoomSubscriptionRepositoryAdapter` (Room/SQLite) +
+  `:simulator` in-memory stub + DI wiring
+- Events-derived membership projection cache (the
+  `RoomCreate + invites/joins/leaves/bans` replay)
 
-5. **iOS PlatformCrypto / Compression actuals.** Same xtool/Mac
-   gate as before.
+UI work (member roster, "Alice joined" surfaces) is gated on the
+above.
+
+## What was rejected during the autonomous session
+
+- **Implementing a Room app-layer repository adapter** — would
+  require Room schema migration (current v8) + AppModule wiring
+  changes. Scope creep beyond "pure-interface contract" for what
+  is fundamentally a single-user-decision question (what fields
+  to persist; the user is asleep). Repository INTERFACE landed;
+  impl is the next session's pickup.
+
+- **`GossipEngine.composeRoomMessage` helper** — needs
+  membership-list enumeration which depends on the events-derived
+  membership projection cache, which doesn't exist yet. Could be
+  built as a free-standing helper that takes a recipient list
+  directly, but felt premature without the membership story
+  settled. Substrate primitives are in place; helper is a clean
+  follow-up.
+
+- **iOS / desktop platform actuals** — gated on Mac access per
+  `docs/IOS_PORT_PLAN.md`. Not attempted.
+
+- **UI work** — gated on visual verification; honest "cannot do
+  without you driving" item.
 
 ## Backlog state at handoff
 
-- **Counts:** 15 PART · 14 DECISION · 39 TODO (CODE 17 · SIM 2 · UI 9 · EMU 4 · HW 7). Total 68 open rows.
+- **Counts:** still need a refresh; rows that moved this session:
+  - O79: PART (substrate → "protocol primitives complete")
+  - O89: tag unchanged but scope collapsed
+  - O90: TODO/CODE → PART → PART (substrate + compose-side wired)
+
 - **Completed gaps:** G1–G28.
-- **Rows touched this session:** O31 (PART), O38 (PART), O40 (closed → G28), O42 (v2 wired through, row tag stays PART), O48 (doc fix), O53 (PART), O79 (PART). Plus G24 lint allowlist additions for new test fixtures.
-
-## What's NOT updated and may be stale
-
-- `docs/FDROID_BUILD.md` still names `LICENSE` as missing.
-- iOS `PlatformCrypto.aesGcm*` and `Compression` actuals still
-  throw `NotImplementedError`. Gated on the Swift bridge.
-- `LOCAL_SUPPORTED_FEATURES` in `GossipSession` is still empty
-  in production. By design until per-feature integration is
-  complete (compression-v1, rbsr-v1, rbsr-v2, route-adv-v1).
+- **Open rows touched this session:** O79, O89, O90.
+- **New file count:** 11 production source files, 7 test source
+  files, 3 doc files. ~3500 lines of net additions.
 
 ## Tooling status
 
-- `:core:jvmTest` — green at HEAD (`a2a3d80`).
+- `:core:jvmTest` — green at HEAD (`6c9abbe`).
 - `:app:testDebugUnitTest` — green.
-- `:simulator:test` — green.
+- `:simulator:test` — green (required `:simulator:clean` once
+  after the `composeBroadcast` signature change to refresh JVM
+  bytecode; documented in commit `88d2bd0` message).
+- Test count grew by ~60 across the session.
+
+## What's NOT updated and may be stale
+
+- The "Counts as of this writing" header in CLAUDE.md still shows
+  pre-session numbers; should refresh when convenient. Probably
+  ~16 PART · 14 DECISION · 39 TODO at the current head.
+- iOS actuals still throw `NotImplementedError`.
+- No `RoomSubscriptionRepository` impl wired into AppModule.
 
 ## Canary
 
 "By Order Of The High Magnate" used on every commit message this
 session.
-
-## Questions for the user (waiting on these before unblocking specific rows)
-
-### Compose-side O76 (compression-v1) flip
-
-The receive path is live (commit `59995d2` from the previous
-session); the compose path needs to know whether a recipient
-supports compression-v1. Two reasonable architectures:
-
-  **A. Additive `Contact.lastKnownSupportedFeatures: List<String>`
-  field, populated by a successful HELLO via the
-  WifiDirectTransport / GossipSession callback path.**
-  - Survives reboots (Room-backed).
-  - Touches Room schema (v7 → v8) + adapter + simulator stub.
-  - Slight staleness window: a contact's HELLO features get
-    cached on first contact in a given build; if they upgrade
-    capability, we don't notice until the next live HELLO.
-
-  **B. Session-tier `recipientFeatureCache: Map<UserId, List<String>>`
-  inside GossipEngine.**
-  - Simpler — no Room migration.
-  - Resets on process restart; first-message-after-restart
-    falls back to the uncompressed path until we've handshaken.
-
-Which do you prefer? Either works correctly; the trade-off is
-persistence-and-staleness vs simplicity.
-
-### O67 default keyword filter lists
-
-Backlog row says ship default lists for slurs (default BLOCK),
-NSFW text (default WARN), and graphic-violence text (default
-WARN). Content sourcing is the open question:
-
-  1. Are you OK with English-only at first launch (with the
-     l10n gap flagged honestly in onboarding copy)?
-  2. Should the slur list draw from an existing curated list
-     (e.g. Wiktionary's English profanity category, or a more
-     considered source you have in mind) or do you want to
-     curate it yourself?
-  3. Should there be a default user-authored publisher
-     associated with the bundled lists (signed by a Rumor
-     project key), or are the defaults shipped unsigned as a
-     special case?
-
-### O79 Rooms routing
-
-Two architectural questions before wiring MessageType.ROOM_*:
-
-  1. **roomId visibility on the wire.** When a Room message
-     is composed and broadcast, do non-subscribers see the
-     roomId in clear (simplifies routing — relays know which
-     subset of peers might care) or via an O53-style tag
-     derived from the room key (better privacy — observers
-     can't enumerate roomIds; relays must trial-match against
-     per-room keys they hold)?
-
-  2. **Membership state source-of-truth.** Is current
-     membership derivable from the gossiped events stream
-     (RoomCreate + cumulative invites/joins/leaves/bans) or
-     does it need a separate persisted membership table per
-     Room? The derivable approach is simpler but reconciling
-     a long-offline node's view is harder; the persisted
-     approach is more straightforward to query but introduces
-     a state-divergence risk across peers.
-
-### LICENSE
-
-Still pending. GPL-3.0-or-later vs AGPL-3.0 — your call.
-F-Droid submission checklist is otherwise green.
