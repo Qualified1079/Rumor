@@ -1,5 +1,43 @@
 package com.rumor.mesh.core.model
 
+/**
+ * Locally-persisted record of a peer the user has interacted with
+ * directly or that the engine has learned about via gossip.
+ *
+ * One row per userId; routing and trust decisions consult this
+ * (auto-relay membership, priority-peer status, verified state).
+ * Display names are user-overridable locally (per O21) — the
+ * `displayName` here is the peer's self-asserted name; the
+ * local-only override (if any) lives in a UI-side preference, not
+ * in this record.
+ *
+ * @property userId Stable cryptographic identity — `SHA-256(publicKey).hex`.
+ * @property publicKey Base64 Ed25519 public key the userId hashes from.
+ *   Any inbound message claiming this userId must verify against
+ *   this key.
+ * @property displayName Peer's self-asserted display name. Optional.
+ *   See O21 for the local-pinning + emoji-fingerprint approach to
+ *   handling display-name churn or collisions.
+ * @property isVerified Out-of-band verification gesture — the user
+ *   has confirmed (via QR code, voice readback, etc.) that the
+ *   pubkey actually corresponds to a real person they trust.
+ *   Default false; promoted manually.
+ * @property autoRelay The user has marked this contact's messages
+ *   as boosted at relay time (extra TTL — they want this peer's
+ *   reach extended).
+ * @property alwaysSave This contact's messages are exempt from
+ *   size-cap eviction in MessageStore (won't be dropped to make
+ *   room for newer traffic).
+ * @property willingToCache The user has flagged this contact as a
+ *   target for "carrier-pigeon" caching — messages addressed to
+ *   them get held on this device when offline so they can be handed
+ *   over on next contact.
+ * @property firstSeenMs Wall-clock epoch ms the engine first
+ *   processed a verified message from this userId.
+ * @property lastSeenMs Wall-clock epoch ms of the most recent
+ *   verified inbound — used by TopologyTracker for liveness
+ *   weighting.
+ */
 data class Contact(
     val userId: String,
     val publicKey: String,
