@@ -16,8 +16,10 @@ import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.MAX_TOTAL_HOPS
+import com.rumor.mesh.core.model.MultiRecipientEnvelope
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.TrustLevel
+import com.rumor.mesh.core.platform.Base64Codec
 import com.rumor.mesh.core.model.floodedHops
 import com.rumor.mesh.core.model.routedHops
 import com.rumor.mesh.core.model.withTtlSplit
@@ -653,7 +655,7 @@ class GossipEngine(
                 senderId = identity.userId,
                 senderEd25519Public = identity.publicKeyBytes,
                 recipients = recipients,
-                roomRoutingTag = com.rumor.mesh.core.platform.Base64Codec.encode(routingTag),
+                roomRoutingTag = Base64Codec.encode(routingTag),
             )
             buildMessage(
                 identity = identity,
@@ -664,9 +666,8 @@ class GossipEngine(
         }
 
         // Stamp the routing tag into _ext.rt + apply O90 thread/mention metadata.
-        val routedMsg = baseMsg.withRoomRoutingTag(
-            com.rumor.mesh.core.platform.Base64Codec.encode(routingTag)
-        ).applyThreadAndMentionExt(replyTo, mentions)
+        val routedMsg = baseMsg.withRoomRoutingTag(Base64Codec.encode(routingTag))
+            .applyThreadAndMentionExt(replyTo, mentions)
 
         enqueueImmediate(routedMsg)
         return routedMsg
@@ -889,9 +890,7 @@ class GossipEngine(
     private suspend fun handleRoomMessage(msg: RumorMessage) {
         val provider = roomSubscriptionProvider ?: return
         val tagB64 = msg.roomRoutingTag ?: return
-        val tag = runCatching {
-            com.rumor.mesh.core.platform.Base64Codec.decode(tagB64)
-        }.getOrNull() ?: return
+        val tag = runCatching { Base64Codec.decode(tagB64) }.getOrNull() ?: return
 
         val match = RoomTagMatcher.match(
             inboundTag = tag,
@@ -910,7 +909,7 @@ class GossipEngine(
                 val xPriv = provider.localX25519StaticPrivate() ?: return
                 val envelopeJson = msg.encryptedPayload ?: return
                 val envelope = runCatching {
-                    WireJson.decodeFromString<com.rumor.mesh.core.model.MultiRecipientEnvelope>(envelopeJson)
+                    WireJson.decodeFromString<MultiRecipientEnvelope>(envelopeJson)
                 }.getOrNull() ?: return
                 val localId = identityProvider.identity.value?.userId ?: return
                 val plaintext = MultiRecipientEnvelopeCodec.decrypt(envelope, localId, xPriv) ?: return
