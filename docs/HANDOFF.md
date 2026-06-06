@@ -10,7 +10,7 @@
 
 ## Autonomous-session commits (chronological)
 
-13 commits, all on `claude/practical-archimedes-wmySm`, pushed.
+19 commits, all on `claude/practical-archimedes-wmySm`, pushed.
 Each commit message includes an explicit **Rollback** note per the
 overnight-instructions request that experiments be documented for
 clean reversal.
@@ -30,6 +30,13 @@ clean reversal.
 | `88d2bd0` | **O90 compose-side** | `GossipEngine.composeBroadcast` and `composeDirect` accept optional `replyTo: String?` and `mentions: List<String> = emptyList()` params. Default-empty fallback preserves existing call-site behavior; sim tests recompile cleanly. |
 | `df64401` | CLAUDE.md O90 sync | Row updated; remaining open item narrows to UI consumption. |
 | `6c9abbe` | **O79 RoomSubscriptionRepository** | Pure-interface contract + `RoomSubscription` validating data class + `RoomSubscriptionMode { OPEN, ENCRYPTED }`. 7 tests cover routing-key-length init guards + content-equality semantics. Impls not added; that's app/sim wiring for later. |
+| `f32ff3d` | HANDOFF refresh | Comprehensive session summary. |
+| `d2d605b` | Sustaining: MessageStore + MetricsSnapshot class-level KDoc | Top-level docs for two classes whose fields were documented but the surrounding class context wasn't. Pure-additive. |
+| `af23634` | Sustaining: BlockEntry + SubscribedBlocklist + BlocklistEntry + Contact KDoc | Second docs pass. |
+| `ae6d46f` | Sustaining: OnlineStatusTracker + TopologyTracker KDoc | Third docs pass — covered the two ingress paths (firsthand vs secondhand), windowed presence model, the two routing surfaces (durable [routeRepo] + in-memory [neighborStore]), and the latency-NOT-used-for-routing decision. |
+| `1cea6e8` | **O79 composeRoomMessage + _ext.rt accessor** | GossipEngine helper that wires every protocol piece into one call: routing tag + envelope codec + wrapping into RumorMessage. Empty recipients → OPEN-mode (signed plaintext); non-empty → ENCRYPTED via codec. `_ext.rt` accessor + 7 tests. Field name `rt` reserved forever. |
+| `73de7b6` | **O79 end-to-end integration test** | RoomEndToEndIntegrationTest (5 tests) exercises the full compose → wire → match → decrypt path for both OPEN and ENCRYPTED modes. Catches integration drift between unit-tested primitives — if any individual unit test passes but protocol-level composition breaks (e.g. HKDF info string typo on one side), this suite fails. |
+| `<current>` | Final HANDOFF refresh | This summary. |
 
 ## What this autonomous session accomplished
 
@@ -56,21 +63,23 @@ model** were committed in the prior chat session (`9950316`).
 
 Bounded code work, no design decisions remaining:
 
-- `GossipEngine.composeRoomMessage(roomId, plaintext, recipients,
-   replyTo?, mentions?)` helper that:
-   - Computes the routing tag via `RoomRoutingTag`
-   - Encrypts via `MultiRecipientEnvelopeCodec.encrypt` (ENCRYPTED)
-     or wraps as signed plaintext (OPEN)
-   - Sets `_ext.rt` to the routing tag
-   - Wraps in a `RumorMessage` with `type = ROOM_MESSAGE`
-- Receive-side dispatch in `processIncoming` for ROOM_MESSAGE:
-   - Pull `_ext.rt`; call `RoomTagMatcher.match`
+- ~~`composeRoomMessage` helper~~ **shipped in `1cea6e8`.**
+- **Receive-side dispatch in `processIncoming` for ROOM_MESSAGE:**
+   - Pull `_ext.rt`; call `RoomTagMatcher.match` against the
+     subscription cache
    - On match: decrypt via codec (ENCRYPTED) or pass through (OPEN)
    - Emit plaintext to inbox
 - App-layer `RoomSubscriptionRepositoryAdapter` (Room/SQLite) +
-  `:simulator` in-memory stub + DI wiring
+  `:simulator` in-memory stub + DI wiring (interface contract is
+  in place in `6c9abbe`)
 - Events-derived membership projection cache (the
-  `RoomCreate + invites/joins/leaves/bans` replay)
+  `RoomCreate + invites/joins/leaves/bans` replay) — needs for
+  the sender-side to enumerate recipients at composeRoomMessage
+  call time
+- End-to-end integration test of compose → wire → match → decrypt
+  is **shipped in `73de7b6`** — the integration test runs without
+  GossipEngine, so the substrate is proven independently of the
+  receive-branch wiring.
 
 UI work (member roster, "Alice joined" surfaces) is gated on the
 above.
