@@ -341,9 +341,13 @@ Signed bytes deliberately exclude:
 | `"blocklist_diff"` | Signed incremental blocklist diff. Broadcast through mesh. |
 | `"priority_link_request"` | Request a persistent-priority connection. Routed as DM. |
 | `"priority_link_accept"` | Accept a priority-link request. Routed as DM. |
-| `"self_presence"` | O30/O57 self-presence beacon. See §4.3. |
-| `"bridge_vouched"` | O17 bridge-vouched cross-network content. See §4.4. |
+| `"self_presence"` | O30/O57 self-presence beacon. See §4.2. |
+| `"bridge_vouched"` | O17 bridge-vouched cross-network content. See §4.3. |
 | `"transfer_cancel"` | O18 receiver-cancel for in-flight chunked transfer. Routed as DM. |
+| `"message_delete"` | O40 signed delete-on-ACK request. See §4.5. |
+| `"keyword_filter_publish"` | O67 signed keyword-filter list snapshot. See §4.6. |
+| `"prekey_publish"` | O38 signed short-lived recipient prekey broadcast. See §4.7. |
+| `"room_message"` | O79 room-addressed message. Routing tag in `_ext.rt`; payload is plaintext (OPEN) or a JSON-serialised `MultiRecipientEnvelope` in `encryptedPayload` (ENCRYPTED). See §4.8. |
 
 ### 3.4 `payload` vs `encryptedPayload`
 
@@ -491,6 +495,62 @@ Per-bridge trust toggles (receivers decide which bridges they accept vouching fr
 ```
 
 All four are wrapped in `MessagePayload(contentType = CONTROL, content = WireJson.encodeToString(…))`. The `RumorMessage.signature` covers the JSON-encoded content string verbatim.
+
+### 4.5 Message delete (O40)
+
+Signed delete-on-ACK request. `payload` is `MessagePayload(CONTROL, content = WireJson.encodeToString(MessageDeletePayload(messageId, issuerPublicKey, signature)))`.
+
+```json
+{
+  "messageId": "<id of the target message>",
+  "issuerPublicKey": "<base64 of issuer's Ed25519 pub>",
+  "signature": "<base64 of Ed25519 sig over messageDeleteSignableBytes>"
+}
+```
+
+Domain-tagged signable bytes prefix: `"rumor-message-delete-v1:"`. Receivers verify (a) `issuerPublicKey` hashes to either the target message's `senderId` or `recipientId`, (b) signature verifies over the canonical bytes. Honoring relays purge the targeted message; deleted id stays in the dedup set to prevent re-ingestion.
+
+### 4.6 Keyword filter publish (O67)
+
+Signed keyword-filter list snapshot. `payload` is `MessagePayload(CONTROL, content = WireJson.encodeToString(KeywordFilterList(…)))`.
+
+Domain-tagged signable bytes prefix: `"rumor-keyword-filter-v1:"`. Subscribers verify the publisher's signature, apply monotonic-version check, store. Display-layer filter only — relay path is unaffected (see "relay never sees blocklist" architectural rule).
+
+See `core/model/KeywordFilter.kt` for the full data shape (`FilterEntry`, `FilterAction.{WARN,BLOCK}`, `MatchKind.{SUBSTRING_CI,SUBSTRING_CS,WORD_CI}`, optional `userIdAllowlist`).
+
+### 4.7 Prekey publish (O38)
+
+Signed short-lived recipient prekey broadcast. Sender publishes prekeys for receiver-side forward secrecy; future DM senders DH against the freshest valid prekey instead of the long-term static.
+
+```json
+{
+  "publisherId": "<userId — should hash from publisherPublicKey>",
+  "publisherPublicKey": "<base64 of publisher's Ed25519 pub>",
+  "prekeyPublic": "<base64 of fresh X25519 pubkey>",
+  "validFromMs": <epoch ms>,
+  "validToMs": <epoch ms>,
+  "signature": "<base64 of Ed25519 sig over prekeyPublishSignableBytes>"
+}
+```
+
+Domain-tagged signable bytes prefix: `"rumor-prekey-v1:"`. Field order in the canonical signable bytes binds publisherId + publisherPublicKey + prekeyPublic + validity window — a relay extending the window, swapping the prekey, or substituting another publisher's identity all break the sig.
+
+### 4.8 Room message (O79)
+
+Room-addressed message. Two modes:
+
+**OPEN room:** `payload = MessagePayload(TEXT, plaintext)`. `encryptedPayload = null`. No content encryption. `_ext.rt = base64(RoomRoutingTag.openRoomTag(roomId))` — a 16-byte tag derived from the public roomId. Observers who don't enumerate roomIds see only the tag.
+
+**ENCRYPTED room (INVITE / CLOSED / PASSWORD):** `payload = null`. `encryptedPayload` is `WireJson.encodeToString(MultiRecipientEnvelope(...))`. `_ext.rt = base64(RoomRoutingTag.encryptedRoomTag(routingKey, messageId))` — a per-message HMAC, derived from a per-room routing key shared at invite/join time. Observers without the routing key can't compute the tag at all.
+
+The full byte-level cryptographic operations (multi-recipient envelope construction + decryption; HKDF-derived per-recipient wrap keys; domain tags for routing tag derivation, wrap-key info, envelope signature scope) are specified in `docs/O79_PROTOCOL_SPEC.md`. The threat-model context (what each layer defends + what it cannot) is in `docs/ROOMS_THREAT_MODEL.md`.
+
+Domain tags reserved (forever):
+- `"rumor-room-route-v1:"` — OPEN routing tag SHA-256 prefix
+- `"rumor-room-msg-tag-v1:"` — ENCRYPTED routing tag HMAC prefix
+- `"rumor-room-routing-key-v1"` — HKDF info for per-room routing-key derivation
+- `"rumor-room-envelope-v1:"` — MultiRecipientEnvelope outer Ed25519 sig scope
+- `"rumor-room-wrap-v1:"` — per-recipient wrap-key HKDF info prefix
 
 ---
 
