@@ -11,6 +11,29 @@ import com.rumor.mesh.core.model.BlocklistDiff
 import com.rumor.mesh.core.model.blocklistDiffSignableBytes
 import com.rumor.mesh.core.model.blocklistSignableBytes
 
+/**
+ * Builds and signs published blocklists from the local user's
+ * current block decisions. Two surfaces:
+ *
+ *  - [publish] — full snapshot: every active block (expired ones
+ *    excluded) wrapped, sorted, Ed25519-signed. Used for first-time
+ *    subscribers and as the periodic "ground truth" anchor against
+ *    which diffs are applied. Wire type is [MessageType.BLOCKLIST_PUBLISH],
+ *    traffic class [TrafficClass.TRANSFER_SETUP] (full snapshot can
+ *    exceed 16 KB — see CLAUDE.md design decision).
+ *
+ *  - [publishDiff] — incremental: just the (added, removed) delta
+ *    since [fromVersion]. Wire type [MessageType.BLOCKLIST_DIFF],
+ *    traffic class [TrafficClass.INFRASTRUCTURE] (always small).
+ *    Returns null if nothing changed — caller decides whether to
+ *    publish anything.
+ *
+ * Both paths return null silently if identity is locked (the only
+ * legitimate failure mode at compose time); caller logs and retries
+ * later. Signatures cover the canonical signable-bytes form pinned
+ * by `rumor-blocklist-v1:` / `rumor-blocklist-diff-v1:` domain tags
+ * — see `core/model/Blocklist.kt`.
+ */
 class BlocklistPublisher(
     private val blockEntryRepo: BlockEntryRepository,
     private val identityProvider: IdentityProvider,

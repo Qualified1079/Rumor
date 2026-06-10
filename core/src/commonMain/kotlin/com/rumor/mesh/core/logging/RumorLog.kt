@@ -6,8 +6,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/**
+ * Standard severity levels, ordered from chattiest (VERBOSE) to most
+ * severe (ERROR). Below INFO is gated by `RumorLog.debugMode` — keeps
+ * release builds quiet without requiring scattered `if (BuildConfig
+ * .DEBUG)` checks.
+ */
 enum class LogLevel { VERBOSE, DEBUG, INFO, WARN, ERROR }
 
+/**
+ * One structured log line. Held in the in-memory ring buffer for the
+ * UI log viewer; also fed to the sink at emit time. `timestampMs`
+ * comes from `SystemClock.now()` so simulator scenarios with a
+ * fake clock produce reproducible log timing.
+ */
 data class LogEntry(
     val level: LogLevel,
     val tag: String,
@@ -16,6 +28,12 @@ data class LogEntry(
     val timestampMs: Long = SystemClock.now(),
 )
 
+/**
+ * Pluggable output: where each emitted log line goes. The Android
+ * app installs an `AndroidLogSink` (wraps `android.util.Log`); the
+ * simulator and unit tests use [ConsoleSink]; tests that don't want
+ * any output set a null-sink.
+ */
 fun interface LogSink {
     fun emit(level: LogLevel, tag: String, message: String, throwable: Throwable?)
 }
