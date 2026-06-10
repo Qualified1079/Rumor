@@ -1,12 +1,30 @@
 # Handoff note
 
 > Per `docs/MULTI_INSTANCE_COORDINATION.md` async-handoff section.
-> This snapshot covers an autonomous-overnight session (user asleep).
+> This snapshot covers two autonomous sessions stacked.
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm`. **Wall clock at write:** ~20:55 UTC
-2026-06-05.
+`claude/practical-archimedes-wmySm`. **Latest commit at write:** `abfcc39`
+(top of branch). User is asleep; another instance may pick up here.
+
+## Most-recent autonomous session (this writeup)
+
+Five commits stacked on top of the previous session's `25e3f11`:
+
+| Commit | Row | Result |
+|---|---|---|
+| `475c080` | DomainTagInvariantTest extension | Drift guard widened from 8 to 21 wire-format domain tags. Catches a silent rename of `rumor-msg-v1:` / `rumor-hello-v1:` / `rumor-hello-v2:` / `rumor-blocklist-v1:` / `rumor-blocklist-diff-v1:` / `rumor-bridge-vouched-v1:` / `rumor-prekey-v1:` / `rumor-room-create-v1:` / `rumor-room-invite-v1:` / `rumor-room-action-v1:` / `rumor-rbsr-v1:` / `rumor-o76:` (plus the original 8) at build time. |
+| `5392265` | docs/wire-format.md §6 | Inventory table was missing 13 tags actually emitted by `:core` and still listed the retired `rumor-identity-rotation-v1:` as active. Split into Signatures / HMAC-HKDF-AEAD / Retired subsections; cross-referenced against the new drift guard. |
+| `7863fcd` | CLAUDE.md counts refresh | Stale "Counts as of this writing" line (off by 1 on DECISION, off by 1 on Total). Now: 17 PART · 15 DECISION · 40 TODO. Total open rows: 72. |
+| `17a59c5` | Sustaining KDoc — repository interfaces, Identity, Route | Top-level KDoc on `MessageRepository`, `ContactRepository`, `RouteRepository`, `BreadcrumbRepository`, `BlockEntryRepository`, `SubscribedBlocklistRepository`, `BlocklistEntryRepository`, `ScheduledMessageRepository`, `TransferRepository`, `ChunkRepository` + `Identity.LocalIdentity` / `IdentityProvider` + `Route` / `Breadcrumb` data classes. Records the "three impls in tree, one contract" pattern and cross-references the relevant G#/O# rows. |
+| `abfcc39` | Sustaining KDoc — blocklist module + RumorLog primitives | Top-level KDoc on `BlocklistVerifier`, `BlocklistPublisher`, `BlocklistSubscriber`, `BlocklistGossipBridge` + `LogLevel` / `LogEntry` / `LogSink`. Records the sibling-pattern shape (the blocklist publish/subscribe stack mirrors the O67 keyword-filter publish/subscribe stack). |
+
+All commits pushed. `:core:jvmTest` green at every step.
+
+## Previous session (overnight + post-wake) below this line
+
+**Wall clock:** ~20:55 UTC 2026-06-05.
 
 ## Session totals (autonomous-overnight + post-wake)
 
