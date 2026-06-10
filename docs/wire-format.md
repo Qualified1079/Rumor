@@ -574,22 +574,51 @@ A new capability tag MUST be added to this table before it goes on the wire. Old
 
 ## 6. Domain tag inventory
 
-Every signature site has a unique domain-tagged prefix so a signature produced in one context cannot be replayed in another. Re-implementers MUST use the exact byte-string prefix shown.
+Every signature site, HMAC, HKDF info string, and AEAD AAD has a unique domain-tagged prefix so a value produced in one context cannot be replayed in another. Re-implementers MUST use the exact byte-string prefix shown.
+
+This table is the union of every tag emitted by `:core` commonMain code. Drift guarded at build time by `DomainTagInvariantTest` (`core/src/jvmTest/.../protocol/`).
+
+### Signature scopes (outer Ed25519)
 
 | Tag | Signs what | Site |
 |---|---|---|
-| `"rumor-hello-v1:"` | HELLO challenge: nonce + version bits + sorted features | `helloChallengeBytes` |
 | `"rumor-msg-v1:"` | Outer `RumorMessage` signature | `MessageStore.signableBytes` |
+| `"rumor-hello-v1:"` | HELLO v1 challenge: nonce + version bits + sorted features | `helloChallengeBytes` |
+| `"rumor-hello-v2:"` | HELLO v2 challenge: v1 fields + `recentlyExchangedWith` (route-adv-v1) | `helloChallengeBytesV2` |
 | `"rumor-blocklist-v1:"` | Full blocklist snapshot | `blocklistSignableBytes` |
 | `"rumor-blocklist-diff-v1:"` | Blocklist diff | `blocklistDiffSignableBytes` |
-| `"rumor-identity-rotation-v1:"` | Continuity-signature on key rotation | `identityRotationSignableBytes` |
-| `"rumor-bridge-vouched-v1:"` | Bridge-vouched outer (currently same key as outer msg sig — verify) | `BridgeVouched.kt` |
-| `"rumor-rbsr-v1:"` | Per-item input to the RBSR XOR fingerprint | `Rbsr.kt` |
+| `"rumor-bridge-vouched-v1:"` | BRIDGE_VOUCHED outer bridge signature (foreign-network delivery vouch) | `bridgeVouchedSignableBytes` |
+| `"rumor-message-delete-v1:"` | MESSAGE_DELETE issuer signature (O40) | `messageDeleteSignableBytes` |
+| `"rumor-keyword-filter-v1:"` | KEYWORD_FILTER_PUBLISH publisher signature (O67) | `KeywordFilter.kt` |
+| `"rumor-prekey-v1:"` | PREKEY_PUBLISH publisher signature (O38) | `prekeyPublishSignableBytes` |
+| `"rumor-room-create-v1:"` | RoomCreate signature (O79) | `roomCreateSignableBytes` |
+| `"rumor-room-invite-v1:"` | RoomInvite signature (O79) | `roomInviteSignableBytes` |
+| `"rumor-room-action-v1:"` | RoomAction signature (O79: REMOVE_MESSAGE / KICK_USER / BAN_USER / UNBAN_USER) | `roomActionSignableBytes` |
+| `"rumor-room-envelope-v1:"` | MultiRecipientEnvelope outer sender signature (O79 ENCRYPTED room body) | `multiRecipientEnvelopeSignableBytes` |
+
+### HMAC / HKDF / AEAD AAD prefixes (non-signature)
+
+| Tag | Used for | Site |
+|---|---|---|
+| `"rumor-dm-v1:"` | Sealed-sender DM recipient tag HMAC domain (O53) | `SealedSenderTag.tagFor` |
+| `"rumor-rbsr-v1:"` | Per-item input to the RBSR v1 XOR fingerprint (O42) | `Rbsr.xorFingerprint` |
+| `"rumor-room-route-v1:"` | OPEN room routing-tag SHA-256 prefix (O79) | `RoomRoutingTag.openRoomTag` |
+| `"rumor-room-msg-tag-v1:"` | ENCRYPTED room per-message routing-tag HMAC prefix (O79) | `RoomRoutingTag.encryptedRoomTag` |
+| `"rumor-room-routing-key-v1"` | HKDF info: per-room routing-key derivation (O79) | `RoomRoutingTag.deriveEncryptedRoomRoutingKey` |
+| `"rumor-room-wrap-v1:"` | HKDF info prefix: per-recipient wrap-key derivation (O79) | `MultiRecipientEnvelopeCodec` |
+| `"rumor-o76:"` | AES-GCM AAD prefix: binds `_ext.cl` originalLength to the tag (O76) | `compressionAad` |
+
+### Retired tags
+
+| Tag | Retired in | Notes |
+|---|---|---|
+| `"rumor-identity-rotation-v1:"` | pre-v0.1 (no wire-format release) | Originally O41 continuity signature on identity rotation. Removed entirely (see G9) because the auto-rebind UX turned key-compromise into permanent impersonation. Name reserved forever — never re-use for any purpose. The deletion-announcement use case lives at O69 (`IDENTITY_RETIRED`, no successor key, no laundering). |
 
 **Bumping a tag is the canonical marker that a real wire-format change occurred.** Bumps require:
 1. Recording the old tag in `docs/RENAMED_FIELDS_NEVER_REUSE.md` so it is never re-used.
 2. A new capability tag in HELLO `supportedFeatures` so peers can negotiate.
 3. A transition window where both old and new are honoured by receivers.
+4. Adding a `DomainTagInvariantTest` entry for the new tag so the drift guard tracks it.
 
 ---
 
