@@ -107,7 +107,7 @@ Each row carries a status tag in its title:
 | `[TODO/EMU]` | Needs an Android emulator (Keystore, FLAG_SECURE, biometric prompt, Doze). |
 | `[TODO/HW]` | Needs real hardware (a Pixel-class device for battery; a Meshtastic/MeshCore radio for bridge work). |
 
-Counts as of this writing: 17 PART · 14 DECISION · 40 TODO (CODE 18 · SIM 2 · UI 9 · EMU 4 · HW 7). Total open rows: 71.
+Counts as of this writing: 17 PART · 15 DECISION · 40 TODO (CODE 18 · SIM 2 · UI 9 · EMU 4 · HW 7). Total open rows: 72.
 
 **Priority floor:** new-hardware items (MCU firmware O75, OpenWrt/SBC native relay under O54) are explicitly the lowest priority tier. Phone-side software ships first; hardware-native targets follow once the protocol surface is locked.
 
