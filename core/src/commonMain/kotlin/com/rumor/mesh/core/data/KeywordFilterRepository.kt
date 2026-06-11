@@ -31,6 +31,17 @@ interface KeywordFilterListRepository {
     suspend fun delete(publisherId: String)
 }
 
+/**
+ * Persistent store for [FilterSubscription] — the local user's override layer
+ * (action promotions, allowlist additions, enabled-flag) over each
+ * [KeywordFilterList] they subscribe to.
+ *
+ * Sibling of [KeywordFilterListRepository] (which holds the publisher's
+ * immutable signed bytes); the two together form the publish/subscribe
+ * stack for O67 keyword filtering. Three impls behind the contract:
+ * Room adapter, simulator in-memory stub, and the test fakes — same shape
+ * as every other repository (see CLAUDE.md §DI wiring).
+ */
 interface FilterSubscriptionRepository {
     suspend fun upsert(sub: FilterSubscription)
     suspend fun get(publisherId: String): FilterSubscription?

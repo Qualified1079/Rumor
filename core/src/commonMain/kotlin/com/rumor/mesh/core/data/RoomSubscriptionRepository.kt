@@ -99,6 +99,16 @@ data class RoomSubscription(
     }
 }
 
+/**
+ * One of two room modes (O79). OPEN rooms carry signed plaintext; ENCRYPTED
+ * rooms wrap each message in a multi-recipient envelope. The mode is fixed at
+ * room creation time and is what determines how the routing tag and message
+ * body are derived — see `RoomRoutingTag` and `MultiRecipientEnvelopeCodec`.
+ *
+ * PASSWORD/INVITE/CLOSED membership policies all fold into ENCRYPTED at the
+ * wire layer — the difference is purely in how the per-recipient key is
+ * distributed at join time.
+ */
 enum class RoomSubscriptionMode {
     /** Public room — routing tag is a deterministic function of roomId. */
     OPEN,

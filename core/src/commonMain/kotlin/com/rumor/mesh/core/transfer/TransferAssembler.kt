@@ -194,6 +194,15 @@ class TransferAssembler(
     }
 }
 
+/**
+ * The output of a completed transfer: the verified metadata envelope plus the
+ * reassembled raw bytes. Emitted on [TransferAssembler.assembledTransfers] once
+ * every chunk for a given transferId has arrived and the SHA-256 hash matches.
+ *
+ * [data] is *unverified by content*; only the byte-level integrity is checked.
+ * App-layer extraction (e.g. compressed archives, image decoding) still has to
+ * validate the payload before using it — see O14 / O28 / O83.
+ */
 data class AssembledTransfer(
     val metadata: TransferMetadata,
     val data: ByteArray,
