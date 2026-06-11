@@ -1,0 +1,21 @@
+{
+  "name": "dm-line-short-confirms-hop-cap",
+  "durationSec": 180,
+  "seed": 4242,
+  "speedMult": 10.0,
+  "topology": { "kind": "line", "length": 10 },
+  "params": {
+    "msg_per_sec": "0.15",
+    "dm_fraction": "0.4",
+    "broadcaster_count": "0",
+    "hops_to_live": "40",
+    "use_breadcrumbs": "1",
+    "use_rbsr": "0"
+  },
+  "assertions": [
+    { "kind": "min-total-messages", "min": 500 },
+    { "kind": "dm-delivery", "minRatio": 0.6 },
+    { "kind": "heap-bounded", "maxMb": 4096 }
+  ],
+  "trace": true
+}
