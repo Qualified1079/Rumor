@@ -8,3 +8,4 @@ captures/
 app/keystore.properties
 app/release.keystore
 *.jks
+simulator/rumor-bundle.zip
