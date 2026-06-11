@@ -1,14 +1,32 @@
 # Handoff note
 
 > Per `docs/MULTI_INSTANCE_COORDINATION.md` async-handoff section.
-> This snapshot covers two autonomous sessions stacked.
+> This snapshot covers three autonomous sessions stacked.
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm`. **Latest commit at write:** `abfcc39`
+`claude/practical-archimedes-wmySm`. **Latest commit at write:** `091dd33`
 (top of branch). User is asleep; another instance may pick up here.
 
 ## Most-recent autonomous session (this writeup)
+
+Two commits stacked on top of `35bd2dc` (the previous session's
+G22 scenario-survey extension):
+
+| Commit | Row | Result |
+|---|---|---|
+| `a922947` | Sustaining KDoc — Android app entry surfaces | Top-level KDoc on `RumorApp` (Koin startup point + cross-ref to G6 verify test), `MainActivity` (lifecycle wiring: onCreate eager-resolve to surface Koin misconfig as a friendly error screen, onStart bind to `MeshService` when identity unlocked, onStop unbind), `RumorDatabase` (schema-versioning policy + release-vs-debug `fallbackToDestructiveMigration` divide + the enum-name on-disk-schema rule), and `Converters` (the `.name`/`valueOf` round-trip rule — renaming a `MessageType` / `ContentType` / `BlocklistMode` / `TransferStatus` / `TransferDirection` value breaks read-back of existing rows; same constraint as wire-format strings in `docs/RENAMED_FIELDS_NEVER_REUSE.md`). |
+| `091dd33` | Sustaining KDoc — four more small public surfaces | Top-level KDoc on `BootReceiver` (post-reboot/post-upgrade auto-restart rationale + locked-identity graceful no-op), `FilterSubscriptionRepository` (records the sibling-pair shape with `KeywordFilterListRepository` for O67 publish/subscribe), `AssembledTransfer` (flags that bytes are byte-integrity-verified but NOT content-validated — extraction still has to validate per O14/O28/O83), and `RoomSubscriptionMode` (OPEN vs ENCRYPTED dichotomy and the note that PASSWORD/INVITE/CLOSED all fold into ENCRYPTED at the wire layer; the join-time key distribution is what differs). |
+
+All commits pushed. `:core:jvmTest` + `:simulator:test` green at every step.
+
+This session also installed JDK 17 (`openjdk-17-jdk-headless`) into the
+container so the gradle toolchain pinned in `core/build.gradle.kts` /
+`simulator/build.gradle.kts` (`jvmToolchain(17)`) could resolve — the
+session's Ubuntu 24.04 base image ships only JDK 21. No project files
+were changed for this; just the container's package set.
+
+## Previous session (the five-commit sustaining run)
 
 Five commits stacked on top of the previous session's `25e3f11`:
 
