@@ -200,7 +200,7 @@ class SimWorld(val params: SimParamRegistry) {
      * node's identity — in real Rumor this comes from ContactRepository after
      * a HELLO exchange; the sim has the luxury of direct access.
      */
-    private fun emitDm(src: SimNode, aliveNodes: List<SimNode>, rng: Random) {
+    private fun emitDm(src: SimNode, aliveNodes: List<SimNode>, profile: TrafficProfile, rng: Random) {
         val candidates = aliveNodes.filter { it.index != src.index }
         if (candidates.isEmpty()) return
         val recipient = candidates[rng.nextInt(candidates.size)]
@@ -209,6 +209,7 @@ class SimWorld(val params: SimParamRegistry) {
             recipientId         = recipient.userId,
             recipientPublicKey  = recipientIdentity.publicKeyBytes,
             text                = "sim-dm-${rng.nextInt(100_000)}",
+            hopsToLive          = profile.hopsToLive,
         ) ?: return
         src.recordProcessed()
     }
@@ -300,7 +301,7 @@ class SimWorld(val params: SimParamRegistry) {
             val burstMult = if (rng.nextDouble() < profile.burstProbability) profile.burstMultiplier else 1
             for (i in 0 until base * burstMult) {
                 when {
-                    dmFraction > 0 && rng.nextDouble() < dmFraction -> emitDm(node, aliveNodes, rng)
+                    dmFraction > 0 && rng.nextDouble() < dmFraction -> emitDm(node, aliveNodes, profile, rng)
                     largeFraction > 0 && rng.nextDouble() < largeFraction -> emitLarge(node, profile, rng)
                     else -> {
                         val msg = gen.generate(rng)

@@ -51,7 +51,7 @@ private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_HOPS = 7
 private const val DEFAULT_DIRECT_HOPS = 15
 private const val MAX_BROADCAST_HOPS = DEFAULT_BROADCAST_HOPS
-private const val MAX_DIRECT_HOPS = DEFAULT_DIRECT_HOPS
+private const val MAX_DIRECT_HOPS = MAX_TOTAL_HOPS
 
 /**
  * Core protocol logic. No radio code. No transport types.
@@ -372,6 +372,7 @@ class GossipEngine(
         text: String,
         replyTo: String? = null,
         mentions: List<String> = emptyList(),
+        hopsToLive: Int? = null,
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
         val envelope = dmEnvelopeRegistry.forRecipient(recipientId)
@@ -416,7 +417,7 @@ class GossipEngine(
         val baseMsg = buildMessage(
             identity = identity,
             type = MessageType.DIRECT,
-            hopsToLive = DEFAULT_DIRECT_HOPS,
+            hopsToLive = (hopsToLive ?: DEFAULT_DIRECT_HOPS).coerceIn(1, MAX_DIRECT_HOPS),
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
