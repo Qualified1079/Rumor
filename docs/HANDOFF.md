@@ -5,8 +5,8 @@
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm`. **Latest commit at write:** the
-single commit below (`<pending>`, will be filled after `git commit`).
+`claude/practical-archimedes-wmySm`. **Latest commit at write:** `31bd490`
+(top of branch — single O91-step-2 commit on top of `7d6a43c`).
 User is asleep; another instance may pick up here.
 
 ## Most-recent autonomous session (this writeup)
