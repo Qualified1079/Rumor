@@ -15,8 +15,9 @@ design pass needed.
 ## Where this fits
 
 - The Kotlin side already exists: `core/src/iosMain/.../platform/PlatformCrypto.kt`.
-  Seven actuals work today via CommonCrypto / Foundation / Security; three
-  throw `NotImplementedError(BRIDGE_MISSING)`.
+  Seven actuals work today via CommonCrypto / Foundation / Security; five
+  throw `NotImplementedError(BRIDGE_MISSING)` (the three CryptoKit primitives
+  plus the two Ed25519→X25519 derivation helpers added under O91/G29).
 - The Swift side does NOT exist. It lives in the (future) iOS Xcode project
   alongside the SwiftUI / lifecycle code, NOT inside `:core`. `:core` stays
   Kotlin-only.
@@ -91,6 +92,45 @@ import Foundation
         let box = try! AES.GCM.SealedBox(nonce: nonce, ciphertext: body, tag: tag)
         return try! AES.GCM.open(box, using: k, authenticating: aad)
     }
+
+    // ── Ed25519 → X25519 derivation (O91) ───────────────────────────────
+
+    /// Convert a 32-byte Ed25519 private seed (what
+    /// `Curve25519.Signing.PrivateKey.rawRepresentation` returns) into the
+    /// 32-byte X25519 private key Rumor needs for DM agreement. Matches the
+    /// JVM derivation: SHA-512 the seed, take the low 32 bytes, X25519-clamp
+    /// per RFC 7748 §5. CryptoKit does not expose this conversion directly —
+    /// it's two CryptoKit-friendly steps (Insecure SHA-512 then byte masking):
+    ///
+    ///   var x = Data(Insecure.SHA512.hash(data: ed25519Seed).prefix(32))
+    ///   x[0]  &= 0xF8
+    ///   x[31] &= 0x7F
+    ///   x[31] |= 0x40
+    ///   return x
+    ///
+    /// Golden vector pinned by `Ed25519ToX25519ConversionTest` on JVM.
+    @objc public static func ed25519ToX25519PrivateSeed(_ ed25519Seed: Data) -> Data {
+        var x = Data(Insecure.SHA512.hash(data: ed25519Seed).prefix(32))
+        x[0]  &= 0xF8
+        x[31] &= 0x7F
+        x[31] |= 0x40
+        return x
+    }
+
+    /// Convert a 32-byte Ed25519 public key into the 32-byte X25519 public
+    /// key via the Edwards-to-Montgomery birational map `u = (1 + y) / (1 - y) mod p`
+    /// where `p = 2^255 - 19`. CryptoKit does NOT expose a primitive for this
+    /// either — implement with arbitrary-precision integers (e.g. the
+    /// `BigInt` package) and match the JVM `Ed25519ToX25519.ed25519PubToX25519Pub`
+    /// math byte-for-byte. The JVM implementation in
+    /// `core/src/jvmMain/.../crypto/Ed25519ToX25519.kt` is the source of
+    /// truth; replicate the masking-of-byte-31-sign-bit and the modular
+    /// inverse over (1-y).
+    @objc public static func ed25519ToX25519Public(_ ed25519Pub: Data) -> Data {
+        // TODO: implement via a BigInt dependency. See Ed25519ToX25519.kt
+        // for the exact arithmetic.
+        fatalError("ed25519ToX25519Public not yet implemented on iOS")
+    }
 }
 ```
 
@@ -125,6 +165,11 @@ every golden vector passes on iOS targets.** Specifically:
 - `ed25519 deterministic-sign with known key` — pure bridge dependency
 - `x25519 agreement with known keys` — pure bridge dependency
 - `aes256gcm with known key and IV` — pure bridge dependency
+- `ed25519ToX25519 round-trip on real identities` (O91 wired-fix property —
+  the test exists in `Ed25519AsX25519RoundtripTest.kt`; on iOS it requires
+  both bridge derivation helpers to be implemented byte-for-byte against
+  the JVM math). If this fails, real Rumor users cannot DM each other on
+  iOS — same failure mode that O91 closed on JVM.
 
 If any of those FAILS on iOS with the bridge wired up, the bridge has a bug
 (byte-order, encoding, parameter mismatch) and the iOS impl is NOT
