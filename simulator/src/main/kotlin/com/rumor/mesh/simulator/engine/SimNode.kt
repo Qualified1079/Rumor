@@ -77,10 +77,9 @@ class SimNode(
     /**
      * O79 receive-side subscription provider for ROOM_MESSAGE dispatch.
      * Reads from [roomSubscriptionRepo] on every inbound room message;
-     * returns null for the X25519 static private (sim nodes don't yet
-     * derive X25519 from Ed25519 — same Rumor-wide gap noted in CLAUDE.md
-     * O79). OPEN rooms work end-to-end in scenarios; ENCRYPTED rooms get
-     * matched at the tag layer but the decrypt step is skipped.
+     * O91 (closed): localX25519StaticPrivate now derives the X25519 static
+     * from the sim identity's Ed25519 seed so ENCRYPTED rooms decrypt
+     * end-to-end in scenarios. Engine zeros the returned bytes after use.
      */
     private val roomSubscriptionProvider = object : GossipEngine.RoomSubscriptionProvider {
         override fun openRoomIds(): List<String> = kotlinx.coroutines.runBlocking {
@@ -93,7 +92,10 @@ class SimNode(
                 .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.ENCRYPTED }
                 .map { com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription(it.roomId, it.routingKey) }
         }
-        override fun localX25519StaticPrivate(): ByteArray? = null
+        override fun localX25519StaticPrivate(): ByteArray? {
+            val seed = identityProvider.identity.value?.privateKeyBytes ?: return null
+            return com.rumor.mesh.core.crypto.CryptoManager.ed25519ToX25519PrivateSeed(seed)
+        }
     }
 
     val gossipEngine = GossipEngine(

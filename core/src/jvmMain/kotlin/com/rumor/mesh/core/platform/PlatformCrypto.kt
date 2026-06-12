@@ -68,6 +68,12 @@ actual object PlatformCrypto {
         return shared
     }
 
+    actual fun ed25519ToX25519PrivateSeed(ed25519Seed: ByteArray): ByteArray =
+        com.rumor.mesh.core.crypto.Ed25519ToX25519.ed25519PrivToX25519Priv(ed25519Seed)
+
+    actual fun ed25519ToX25519Public(ed25519Pub: ByteArray): ByteArray =
+        com.rumor.mesh.core.crypto.Ed25519ToX25519.ed25519PubToX25519Pub(ed25519Pub)
+
     actual fun aesGcmEncrypt(plaintext: ByteArray, key: ByteArray, iv: ByteArray, aad: ByteArray): ByteArray {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))

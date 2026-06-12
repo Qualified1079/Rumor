@@ -38,6 +38,31 @@ expect object PlatformCrypto {
     /** 32-byte raw shared secret. Caller applies a KDF on top. */
     fun x25519Agreement(ourPrivateKey: ByteArray, theirPublicKey: ByteArray): ByteArray
 
+    // ── Ed25519 → X25519 derivation (O91) ───────────────────────────────────
+
+    /**
+     * Convert a 32-byte Ed25519 private seed (the form
+     * `ed25519GenerateKeyPair` returns) into a 32-byte X25519 private key.
+     *
+     * Standard derivation: SHA-512 the seed, take the low 32 bytes, apply
+     * X25519 clamping per RFC 7748 §5. Required because Rumor's
+     * `IdentityManager` stores Ed25519 identities, but the DM path
+     * (`composeDirect` / `decryptPayload`) needs to perform X25519
+     * Diffie-Hellman against the recipient's converted public key —
+     * passing raw Ed25519 bytes to `x25519Agreement` silently produces
+     * mismatched shared secrets (pinned by `Ed25519AsX25519RoundtripTest`).
+     */
+    fun ed25519ToX25519PrivateSeed(ed25519Seed: ByteArray): ByteArray
+
+    /**
+     * Convert a 32-byte Ed25519 public key into a 32-byte X25519 public
+     * key via the Edwards-to-Montgomery birational map `u = (1 + y) / (1 - y)`.
+     * Counterpart to [ed25519ToX25519PrivateSeed]; both sides of the DM
+     * apply the matching conversion before [x25519Agreement] so the
+     * shared secrets agree.
+     */
+    fun ed25519ToX25519Public(ed25519Pub: ByteArray): ByteArray
+
     // ── AES-256-GCM ──────────────────────────────────────────────────────────
 
     /**

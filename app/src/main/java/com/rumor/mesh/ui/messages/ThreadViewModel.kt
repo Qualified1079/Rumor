@@ -140,7 +140,19 @@ class ThreadViewModel(
             val dotIdx = encryptedPayload.indexOf('.')
             require(dotIdx > 0) { "malformed payload" }
             val ephemeralPub = encryptedPayload.substring(0, dotIdx).fromBase64()
-            val sharedKey = CryptoManager.x25519Agreement(localPrivKey, ephemeralPub)
+            // O91: localPrivKey is the Ed25519 identity seed; derive the X25519
+            // private (SHA-512(seed)[0:32], RFC 7748 clamped) before DH. Mirrors
+            // the conversion in GossipEngine.composeDirect on the sender's
+            // recipientPublicKey — both sides MUST apply the matching map or
+            // the agreement secrets disagree (per Ed25519AsX25519RoundtripTest).
+            val localX25519Priv = CryptoManager.ed25519ToX25519PrivateSeed(localPrivKey)
+            val sharedKey = try {
+                CryptoManager.x25519Agreement(localX25519Priv, ephemeralPub)
+            } finally {
+                // The derived X25519 private is as sensitive as the seed it came from;
+                // zero it as soon as the agreement is done with it.
+                localX25519Priv.fill(0)
+            }
             try {
                 val ct = CryptoManager.AesGcmCiphertext.fromBase64(encryptedPayload.substring(dotIdx + 1))
                 val aad = if (msg.isCompressed) compressionAad(msg.compressionOriginalLength) else ByteArray(0)

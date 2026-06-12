@@ -1,14 +1,39 @@
 # Handoff note
 
 > Per `docs/MULTI_INSTANCE_COORDINATION.md` async-handoff section.
-> This snapshot covers three autonomous sessions stacked.
+> This snapshot covers four autonomous sessions stacked.
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm`. **Latest commit at write:** `091dd33`
-(top of branch). User is asleep; another instance may pick up here.
+`claude/practical-archimedes-wmySm`. **Latest commit at write:** the
+single commit below (`<pending>`, will be filled after `git commit`).
+User is asleep; another instance may pick up here.
 
 ## Most-recent autonomous session (this writeup)
+
+**Closed O91 step 2 of 2 — Ed25519 → X25519 derivation wired into
+the production DM path.** One focused commit that turns the bug pin
+into a real fix, plus the doc updates:
+
+| Change | Result |
+|---|---|
+| `PlatformCrypto` expect/actual surface | Added `ed25519ToX25519PrivateSeed` + `ed25519ToX25519Public` to the expect object. JVM actual delegates to the existing `Ed25519ToX25519` math (no change to the well-tested primitive). iOS actual throws `NotImplementedError(BRIDGE_MISSING)` — same posture as the other iOS crypto primitives until the Swift bridge lands. |
+| `CryptoManager` wrappers | Two thin commonMain entry points so callers in `:core` and `:app` reach the conversion via the same façade they already use for sign / x25519Agreement / aesGcm. |
+| `GossipEngine.composeDirect` | Converts the recipient's Ed25519 pubkey before `x25519Agreement`. Mirror of the receive-side conversion. |
+| `ThreadViewModel.decryptPayload` | Converts the local Ed25519 seed before `x25519Agreement`. Zeros the derived X25519 private in a finally block (the conversion produces a fresh buffer per call, so it's safe to scribble over). |
+| `RoomSubscriptionProvider.localX25519StaticPrivate` | Returns the derived static from the unlocked identity in both `AppModule` (Android) and `SimNode` (simulator). Was returning `null` before, which meant ENCRYPTED rooms matched at the tag layer but couldn't decrypt; now they decrypt end-to-end. |
+| `GossipEngine.handleRoomMessage` | Wraps the codec call in a `try { … } finally { xPriv.fill(0) }` so the freshly-derived private doesn't outlive the decrypt. The contract docstring on `RoomSubscriptionProvider.localX25519StaticPrivate` was updated to document that implementations must return a fresh buffer each call. |
+| `Ed25519AsX25519RoundtripTest` | Reframed: the primitive-gap pin stays (primitive contract is "X25519 in"; a future regression that auto-converts inside the primitive breaks genuine X25519 callers and trips the assertion), and a new `wired fix` test exercises round-trip + AEAD through the two new conversion wrappers. The wired-fix test is the regression nudge for any future change that drops the conversion at a call site. |
+| `CLAUDE.md` | O91 marked `[CLOSED]` → G29; counts refreshed (16 PART, 71 total open). |
+
+`:core:jvmTest` + `:simulator:test` both green at HEAD. `:app:testDebugUnitTest`
+not runnable in this container (no Android SDK); the change to
+`ThreadViewModel.decryptPayload` is small and follows the existing
+finally-zeroize pattern verbatim, and the change to `AppModule` is
+the same six-line shape as the simulator's `SimNode` change which
+the simulator tests cover.
+
+## Previous autonomous session
 
 Two commits stacked on top of `35bd2dc` (the previous session's
 G22 scenario-survey extension):

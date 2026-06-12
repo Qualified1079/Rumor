@@ -152,16 +152,13 @@ val appModule = module {
     // promote to an explicit in-memory projection cache invalidated
     // on subscribe/unsubscribe.
     //
-    // localX25519StaticPrivate returns null today — derivation of
-    // the user's X25519 static private from the Ed25519 identity is
-    // a separate piece of work (Curve25519 keys are not directly
-    // interchangeable between Ed25519 and X25519 forms). Until that
-    // lands, ENCRYPTED room messages are matched at the tag layer
-    // but the decrypt step is skipped — they're stored on this
-    // device as opaque envelopes, decryptable later when the X25519
-    // key derivation is wired.
+    // O91 (closed): localX25519StaticPrivate now derives the X25519 private
+    // from the unlocked Ed25519 identity seed (SHA-512(seed)[0:32], RFC 7748
+    // clamped). Caller of the engine zeroes the returned bytes after use.
+    // Returns null while the identity is locked.
     single<GossipEngine.RoomSubscriptionProvider> {
         val repo = get<com.rumor.mesh.core.data.RoomSubscriptionRepository>()
+        val identityProvider = get<IdentityProvider>()
         object : GossipEngine.RoomSubscriptionProvider {
             override fun openRoomIds(): List<String> = kotlinx.coroutines.runBlocking {
                 repo.getAll()
@@ -173,7 +170,10 @@ val appModule = module {
                     .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.ENCRYPTED }
                     .map { com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription(it.roomId, it.routingKey) }
             }
-            override fun localX25519StaticPrivate(): ByteArray? = null  // see comment above
+            override fun localX25519StaticPrivate(): ByteArray? {
+                val seed = identityProvider.identity.value?.privateKeyBytes ?: return null
+                return com.rumor.mesh.core.crypto.CryptoManager.ed25519ToX25519PrivateSeed(seed)
+            }
         }
     }
     single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), canaryMetrics = get(), dmEnvelopeRegistry = get(), roomSubscriptionProvider = get<GossipEngine.RoomSubscriptionProvider>()) }

@@ -66,6 +66,26 @@ object CryptoManager {
         return deriveAesKey(shared, byteArrayOf(0x52, 0x75, 0x6d, 0x6f, 0x72, 0x44, 0x48))
     }
 
+    // ── Ed25519 → X25519 derivation (O91) ───────────────────────────────────
+
+    /**
+     * Convert a 32-byte Ed25519 private seed to a 32-byte X25519 private key
+     * (SHA-512(seed)[0:32] with RFC 7748 §5 clamping). Required at every DM
+     * decrypt site so the local identity's Ed25519 seed can drive an X25519
+     * agreement against the sender's ephemeral pubkey.
+     */
+    fun ed25519ToX25519PrivateSeed(ed25519Seed: ByteArray): ByteArray =
+        PlatformCrypto.ed25519ToX25519PrivateSeed(ed25519Seed)
+
+    /**
+     * Convert a 32-byte Ed25519 public key to a 32-byte X25519 public key
+     * (Edwards-to-Montgomery birational map). Required at every DM compose
+     * site so a recipient's Ed25519 identity public can drive an X25519
+     * agreement against the sender's ephemeral private.
+     */
+    fun ed25519ToX25519Public(ed25519Pub: ByteArray): ByteArray =
+        PlatformCrypto.ed25519ToX25519Public(ed25519Pub)
+
     // ── AES-256-GCM ──────────────────────────────────────────────────────────
 
     data class AesGcmCiphertext(

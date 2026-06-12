@@ -149,6 +149,16 @@ class GossipEngine(
          * receive-side room decryption). On null, ENCRYPTED room
          * messages still match for routing purposes but the engine
          * skips the decrypt step.
+         *
+         * **Implementations should return a FRESH buffer each call** —
+         * the engine zeroes the returned bytes in a finally block after
+         * decryption to satisfy the O39 sender/receiver-FS contract.
+         * Returning a long-lived shared buffer would let the engine
+         * scribble over the long-term key. Per O91 the natural
+         * implementation derives the X25519 private from the Ed25519
+         * seed (SHA-512(seed)[0:32] with RFC 7748 clamping) on each
+         * call, which is cheap and produces a fresh buffer by
+         * construction.
          */
         fun localX25519StaticPrivate(): ByteArray?
     }
@@ -392,7 +402,14 @@ class GossipEngine(
             val plaintextBytes = text.toByteArray(Charsets.UTF_8)
             val encoded = com.rumor.mesh.core.wire.CompressedPaddedCodec.encodeForWire(plaintextBytes)
             val ephemeral = CryptoManager.generateX25519KeyPair()
-            val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientPublicKey)
+            // O91: recipientPublicKey is an Ed25519 identity pubkey; convert to
+            // X25519 via the birational map before DH. Without this, the agreement
+            // silently produces a wrong-but-stable secret on the sender side and a
+            // different wrong-but-stable secret on the receiver side — pinned by
+            // Ed25519AsX25519RoundtripTest. The matching conversion lives in
+            // ThreadViewModel.decryptPayload (Ed25519 seed → X25519 priv).
+            val recipientX25519Pub = CryptoManager.ed25519ToX25519Public(recipientPublicKey)
+            val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientX25519Pub)
             if (encoded != null) {
                 val aad = com.rumor.mesh.core.wire.compressionAad(encoded.originalLength)
                 val ct = CryptoManager.aesGcmEncrypt(encoded.bytes, sharedKey, aad)
@@ -908,18 +925,25 @@ class GossipEngine(
             }
             is RoomTagMatcher.MatchResult.EncryptedMatch -> {
                 val xPriv = provider.localX25519StaticPrivate() ?: return
-                val envelopeJson = msg.encryptedPayload ?: return
-                val envelope = runCatching {
-                    WireJson.decodeFromString<MultiRecipientEnvelope>(envelopeJson)
-                }.getOrNull() ?: return
-                val localId = identityProvider.identity.value?.userId ?: return
-                val plaintext = MultiRecipientEnvelopeCodec.decrypt(envelope, localId, xPriv) ?: return
-                // Synthesize a plaintext-bearing carrier for inbox emission.
-                val synthetic = msg.copy(
-                    payload = MessagePayload(ContentType.TEXT, plaintext.decodeToString()),
-                    encryptedPayload = null,
-                )
-                emitToInbox(synthetic)
+                try {
+                    val envelopeJson = msg.encryptedPayload ?: return
+                    val envelope = runCatching {
+                        WireJson.decodeFromString<MultiRecipientEnvelope>(envelopeJson)
+                    }.getOrNull() ?: return
+                    val localId = identityProvider.identity.value?.userId ?: return
+                    val plaintext = MultiRecipientEnvelopeCodec.decrypt(envelope, localId, xPriv) ?: return
+                    // Synthesize a plaintext-bearing carrier for inbox emission.
+                    val synthetic = msg.copy(
+                        payload = MessagePayload(ContentType.TEXT, plaintext.decodeToString()),
+                        encryptedPayload = null,
+                    )
+                    emitToInbox(synthetic)
+                } finally {
+                    // O39 / O91: the provider returns a freshly derived X25519
+                    // private each call (from the Ed25519 identity seed); zero
+                    // it once the codec is done so a heap dump can't recover it.
+                    xPriv.fill(0)
+                }
             }
         }
     }

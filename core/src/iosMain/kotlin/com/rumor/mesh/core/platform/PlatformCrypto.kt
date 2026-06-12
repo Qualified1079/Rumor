@@ -58,6 +58,10 @@ actual object PlatformCrypto {
 
     actual fun x25519Agreement(ourPrivateKey: ByteArray, theirPublicKey: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
 
+    actual fun ed25519ToX25519PrivateSeed(ed25519Seed: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
+
+    actual fun ed25519ToX25519Public(ed25519Pub: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
+
     actual fun aesGcmEncrypt(plaintext: ByteArray, key: ByteArray, iv: ByteArray, aad: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
 
     actual fun aesGcmDecrypt(ciphertext: ByteArray, key: ByteArray, iv: ByteArray, aad: ByteArray): ByteArray = throw NotImplementedError(BRIDGE_MISSING)
