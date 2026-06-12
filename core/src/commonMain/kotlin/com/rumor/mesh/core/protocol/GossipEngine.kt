@@ -869,6 +869,14 @@ class GossipEngine(
             scope.launch { handleMessageDelete(msg) }
         }
 
+        // O38: PREKEY_PUBLISH — verify the publisher binding + sig and
+        // cache the freshest valid prekey for that publisher so a future
+        // composeDirect to them can DH against the short-lived prekey
+        // (receiver-side FS) instead of the long-term static identity.
+        if (msg.type == MessageType.PREKEY_PUBLISH) {
+            handlePrekeyPublish(msg)
+        }
+
         // O79: room message dispatch. Match the routing tag against the
         // local subscription cache; on match, decrypt (ENCRYPTED) or
         // pass through (OPEN), emit the resulting plaintext-bearing
@@ -945,6 +953,21 @@ class GossipEngine(
                     xPriv.fill(0)
                 }
             }
+        }
+    }
+
+    /** O38 — exposed for sender-side consultation in composeDirect (follow-up). */
+    val prekeyCache: PrekeyCache = PrekeyCache()
+
+    private fun handlePrekeyPublish(msg: RumorMessage) {
+        val json = msg.payload?.content ?: return
+        val payload = runCatching {
+            WireJson.decodeFromString<com.rumor.mesh.core.model.PrekeyPublish>(json)
+        }.getOrNull() ?: return
+        when (val r = PrekeyVerifier.verify(payload)) {
+            is PrekeyVerifier.Result.Accepted -> prekeyCache.put(payload)
+            is PrekeyVerifier.Result.Rejected ->
+                RumorLog.w("GossipEngine", "O38 prekey rejected: ${r.reason}")
         }
     }
 
