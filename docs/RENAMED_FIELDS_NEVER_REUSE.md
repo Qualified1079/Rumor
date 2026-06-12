@@ -50,6 +50,10 @@ backlog row that justified it.
 | `rumor-room-route-v1:` (SHA-256 prefix for OPEN room routing tags) | O79 OPEN room routing | Used in `RoomRoutingTag.openRoomTag`. |
 | `rumor-room-msg-tag-v1:` (HMAC prefix for ENCRYPTED room per-message routing tags) | O79 ENCRYPTED room routing | Used in `RoomRoutingTag.encryptedRoomTag`. |
 | `rumor-room-routing-key-v1` (HKDF info string for per-room routing key derivation) | O79 ENCRYPTED room routing-key derivation | Used in `RoomRoutingTag.deriveEncryptedRoomRoutingKey`. Domain-separates the routing key from any future content-encryption key derived from the same room shared secret. |
+| `rumor-dm-recipient-tag-v1:` (HKDF info prefix for per-contact tag key) | O53 sealed-sender per-contact tag-key derivation | Used in `SealedSenderKey.derive` with sorted userIds appended (`info = prefix + lo + "\|" + hi`) so Alice→Bob and Bob→Alice derive the same key. Bumping requires `-v2:` and re-derives every contact's cached tag key. |
+| `rumor-room-posting-cert-v1:` (signable-bytes domain tag) | O89 posting cert sig scope | Set in `roomPostingCertSignableBytes`. Bumping requires `-v2:` and forces every issued cert to be re-signed. |
+| `"room_posting_cert"` (SerialName for `RoomPostingCert`) | O89 | Wire payload type name. Reserved forever. |
+| `_ext.t` (sealed-sender tag carrier on RumorMessage) | O53 | Base64-encoded 32-byte HMAC tag from `SealedSenderTag.tagFor`. Reserved forever — do NOT reuse this key for any other `_ext` payload. |
 
 ## Retired names
 
