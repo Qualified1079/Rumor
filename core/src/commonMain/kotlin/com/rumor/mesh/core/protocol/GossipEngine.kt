@@ -51,7 +51,7 @@ private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_HOPS = 7
 private const val DEFAULT_DIRECT_HOPS = 15
 private const val MAX_BROADCAST_HOPS = DEFAULT_BROADCAST_HOPS
-private const val MAX_DIRECT_HOPS = MAX_TOTAL_HOPS
+private const val MAX_DIRECT_HOPS = DEFAULT_DIRECT_HOPS
 
 /**
  * Core protocol logic. No radio code. No transport types.
