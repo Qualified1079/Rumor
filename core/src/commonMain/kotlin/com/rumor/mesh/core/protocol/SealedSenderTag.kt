@@ -23,12 +23,13 @@ import com.rumor.mesh.core.crypto.HmacSha256
  * runs ~milliseconds of total work per inbound DM. The privacy
  * win pays for it.
  *
- * **Wiring is NOT done in this commit** — see CLAUDE.md O53 row.
- * This file is the helper function so a future GossipEngine
- * integration has one stable place to look up the domain-tag format
- * and the HMAC call. Field placement in `_ext` and the migration
- * from plaintext-recipientId-coexisting to tag-only-on-wire are the
- * remaining design decisions.
+ * **Compose-side wiring shipped** — `GossipEngine.composeDirect` stamps
+ * `_ext.t = base64(tagFor(perContactKey, msg.id))` on every native DM,
+ * alongside the existing plaintext `recipientId` (coexistence phase). The
+ * remaining open work is receiver-side: precompute per-contact tagKeys at
+ * unlock time, and at relay routing match inbound `_ext.t` against the
+ * precomputed set. Once that path is universally deployed the plaintext
+ * `recipientId` field can be retired in a wire-format break.
  *
  * Domain tag is RESERVED — never reuse `rumor-dm-v1:` for any other
  * purpose (per `docs/RENAMED_FIELDS_NEVER_REUSE.md` policy).

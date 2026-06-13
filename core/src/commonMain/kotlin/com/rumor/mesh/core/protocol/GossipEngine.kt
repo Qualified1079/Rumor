@@ -46,6 +46,7 @@ import com.rumor.mesh.core.wire.withMentions
 import com.rumor.mesh.core.wire.withReplyTo
 import com.rumor.mesh.core.wire.roomRoutingTag
 import com.rumor.mesh.core.wire.withRoomRoutingTag
+import com.rumor.mesh.core.wire.withSealedSenderTag
 
 private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_HOPS = 7
@@ -438,9 +439,30 @@ class GossipEngine(
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
-        val msg = (compressionMeta?.let { (bucket, origLen) ->
+        val withMeta = (compressionMeta?.let { (bucket, origLen) ->
             baseMsg.withCompressionMetadata(bucket, origLen)
         } ?: baseMsg).applyThreadAndMentionExt(replyTo, mentions)
+        // O53 sealed-sender: stamp _ext.t with HMAC(perContactKey, "rumor-dm-v1:" || id)
+        // alongside the existing plaintext recipientId (coexistence phase). Recipient
+        // can pre-match the tag against per-contact keys without learning recipientId
+        // from the wire once the plaintext field is dropped. _ext is not in
+        // signableBytes, so the outer Ed25519 sig stays valid. Skipped for bridged DMs
+        // — recipientPublicKey is a foreign-network key, not Rumor Ed25519, so the
+        // Ed25519→X25519 derivation isn't applicable.
+        val msg = if (envelope == null) {
+            val tagKey = SealedSenderKey.derive(
+                myUserId = identity.userId,
+                myEd25519Priv = identity.privateKeyBytes,
+                theirUserId = recipientId,
+                theirEd25519Pub = recipientPublicKey,
+            )
+            try {
+                val tag = SealedSenderTag.tagFor(tagKey, withMeta.id)
+                withMeta.withSealedSenderTag(tag.toBase64())
+            } finally {
+                tagKey.fill(0)
+            }
+        } else withMeta
         sentDmPlaintext.put(msg.id, text)
         if (envelope != null && rawCiphertext != null) {
             // Bridged DM: the bridge plugin picks this up via outboundBridgedDm and
