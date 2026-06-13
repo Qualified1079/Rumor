@@ -1,15 +1,30 @@
 # Handoff note
 
 > Per `docs/MULTI_INSTANCE_COORDINATION.md` async-handoff section.
-> This snapshot covers four autonomous sessions stacked.
+> This snapshot covers five autonomous sessions stacked.
 
 ## Branch state
 
-`claude/practical-archimedes-wmySm`. **Latest commit at write:** `31bd490`
-(top of branch — single O91-step-2 commit on top of `7d6a43c`).
-User is asleep; another instance may pick up here.
+`claude/practical-archimedes-wmySm`. **Latest commits at write:**
+`5da8065` (O53 tagKey zero-fill source invariant), `bd95b70`
+(O53 composeDirect sealed-sender stamp + sim wire test), on top of
+`0745c3a`. User is asleep; another instance may pick up here.
 
 ## Most-recent autonomous session (this writeup)
+
+**Wired O53 compose-side sealed-sender stamp.** Two focused commits
+on top of `0745c3a`:
+
+| Commit | Result |
+|---|---|
+| `bd95b70` O53: composeDirect stamps `_ext.t` | `GossipEngine.composeDirect` derives the per-contact tag key via `SealedSenderKey.derive`, computes `SealedSenderTag.tagFor(tagKey, msg.id)`, stamps `_ext.t = base64(tag)` alongside the existing plaintext `recipientId` (coexistence phase). tagKey is zeroed in finally. Bridged DMs skip the stamp because the recipient pubkey is foreign-network, not Rumor Ed25519. `_ext` is excluded from `signableBytes` so the outer Ed25519 sig stays valid. Simulator pin `SealedSenderTagWireTest` (2 tests) proves the recipient (independently deriving the per-contact key from the symmetric HKDF info) computes a matching tag for the same messageId — the property a relay's pre-match table will exploit once the receive-side precompute lands. Different recipients on the same sender stamp different tags (anti-cross-match property). |
+| `5da8065` O53: pin tagKey zero-fill as a source invariant | New `SourceInvariantTest.composeDirect zeros sealed-sender tagKey after use` brittle-regex check. Same shape as the existing G25 (`ephemeral.privateKeyBytes.fill(0)` / `sharedKey.fill(0)`) invariants. A future refactor that drops the fill is caught at unit-test time instead of silently leaking the per-contact tag key on the heap. |
+
+`:core:jvmTest` + `:simulator:test` both green at HEAD. CLAUDE.md O53
+row updated; remaining open work is receiver-side precompute store +
+relay routing match (both ~bounded, ~similar in shape to compose side).
+
+## Previous autonomous session (O91 step 2 of 2)
 
 **Closed O91 step 2 of 2 — Ed25519 → X25519 derivation wired into
 the production DM path.** One focused commit that turns the bug pin
