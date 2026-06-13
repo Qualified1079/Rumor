@@ -202,6 +202,39 @@ class SourceInvariantTest {
         }
     }
 
+    /**
+     * **Architecture invariant 5: O53 sealed-sender tagKey is zeroed after stamping.**
+     *
+     * `SealedSenderKey.derive` returns a 32-byte per-contact symmetric key derived
+     * from the X25519 ECDH of long-term static identities. The same key is reused
+     * for every DM to that contact for the process lifetime; leaving it on the
+     * heap until GC turns the privacy property into "until the next memory dump."
+     * `composeDirect` must call `tagKey.fill(0)` in a `finally` after computing
+     * the tag so the key buffer is unrecoverable on the same per-message FS basis
+     * as the ephemeral private (invariant 4).
+     *
+     * If this test fails: a refactor moved the tag stamp out of composeDirect or
+     * dropped the finally block. Re-verify the key is zeroed on every code path
+     * (including exception during HMAC), then update the pattern.
+     */
+    @Test
+    fun `composeDirect zeros sealed-sender tagKey after use`() {
+        val tagKeyFillPattern = Regex("""tagKey\.fill\(\s*0\s*\)""")
+        if (!tagKeyFillPattern.containsMatchIn(gossipEngine)) {
+            fail(
+                """
+                |Could not find `tagKey.fill(0)` in GossipEngine.kt. The per-contact
+                |sealed-sender tag key (O53) is derived from the X25519 ECDH of two
+                |long-term Ed25519 identities and would otherwise outlive every
+                |composeDirect call on the heap. The finally block in composeDirect
+                |after `SealedSenderKey.derive` MUST zero it before return; without
+                |this guard a memory dump recovers the per-contact tag key and the
+                |observer can match every future tag for that contact pair.
+                |""".trimMargin()
+            )
+        }
+    }
+
     /** Walk up from cwd looking for the repo root (settings.gradle.kts marker). */
     private fun findRepoRoot(): File {
         var dir: File? = File(".").canonicalFile
