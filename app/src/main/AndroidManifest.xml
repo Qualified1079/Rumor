@@ -17,6 +17,11 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- ── Wi-Fi Direct ──────────────────────────────────────────────────── -->
+    <!-- Required for raw TCP sockets over the Wi-Fi Direct group's local subnet —
+         Android denies socket() to any app without this, even for purely local,
+         non-internet traffic. Without it, WifiP2pManager association succeeds but
+         every socket connect/accept fails with EPERM. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />

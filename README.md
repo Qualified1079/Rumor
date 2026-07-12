@@ -276,6 +276,7 @@ Current known workarounds:
 | Stale Wi-Fi Direct group blocks new connections | Most devices | Always call `removeGroup()` at service start |
 | `WifiP2pManager` returns BUSY | Many devices | Serialize all API calls through a semaphore with 300ms cooldown |
 | Background process kill | Xiaomi (MIUI), Huawei (EMUI), Samsung (One UI) | Battery optimization exemption prompt directed to OEM-specific settings screen |
+| Symmetric GO-negotiation collision | Any two non-dual-role peers (not Samsung/MediaTek) | Both sides auto-connecting to each other with equal GO intent stalls negotiation for the ~40s framework timeout, repeating forever. Deterministic tiebreak: only the lower `deviceAddress` initiates `connect()`; the other waits passively. Connection-role only — never trusted as identity. |
 
 ---
 

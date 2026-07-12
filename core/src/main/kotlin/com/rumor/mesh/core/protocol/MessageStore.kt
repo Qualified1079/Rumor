@@ -49,7 +49,23 @@ class MessageStore(
         ensureContact(msg.senderId, msg.senderPublicKey)
 
         messageRepo.insert(msg)
+        evictIfOverCap()
 
+        return true
+    }
+
+    /**
+     * Store a message we just composed locally so it shows up in our own feed/thread.
+     * Unlike [ingest], skips signature re-verification (we just signed it ourselves)
+     * and skips [ensureContact] (the sender is our own identity, not a peer contact).
+     */
+    suspend fun ingestOwn(msg: RumorMessage) {
+        if (!duplicateFilter.recordAndCheck(msg.id)) return
+        messageRepo.insert(msg)
+        evictIfOverCap()
+    }
+
+    private suspend fun evictIfOverCap() {
         val isStatic = staticMode?.enabled?.value == true
         val maxMessages = if (isStatic) MAX_MESSAGES * STATIC_CACHE_BOOST else MAX_MESSAGES
         val evictBatch = if (isStatic) EVICT_BATCH * STATIC_CACHE_BOOST else EVICT_BATCH
@@ -57,8 +73,6 @@ class MessageStore(
         if (count > maxMessages) {
             messageRepo.evictOldest(evictBatch)
         }
-
-        return true
     }
 
     fun decrementHops(msg: RumorMessage): RumorMessage? {

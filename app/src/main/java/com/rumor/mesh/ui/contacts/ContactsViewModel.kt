@@ -6,8 +6,12 @@ import com.rumor.mesh.core.model.PeerPresence
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.data.ContactDao
 import com.rumor.mesh.data.ContactEntity
+import com.rumor.mesh.service.MeshControllerHolder
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -20,6 +24,7 @@ data class ContactWithStatus(
 class ContactsViewModel(
     private val contactDao: ContactDao,
     private val onlineStatusTracker: OnlineStatusTracker,
+    private val controllerHolder: MeshControllerHolder,
 ) : ViewModel() {
 
     val contacts: StateFlow<List<ContactWithStatus>> =
@@ -41,5 +46,23 @@ class ContactsViewModel(
 
     fun setDisplayName(userId: String, name: String) {
         viewModelScope.launch { contactDao.setDisplayName(userId, name) }
+    }
+
+    private val _isScanning = MutableStateFlow(false)
+    /**
+     * No end-to-end "discovery complete" signal exists yet (BLE + Wi-Fi Direct
+     * rediscovery are both fire-and-forget). Shown for a fixed window after tap
+     * so the user gets feedback that the scan actually started.
+     */
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    fun scanForPeers() {
+        if (_isScanning.value) return
+        controllerHolder.controller().triggerActiveScan()
+        viewModelScope.launch {
+            _isScanning.value = true
+            delay(5_000)
+            _isScanning.value = false
+        }
     }
 }

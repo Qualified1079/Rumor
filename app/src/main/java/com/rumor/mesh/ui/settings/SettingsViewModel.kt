@@ -61,10 +61,6 @@ class SettingsViewModel(
         _state.update { it.copy(debugLogging = enabled) }
     }
 
-    fun onChangePassphraseTapped() {
-        // Navigation handled by MainActivity
-    }
-
     fun onViewLogsTapped() {
         // Navigation handled by MainActivity
     }

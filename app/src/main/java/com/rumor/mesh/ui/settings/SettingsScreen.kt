@@ -29,6 +29,7 @@ fun SettingsScreen(
     onOpenTransfers: () -> Unit = {},
     onOpenLogs: () -> Unit = {},
     onOpenMetrics: () -> Unit = {},
+    onOpenChangePassphrase: () -> Unit = {},
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -52,7 +53,7 @@ fun SettingsScreen(
         SettingRow(
             icon = Icons.Default.Key,
             title = "Change passphrase",
-            onClick = viewModel::onChangePassphraseTapped,
+            onClick = onOpenChangePassphrase,
         )
 
         Spacer(Modifier.height(4.dp))
@@ -103,7 +104,10 @@ fun SettingsScreen(
             value = state.scanIntervalSec.toFloat(),
             onValueChange = { viewModel.setScanInterval(it.toInt()) },
             valueRange = 3f..30f,
-            steps = 8,
+            // One step per integer second so every whole-second value (including
+            // the 5s default) is a valid snap position — steps=8 previously only
+            // allowed multiples of 3, silently rounding 5 to 6 on any drag.
+            steps = 26,
         )
 
         Spacer(Modifier.height(4.dp))

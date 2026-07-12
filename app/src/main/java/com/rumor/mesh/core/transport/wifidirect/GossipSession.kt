@@ -54,6 +54,16 @@ class GossipSession(
     private val SESSION_TIMEOUT_MS = 30_000L
 
     /**
+     * Wi-Fi Direct sometimes reports CONNECTED before the interface's data path is
+     * actually usable — the TCP handshake completes but no bytes flow. Rather than
+     * guessing how long that takes, use a short timeout just for the HELLO phase so
+     * a dead data path is detected fast (a real signal) and the caller can retry the
+     * whole connection; the full [SESSION_TIMEOUT_MS] budget still applies once a
+     * live HELLO exchange proves the path works.
+     */
+    private val HELLO_TIMEOUT_MS = 5_000
+
+    /**
      * Below this many known IDs, send a raw list during the summary phase.
      * At ~32 chars per ID, 500 IDs is roughly the crossover where a bloom filter
      * with 1% false-positive rate becomes more compact than the JSON-encoded list.
@@ -90,6 +100,10 @@ class GossipSession(
         try {
             val out = DataOutputStream(socket.getOutputStream().buffered())
             val inp = DataInputStream(socket.getInputStream().buffered())
+
+            // Fail fast on a dead data path — see HELLO_TIMEOUT_MS. Restored to the
+            // full session budget once the handshake proves the socket actually works.
+            socket.soTimeout = HELLO_TIMEOUT_MS
 
             // Phase 1: HELLO — exchange identities + challenge nonces
             val ourNonce = ByteArray(32).also { SecureRandom().nextBytes(it) }.toBase64()
@@ -128,6 +142,10 @@ class GossipSession(
                 RumorLog.d(TAG, "Duplicate session with ${hello.userId.take(16)}… — yielding")
                 return@withTimeout null
             }
+
+            // Handshake proved the data path is live — allow the full session budget
+            // for the rest of the exchange (bloom filters / message batches can be large).
+            socket.soTimeout = SESSION_TIMEOUT_MS.toInt()
 
             // Now that the peer is verified, ask the engine for a peer-shaped offer.
             // The engine uses NeighborStore overlap history to trim or expand the batch.

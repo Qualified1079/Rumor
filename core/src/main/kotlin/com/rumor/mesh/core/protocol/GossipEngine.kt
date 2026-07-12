@@ -256,6 +256,7 @@ class GossipEngine(
             payload = MessagePayload(ContentType.TEXT, text),
         )
         enqueueImmediate(msg)
+        scope.launch { messageStore.ingestOwn(msg) }
         return msg
     }
 
@@ -292,6 +293,7 @@ class GossipEngine(
             }
         } else {
             enqueueImmediate(msg)
+            scope.launch { messageStore.ingestOwn(msg) }
         }
         return msg
     }

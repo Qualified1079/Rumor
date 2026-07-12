@@ -3,7 +3,7 @@ package com.rumor.mesh.ui.blocks
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.block.BlockManager
-import com.rumor.mesh.data.BlockEntryEntity
+import com.rumor.mesh.core.model.BlockEntry
 import com.rumor.mesh.data.SubscribedBlocklistDao
 import com.rumor.mesh.data.SubscribedBlocklistEntity
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
  * the effective blocked set but aren't shown row-by-row here.
  */
 data class BlockManagementState(
-    val localBlocks: List<BlockEntryEntity> = emptyList(),
+    val localBlocks: List<BlockEntry> = emptyList(),
     val subscriptions: List<SubscribedBlocklistEntity> = emptyList(),
     val statusMessage: String? = null,
 )

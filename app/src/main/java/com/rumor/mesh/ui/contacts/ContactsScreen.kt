@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,28 +29,45 @@ fun ContactsScreen(
     viewModel: ContactsViewModel = koinViewModel(),
 ) {
     val contacts by viewModel.contacts.collectAsState()
+    val isScanning by viewModel.isScanning.collectAsState()
 
-    if (contacts.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                "No contacts yet — connect to peers to discover them.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                modifier = Modifier.padding(32.dp),
-            )
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Contacts", style = MaterialTheme.typography.titleLarge)
+            IconButton(onClick = viewModel::scanForPeers, enabled = !isScanning) {
+                if (isScanning) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Default.WifiFind, contentDescription = "Scan for peers")
+                }
+            }
         }
-        return
-    }
 
-    LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
-        items(contacts, key = { it.contact.userId }) { cws ->
-            ContactRow(
-                cws = cws,
-                onOpenThread = { onOpenThread(cws.contact.userId) },
-                onSetAutoRelay = { viewModel.setAutoRelay(cws.contact.userId, it) },
-                onSetAlwaysSave = { viewModel.setAlwaysSave(cws.contact.userId, it) },
-            )
-            HorizontalDivider(modifier = Modifier.padding(start = 72.dp))
+        if (contacts.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "No contacts yet — tap scan and stay near a peer running Rumor.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(32.dp),
+                )
+            }
+        } else {
+            LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+                items(contacts, key = { it.contact.userId }) { cws ->
+                    ContactRow(
+                        cws = cws,
+                        onOpenThread = { onOpenThread(cws.contact.userId) },
+                        onSetAutoRelay = { viewModel.setAutoRelay(cws.contact.userId, it) },
+                        onSetAlwaysSave = { viewModel.setAlwaysSave(cws.contact.userId, it) },
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(start = 72.dp))
+                }
+            }
         }
     }
 }

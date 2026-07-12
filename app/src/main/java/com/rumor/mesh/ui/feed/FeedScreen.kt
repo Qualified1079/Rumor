@@ -5,7 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -43,6 +43,7 @@ fun FeedScreen(
             items(broadcasts, key = { it.id }) { msg ->
                 BroadcastCard(
                     message = msg,
+                    isOwnMessage = viewModel.isOwnMessage(msg.senderId),
                     onRelay = { viewModel.relay(msg) },
                 )
             }
@@ -63,6 +64,7 @@ fun FeedScreen(
 @Composable
 private fun BroadcastCard(
     message: RumorMessage,
+    isOwnMessage: Boolean,
     onRelay: () -> Unit,
 ) {
     Card(
@@ -109,26 +111,28 @@ private fun BroadcastCard(
 
             Spacer(Modifier.height(8.dp))
 
-            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                if (!message.wasRelayed) {
-                    TextButton(
-                        onClick = onRelay,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    ) {
-                        Icon(
-                            Icons.Outlined.Repeat,
-                            contentDescription = "Relay",
-                            modifier = Modifier.size(16.dp),
+            if (!isOwnMessage) {
+                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                    if (!message.wasRelayed) {
+                        TextButton(
+                            onClick = onRelay,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.Repeat,
+                                contentDescription = "Relay",
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text("Relay", fontSize = 12.sp)
+                        }
+                    } else {
+                        Text(
+                            "Relayed",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                         )
-                        Spacer(Modifier.width(4.dp))
-                        Text("Relay", fontSize = 12.sp)
                     }
-                } else {
-                    Text(
-                        "Relayed",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                    )
                 }
             }
         }
@@ -160,7 +164,7 @@ private fun ComposeBar(
             onClick = onSend,
             enabled = text.isNotBlank(),
         ) {
-            Icon(Icons.Default.Send, contentDescription = "Send")
+            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
         }
     }
 }

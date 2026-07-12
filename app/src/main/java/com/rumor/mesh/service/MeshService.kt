@@ -162,6 +162,16 @@ class MeshService : Service(), MeshController {
         scope.launch {
             wifiDirectTransport.peerCount.collect { updateNotification(statusText(it)) }
         }
+
+        // ── BLE nearby signal → Wi-Fi Direct rediscovery ─────────────────────
+        // BLE has no identity, just presence — a detected beacon means "worth
+        // re-scanning for a Wi-Fi Direct peer now" rather than waiting for the
+        // next periodic window.
+        scope.launch {
+            bleDiscovery.peerNearbySignal.collect { nearby ->
+                if (nearby) wifiDirectTransport.rediscoverPeers()
+            }
+        }
         // Re-arm BLE on toggle so the new scan/advertise duty cycle takes effect
         // immediately. drop(1) skips the initial value emitted on collect.
         scope.launch {
@@ -246,6 +256,7 @@ class MeshService : Service(), MeshController {
     override fun triggerActiveScan() {
         bleDiscovery.stop()
         bleDiscovery.start()
+        wifiDirectTransport.rediscoverPeers()
     }
 
     override fun isServiceRunning() = true

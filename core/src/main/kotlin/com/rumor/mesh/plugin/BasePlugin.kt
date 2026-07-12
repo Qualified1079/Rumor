@@ -77,8 +77,8 @@ abstract class BasePlugin : RumorPlugin {
     // ── Convenience helpers (call from anywhere in the subclass) ──────────────
 
     /** Inject a message into the local mesh. Safe to call from any thread. */
-    protected fun sendMessage(message: RumorMessage, source: String = pluginId) {
-        context?.sendMessage(message, source)
+    protected fun sendMessage(message: RumorMessage, sourceDescription: String = pluginId) {
+        context?.sendMessage(message, sourceDescription)
             ?: log(LogLevel.WARN, "sendMessage called before onAttach — message dropped")
     }
 

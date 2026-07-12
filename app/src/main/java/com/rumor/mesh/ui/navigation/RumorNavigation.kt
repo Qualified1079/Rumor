@@ -21,6 +21,7 @@ sealed class Screen(val route: String) {
     object Plugins       : Screen("settings/plugins")
     object InboxPolicy   : Screen("settings/inbox")
     object Blocks        : Screen("settings/blocks")
+    object ChangePassphrase : Screen("settings/change_passphrase")
     object Transfers     : Screen("transfers")
     object DebugMetrics  : Screen("settings/metrics")
 }

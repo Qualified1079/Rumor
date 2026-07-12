@@ -18,7 +18,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.rumor.mesh.core.model.BlocklistMode
-import com.rumor.mesh.data.BlockEntryEntity
+import com.rumor.mesh.core.model.BlockEntry
 import com.rumor.mesh.data.SubscribedBlocklistEntity
 import org.koin.androidx.compose.koinViewModel
 import java.text.SimpleDateFormat
@@ -148,7 +148,7 @@ private fun SectionHeader(title: String) {
 }
 
 @Composable
-private fun LocalBlockRow(entry: BlockEntryEntity, onUnblock: () -> Unit) {
+private fun LocalBlockRow(entry: BlockEntry, onUnblock: () -> Unit) {
     ListItem(
         headlineContent = {
             Text(
@@ -208,14 +208,27 @@ private fun SubscriptionRow(sub: SubscribedBlocklistEntity, onUnsubscribe: () ->
     )
 }
 
+private enum class DurationUnit(val label: String, val minutesPerUnit: Long) {
+    MINUTES("Minutes", 1L),
+    HOURS("Hours", 60L),
+    DAYS("Days", 24L * 60L),
+    WEEKS("Weeks", 7L * 24L * 60L),
+    MONTHS("Months", 30L * 24L * 60L),
+    YEARS("Years", 365L * 24L * 60L),
+}
+
 @Composable
 private fun AddBlockDialog(
     onConfirm: (userId: String, durationMin: Long?, reason: String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var userId by remember { mutableStateOf("") }
-    var duration by remember { mutableStateOf("") }
+    var amount by remember { mutableStateOf("1") }
+    var unit by remember { mutableStateOf(DurationUnit.HOURS) }
+    var permanent by remember { mutableStateOf(false) }
     var reason by remember { mutableStateOf("") }
+
+    val durationMin: Long? = if (permanent) null else amount.toLongOrNull()?.takeIf { it > 0 }?.times(unit.minutesPerUnit)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -229,14 +242,33 @@ private fun AddBlockDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
-                    value = duration,
-                    onValueChange = { duration = it.filter { c -> c.isDigit() } },
-                    label = { Text("Duration (minutes — blank = permanent)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+
+                Text("Duration", style = MaterialTheme.typography.labelMedium)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = amount,
+                        onValueChange = { amount = it.filter { c -> c.isDigit() } },
+                        enabled = !permanent,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                    )
+                    DurationUnitDropdown(
+                        selected = unit,
+                        enabled = !permanent,
+                        onSelected = { unit = it },
+                        modifier = Modifier.weight(1.5f),
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = permanent, onCheckedChange = { permanent = it })
+                    Text("Permanent")
+                }
+
                 OutlinedTextField(
                     value = reason,
                     onValueChange = { reason = it },
@@ -248,14 +280,47 @@ private fun AddBlockDialog(
         },
         confirmButton = {
             Button(
-                enabled = userId.isNotBlank(),
-                onClick = { onConfirm(userId, duration.toLongOrNull()?.takeIf { it > 0 }, reason.ifBlank { null }) },
+                enabled = userId.isNotBlank() && (permanent || durationMin != null),
+                onClick = { onConfirm(userId, durationMin, reason.ifBlank { null }) },
             ) { Text("Block") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DurationUnitDropdown(
+    selected: DurationUnit,
+    enabled: Boolean,
+    onSelected: (DurationUnit) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = it },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = selected.label,
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DurationUnit.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    onClick = { onSelected(option); expanded = false },
+                )
+            }
+        }
+    }
 }
 
 @Composable

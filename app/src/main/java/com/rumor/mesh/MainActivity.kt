@@ -11,6 +11,7 @@ import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -42,12 +43,14 @@ import com.rumor.mesh.ui.navigation.Screen
 import com.rumor.mesh.ui.navigation.bottomNavItems
 import com.rumor.mesh.ui.onboarding.OnboardingScreen
 import com.rumor.mesh.ui.plugins.PluginsScreen
+import com.rumor.mesh.ui.settings.ChangePassphraseScreen
 import com.rumor.mesh.ui.settings.SettingsScreen
 import com.rumor.mesh.ui.transfers.TransfersScreen
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import com.rumor.mesh.ui.theme.RumorTheme
 import org.koin.android.ext.android.inject
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -69,10 +72,29 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { /* permissions handled reactively */ }
 
+    private var isBound = false
+
+    private fun bindMeshService() {
+        if (isBound) return
+        val intent = Intent(this, MeshService::class.java)
+        ContextCompat.startForegroundService(this, intent)
+        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        isBound = true
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         requestRequiredPermissions()
+
+        // Identity may still be locked at onStart() (first-run onboarding); react to
+        // unlock happening later in the same activity instance rather than only
+        // checking isUnlocked once, or the service never gets bound this session.
+        lifecycleScope.launch {
+            identityManager.identity.collect { identity ->
+                if (identity != null) bindMeshService()
+            }
+        }
 
         // Eagerly resolve injected singletons so a Koin misconfiguration surfaces
         // here with a clear error UI rather than an opaque crash inside composition.
@@ -103,15 +125,14 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         // Start mesh service if identity is already unlocked, then bind so the
         // controller holder gets a live handle for ViewModels to call into.
-        if (identityManager.isUnlocked) {
-            val intent = Intent(this, MeshService::class.java)
-            ContextCompat.startForegroundService(this, intent)
-            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
-        }
+        if (identityManager.isUnlocked) bindMeshService()
     }
 
     override fun onStop() {
-        runCatching { unbindService(serviceConnection) }
+        if (isBound) {
+            runCatching { unbindService(serviceConnection) }
+            isBound = false
+        }
         meshControllerHolder.clear()
         super.onStop()
     }
@@ -226,6 +247,7 @@ private fun RumorApp(identityManager: IdentityManager) {
                     onOpenTransfers    = { navController.navigate(Screen.Transfers.route) },
                     onOpenLogs         = { navController.navigate(Screen.Logs.route) },
                     onOpenMetrics      = { navController.navigate(Screen.DebugMetrics.route) },
+                    onOpenChangePassphrase = { navController.navigate(Screen.ChangePassphrase.route) },
                 )
             }
             composable(Screen.Messages.route) {
@@ -248,6 +270,9 @@ private fun RumorApp(identityManager: IdentityManager) {
             }
             composable(Screen.Plugins.route) { PluginsScreen() }
             composable(Screen.InboxPolicy.route) { InboxPolicyScreen() }
+            composable(Screen.ChangePassphrase.route) {
+                ChangePassphraseScreen(onBack = { navController.popBackStack() })
+            }
             composable(Screen.Blocks.route) { BlockManagementScreen() }
             composable(Screen.Transfers.route) { TransfersScreen() }
             composable(Screen.Logs.route) { LogsScreen() }

@@ -110,11 +110,12 @@ class ThreadViewModel(
 
     private fun RumorMessage.toDisplay(identity: LocalIdentity): DisplayMessage {
         val isFromMe = senderId == identity.userId
+        val encrypted = encryptedPayload
         val body = when {
             type == MessageType.TRANSFER_METADATA -> "[transfer]"
-            encryptedPayload == null -> payload?.content ?: ""
+            encrypted == null -> payload?.content ?: ""
             isFromMe -> controllerHolder.controller().sentPlaintextFor(id) ?: "[sent]"
-            else -> decryptPayload(encryptedPayload, identity.privateKeyBytes)
+            else -> decryptPayload(encrypted, identity.privateKeyBytes)
         }
         return DisplayMessage(raw = this, body = body, isFromMe = isFromMe)
     }

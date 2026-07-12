@@ -2,6 +2,7 @@ package com.rumor.mesh.ui.feed
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.rumor.mesh.core.identity.IdentityProvider
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.MessageStore
 import com.rumor.mesh.service.MeshControllerHolder
@@ -13,11 +14,14 @@ import kotlinx.coroutines.launch
 class FeedViewModel(
     private val messageStore: MessageStore,
     private val controllerHolder: MeshControllerHolder,
+    private val identityProvider: IdentityProvider,
 ) : ViewModel() {
 
     val broadcasts: StateFlow<List<RumorMessage>> = messageStore
         .observeBroadcasts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun isOwnMessage(senderId: String): Boolean = senderId == identityProvider.identity.value?.userId
 
     fun sendBroadcast(text: String) {
         if (text.isBlank()) return

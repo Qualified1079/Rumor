@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -27,7 +27,7 @@ fun DebugMetricsScreen(
                 title = { Text("Node metrics") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
             )
@@ -66,7 +66,7 @@ fun DebugMetricsScreen(
 }
 
 @Composable
-private fun MetricsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+private fun ColumnScope.MetricsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     Spacer(Modifier.height(8.dp))
     Text(
         text = title.uppercase(),

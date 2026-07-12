@@ -34,7 +34,6 @@ import com.rumor.mesh.data.RumorDatabase
 import com.rumor.mesh.data.adapter.BreadcrumbRepositoryAdapter
 import com.rumor.mesh.data.adapter.BlockEntryRepositoryAdapter
 import com.rumor.mesh.data.adapter.BlocklistEntryRepositoryAdapter
-import com.rumor.mesh.data.adapter.BlockRepositoryAdapter
 import com.rumor.mesh.data.adapter.ChunkRepositoryAdapter
 import com.rumor.mesh.data.adapter.ContactRepositoryAdapter
 import com.rumor.mesh.data.adapter.MessageRepositoryAdapter
@@ -53,6 +52,7 @@ import com.rumor.mesh.ui.messages.MessagesViewModel
 import com.rumor.mesh.ui.messages.ThreadViewModel
 import com.rumor.mesh.ui.plugins.PluginsViewModel
 import com.rumor.mesh.ui.debug.DebugMetricsViewModel
+import com.rumor.mesh.ui.settings.ChangePassphraseViewModel
 import com.rumor.mesh.ui.settings.SettingsViewModel
 import com.rumor.mesh.ui.transfers.TransfersViewModel
 import org.koin.android.ext.koin.androidContext
@@ -78,6 +78,12 @@ val appModule = module {
     single { SubscribedBlocklistRepositoryAdapter(get<RumorDatabase>().subscribedBlocklistDao()) }
     single { BlocklistEntryRepositoryAdapter(get<RumorDatabase>().blocklistEntryDao()) }
 
+    // ── Raw DAOs (consumed directly by a few constructors) ────────────────────
+    single { get<RumorDatabase>().contactDao() }
+    single { get<RumorDatabase>().subscribedBlocklistDao() }
+    single { get<RumorDatabase>().transferDao() }
+    single { get<RumorDatabase>().chunkDao() }
+
     // ── Identity ──────────────────────────────────────────────────────────────
     single { IdentityManager(androidContext()) }
     single<IdentityProvider> { get<IdentityManager>() }
@@ -99,7 +105,8 @@ val appModule = module {
     single { TopologyTracker(get(), get()) }
     single { BreadcrumbCache(get()) }
     single { Scheduler(staticMode = get<StaticMode>()) }
-    single<InboxFilter> { InboxPolicyManager(androidContext(), get()) }
+    single { InboxPolicyManager(androidContext(), get()) }
+    single<InboxFilter> { get<InboxPolicyManager>() }
     single { DmEnvelopeRegistry() }
     single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), dmEnvelopeRegistry = get()) }
 
@@ -115,15 +122,15 @@ val appModule = module {
     single { WifiDirectTransport(androidContext()) }
 
     // ── Plugins ───────────────────────────────────────────────────────────────
-    single { PluginRegistry(get(), get<IdentityProvider>(), get(), get()) }
+    single { PluginRegistry(get(), get<IdentityManager>(), get(), get()) }
     single { PluginCatalog(androidContext(), get()) }
 
     // ── Service ───────────────────────────────────────────────────────────────
     single { MeshControllerHolder() }
 
     // ── ViewModels ────────────────────────────────────────────────────────────
-    viewModel { FeedViewModel(get(), get<MeshControllerHolder>()) }
-    viewModel { ContactsViewModel(get(), get()) }
+    viewModel { FeedViewModel(get(), get<MeshControllerHolder>(), get<IdentityProvider>()) }
+    viewModel { ContactsViewModel(get(), get(), get<MeshControllerHolder>()) }
     viewModel { SettingsViewModel(get(), get(), androidContext()) }
     viewModel { PluginsViewModel(get()) }
     viewModel { InboxPolicyViewModel(get()) }
@@ -132,4 +139,5 @@ val appModule = module {
     viewModel { ThreadViewModel(get(), get(), get(), get(), get()) }
     viewModel { TransfersViewModel(get(), get()) }
     viewModel { DebugMetricsViewModel(get()) }
+    viewModel { ChangePassphraseViewModel(get()) }
 }

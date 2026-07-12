@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pManager
@@ -62,6 +63,16 @@ class WifiDirectTransport(
     private var broadcastReceiver: WifiDirectBroadcastReceiver? = null
 
     /**
+     * Without this, Android's Wi-Fi power-saving can throttle or sleep the radio
+     * mid-exchange — the P2P group and TCP socket stay nominally connected but data
+     * silently stops flowing a few seconds in. High-perf mode keeps the radio awake
+     * for the lifetime of the mesh session.
+     */
+    private val wifiLock: WifiManager.WifiLock? =
+        (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
+            ?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Rumor:wifiDirectGossip")
+
+    /**
      * Configuration provided at [start] time. Immutable for the lifetime of this session.
      * Replace by calling [stop] then [start] again after an identity change.
      */
@@ -104,8 +115,36 @@ class WifiDirectTransport(
     private val commandQueue = Semaphore(1)
     private val handler = Handler(Looper.getMainLooper())
 
+    /**
+     * Multiple independent triggers can ask for rediscovery around the same time
+     * (BLE nearby-signal, a manual scan tap, repeated taps) — without de-duping,
+     * each spawns its own BUSY-retry chain and they collide forever, hammering
+     * WifiP2pManager indefinitely. Only one rediscovery attempt runs at a time,
+     * bounded to a few retries, then it simply stops until the next trigger.
+     */
+    private var discoveryInFlight = false
+    private var discoveryRetriesRemaining = 0
+    private val MAX_DISCOVERY_RETRIES = 3
+
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
+
+    /**
+     * Our own P2P device address, learned from WIFI_P2P_THIS_DEVICE_CHANGED_ACTION.
+     * Used only as a connection-role tiebreak (see [connectToPeer]) — never as
+     * identity, per the architecture invariant that MAC addresses prove nothing.
+     */
+    private var localDeviceAddress: String? = null
+
+    /**
+     * True while we have an outstanding connect() attempt. Two non-dual-role peers
+     * that both auto-connect to each other on every PEERS_CHANGED collide in GO
+     * negotiation (both requesting GO with equal intent) and neither side ever
+     * reaches a stable group — the connection stalls for the full ~40s framework
+     * negotiation timeout and repeats forever. Guards against re-triggering connect
+     * while one is already in flight.
+     */
+    private var connectAttemptInFlight = false
 
     /**
      * Tracks which session won the dual-role tiebreak per peer. Value is the
@@ -145,7 +184,9 @@ class WifiDirectTransport(
                 override fun onConnectionChanged(connected: Boolean) {
                     if (connected) onConnected() else onDisconnected()
                 }
-                override fun onThisDeviceChanged(device: WifiP2pDevice?) {}
+                override fun onThisDeviceChanged(device: WifiP2pDevice?) {
+                    localDeviceAddress = device?.deviceAddress
+                }
             }
         )
 
@@ -157,6 +198,8 @@ class WifiDirectTransport(
         }
         context.registerReceiver(broadcastReceiver, filter)
 
+        runCatching { wifiLock?.acquire() }
+
         // Quirk: stale groups from previous sessions block new connections
         removeGroupThenDiscover()
         RumorLog.i(TAG, "Transport started for ${cfg.localUserId.take(16)}…")
@@ -167,6 +210,7 @@ class WifiDirectTransport(
         runCatching { serverSocket?.close() }
         runCatching { context.unregisterReceiver(broadcastReceiver) }
         removeGroup()
+        runCatching { if (wifiLock?.isHeld == true) wifiLock.release() }
         config = null
         scope.cancel()
         RumorLog.i(TAG, "Transport stopped")
@@ -177,6 +221,31 @@ class WifiDirectTransport(
     private fun connectToPeer(device: WifiP2pDevice) {
         if (!hasLocationPermission()) return
         val cfg = config ?: return
+
+        // Two non-dual-role peers that both auto-connect to each other collide in
+        // GO negotiation (both request GO with equal intent) and neither ever
+        // reaches a stable group. Break the symmetry deterministically: only the
+        // lower-addressed device initiates; the other waits to receive the
+        // connection passively. This is a connection-role tiebreak only — never
+        // an identity signal (device.deviceAddress is never trusted as identity;
+        // see the architecture invariant on MAC addresses).
+        if (!DeviceQuirks.wifiDirectDualRoleRequired) {
+            val ourAddress = localDeviceAddress
+            if (ourAddress != null && ourAddress >= device.deviceAddress) {
+                RumorLog.d(TAG, "Yielding initiator role to ${device.deviceAddress} — waiting to be connected")
+                return
+            }
+        }
+
+        if (connectAttemptInFlight) return
+        connectAttemptInFlight = true
+        issueConnect(device)
+    }
+
+    /** Actually issues the connect() call. Retries on BUSY without re-checking the tiebreak. */
+    private fun issueConnect(device: WifiP2pDevice) {
+        val cfg = config ?: run { connectAttemptInFlight = false; return }
+
         // Identity is only known after HELLO. Cooldown is enforced post-handshake
         // in runSession() — we cannot trust device.deviceAddress as a userId proxy.
         val p2pCfg = WifiP2pConfig().apply {
@@ -193,7 +262,9 @@ class WifiDirectTransport(
                 override fun onFailure(reason: Int) {
                     RumorLog.w(TAG, "Connect failed: ${p2pError(reason)}")
                     if (reason == WifiP2pManager.BUSY) {
-                        handler.postDelayed({ connectToPeer(device) }, 1_000)
+                        handler.postDelayed({ issueConnect(device) }, 1_000)
+                    } else {
+                        connectAttemptInFlight = false
                     }
                 }
             })
@@ -211,6 +282,7 @@ class WifiDirectTransport(
                 RumorLog.i(TAG, "Listening on port ${DeviceQuirks.WIFI_DIRECT_GOSSIP_PORT}")
                 while (isActive) {
                     val client = ss.accept()
+                    client.tcpNoDelay = true
                     launch { runSession(client, isInbound = true) }
                 }
             } catch (e: Exception) {
@@ -223,15 +295,19 @@ class WifiDirectTransport(
 
     private fun connectAsClient(groupOwnerAddress: String = DeviceQuirks.WIFI_DIRECT_GO_IP) {
         scope.launch {
-            // Quirk: DHCP after Wi-Fi Direct connection takes time — retry with backoff
+            // Quirk: Wi-Fi Direct can report CONNECTED before the data path is actually
+            // usable — the TCP handshake completes but the GossipSession's HELLO phase
+            // gets no reply (see HELLO_TIMEOUT_MS). That's a real, fast signal that this
+            // attempt's data path is dead, so retry a fresh connection rather than
+            // waiting out the full session budget on a socket that will never work.
             for (delayMs in DeviceQuirks.tcpConnectRetryDelaysMs) {
                 delay(delayMs)
                 try {
                     val socket = Socket(groupOwnerAddress, DeviceQuirks.WIFI_DIRECT_GOSSIP_PORT)
-                    socket.soTimeout = 30_000
+                    socket.tcpNoDelay = true
                     RumorLog.d(TAG, "Connected as client to GO at $groupOwnerAddress")
-                    runSession(socket, isInbound = false)
-                    return@launch
+                    if (runSession(socket, isInbound = false)) return@launch
+                    RumorLog.d(TAG, "Session on this connection failed — retrying fresh connect")
                 } catch (e: Exception) {
                     RumorLog.d(TAG, "Client connect attempt failed (${e.message}) — retrying")
                 }
@@ -242,8 +318,9 @@ class WifiDirectTransport(
 
     // ── Session runner ────────────────────────────────────────────────────────
 
-    private suspend fun runSession(socket: Socket, isInbound: Boolean) {
-        val cfg = config ?: return
+    /** Returns true if the exchange completed; false if the caller should retry. */
+    private suspend fun runSession(socket: Socket, isInbound: Boolean): Boolean {
+        val cfg = config ?: return false
         var claimedPeer: String? = null
         val session = GossipSession(
             socket          = socket,
@@ -264,7 +341,7 @@ class WifiDirectTransport(
         finally { claimedPeer?.let { activePeerSessions.remove(it) } }
         if (result == null) {
             claimedPeer?.let { cfg.onExchangeFailed(it) }
-            return
+            return false
         }
 
         priorityReconnectPending.remove(result.peerUserId)
@@ -299,6 +376,7 @@ class WifiDirectTransport(
             activePriorityPeers.add(result.peerUserId)
             RumorLog.d(TAG, "Keeping group alive for priority peer ${result.peerUserId.take(8)}…")
         }
+        return true
     }
 
     /**
@@ -321,6 +399,7 @@ class WifiDirectTransport(
     private fun onP2pEnabled() = removeGroupThenDiscover()
 
     private fun onConnected() {
+        connectAttemptInFlight = false
         wifiP2pManager?.requestConnectionInfo(channel) { info ->
             val isGo = info?.isGroupOwner == true
             _isGroupOwner.value = isGo
@@ -343,6 +422,7 @@ class WifiDirectTransport(
 
     private fun onDisconnected() {
         _isGroupOwner.value = false
+        connectAttemptInFlight = false
         serverJob?.cancel()
         runCatching { serverSocket?.close() }
         serverSocket = null
@@ -392,14 +472,36 @@ class WifiDirectTransport(
         }
     }
 
+    /**
+     * Public re-entry point for a manual scan or a BLE-detected nearby signal.
+     * Ignored if a rediscovery attempt is already in flight — see [discoveryInFlight].
+     */
+    fun rediscoverPeers() {
+        if (discoveryInFlight) {
+            RumorLog.d(TAG, "Rediscovery already in progress — ignoring duplicate trigger")
+            return
+        }
+        discoveryInFlight = true
+        discoveryRetriesRemaining = MAX_DISCOVERY_RETRIES
+        discoverPeers()
+    }
+
     private fun discoverPeers() {
-        if (!hasLocationPermission()) return
+        if (!hasLocationPermission()) { discoveryInFlight = false; return }
         enqueueCommand {
             wifiP2pManager?.discoverPeers(channel, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() { RumorLog.d(TAG, "Peer discovery started") }
+                override fun onSuccess() {
+                    RumorLog.d(TAG, "Peer discovery started")
+                    discoveryInFlight = false
+                }
                 override fun onFailure(r: Int) {
                     RumorLog.w(TAG, "Peer discovery failed: ${p2pError(r)}")
-                    if (r == WifiP2pManager.BUSY) handler.postDelayed({ discoverPeers() }, 2_000)
+                    if (r == WifiP2pManager.BUSY && discoveryRetriesRemaining > 0) {
+                        discoveryRetriesRemaining--
+                        handler.postDelayed({ discoverPeers() }, 2_000)
+                    } else {
+                        discoveryInFlight = false
+                    }
                 }
             })
         }
