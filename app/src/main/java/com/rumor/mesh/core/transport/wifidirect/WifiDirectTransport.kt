@@ -348,6 +348,10 @@ class WifiDirectTransport(
     // ── Server socket (Group Owner role) ──────────────────────────────────────
 
     private fun startServerSocket() {
+        // CONNECTION_CHANGED re-fires on every group-membership change (a third
+        // device joining). Rebinding here kills the live accept loop for the
+        // clients already connected — keep the existing socket if it's healthy.
+        if (serverJob?.isActive == true && serverSocket?.isClosed == false) return
         serverJob?.cancel()
         serverJob = scope.launch {
             try {
@@ -367,8 +371,13 @@ class WifiDirectTransport(
 
     // ── Client connect to GO ──────────────────────────────────────────────────
 
+    private var clientLoopJob: Job? = null
+
     private fun connectAsClient(groupOwnerAddress: String = DeviceQuirks.WIFI_DIRECT_GO_IP) {
-        scope.launch {
+        // Same membership-change re-broadcast as on the GO side: don't stack a
+        // second round loop on top of a live one.
+        if (clientLoopJob?.isActive == true) return
+        clientLoopJob = scope.launch {
             // Quirk: Wi-Fi Direct can report CONNECTED before the data path is actually
             // usable — the TCP handshake completes but the GossipSession's HELLO phase
             // gets no reply (see HELLO_TIMEOUT_MS). That's a real, fast signal that this
@@ -489,19 +498,19 @@ class WifiDirectTransport(
     }
 
     /**
-     * Dual-role tiebreak. When both server-accept and client-connect succeed for
-     * the same peer pair, both sides apply this rule and exactly one direction
-     * survives — no central coordination needed.
+     * One live session per peer, first-come-wins.
      *
-     * Convention: the side with the lexicographically lower userId keeps its
-     * outbound (client) session; the higher keeps inbound. Both sides agree.
+     * The old rule ("lower userId keeps outbound, higher keeps inbound") assumed
+     * both directions exist. In a GO↔client group only one ever does — the client
+     * dials the GO — so whenever the userId comparison favored the direction a
+     * role couldn't have, both sides vetoed the only possible session and the pair
+     * deadlocked in endless HELLO retries (hit on the first Samsung join; the
+     * original two-phone pair only worked because their userIds happened to align
+     * with their roles). A true dual-role double-connect can't currently occur
+     * (nothing ever dials into a non-GO), so plain duplicate-rejection is enough.
      */
-    private fun claimSession(localUserId: String, peerUserId: String, isInbound: Boolean): Boolean {
-        val keepInbound = localUserId > peerUserId
-        if (isInbound != keepInbound) return false
-        // Reserve the slot; if a duplicate of the preferred direction races in, drop it.
-        return activePeerSessions.putIfAbsent(peerUserId, isInbound) == null
-    }
+    private fun claimSession(localUserId: String, peerUserId: String, isInbound: Boolean): Boolean =
+        activePeerSessions.putIfAbsent(peerUserId, isInbound) == null
 
     // ── Wi-Fi Direct event handlers ───────────────────────────────────────────
 
