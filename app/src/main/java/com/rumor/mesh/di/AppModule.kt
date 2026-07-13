@@ -129,7 +129,7 @@ val appModule = module {
     single { MeshControllerHolder() }
 
     // ── ViewModels ────────────────────────────────────────────────────────────
-    viewModel { FeedViewModel(get(), get<MeshControllerHolder>(), get<IdentityProvider>()) }
+    viewModel { FeedViewModel(get(), get<MeshControllerHolder>(), get<IdentityProvider>(), get()) }
     viewModel { ContactsViewModel(get(), get(), get<MeshControllerHolder>()) }
     viewModel { SettingsViewModel(get(), get(), androidContext()) }
     viewModel { PluginsViewModel(get()) }

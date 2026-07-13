@@ -25,6 +25,7 @@ fun FeedScreen(
     viewModel: FeedViewModel = koinViewModel(),
 ) {
     val broadcasts by viewModel.broadcasts.collectAsState()
+    val senderNames by viewModel.senderNames.collectAsState()
     var composeText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -43,6 +44,7 @@ fun FeedScreen(
             items(broadcasts, key = { it.id }) { msg ->
                 BroadcastCard(
                     message = msg,
+                    senderName = senderNames[msg.senderId],
                     isOwnMessage = viewModel.isOwnMessage(msg.senderId),
                     onRelay = { viewModel.relay(msg) },
                 )
@@ -64,6 +66,7 @@ fun FeedScreen(
 @Composable
 private fun BroadcastCard(
     message: RumorMessage,
+    senderName: String?,
     isOwnMessage: Boolean,
     onRelay: () -> Unit,
 ) {
@@ -80,9 +83,9 @@ private fun BroadcastCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = message.senderId.take(12) + "…",
+                    text = senderName ?: (message.senderId.take(12) + "…"),
                     style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = if (senderName == null) FontFamily.Monospace else FontFamily.Default,
                     color = MaterialTheme.colorScheme.primary,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
