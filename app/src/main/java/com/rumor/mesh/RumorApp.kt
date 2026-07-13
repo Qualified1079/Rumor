@@ -13,6 +13,10 @@ class RumorApp : Application() {
             androidContext(this@RumorApp)
             modules(appModule)
         }
+        // Verbose Wi-Fi Direct / gossip tracing is otherwise silent until someone
+        // remembers to flip the Settings toggle — default it on for debug builds
+        // so a fresh install/reinstall is traceable from the first log line.
+        RumorLog.debugMode = BuildConfig.DEBUG
         RumorLog.i("RumorApp", "Rumor ${BuildConfig.VERSION_NAME} starting")
     }
 }

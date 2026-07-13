@@ -60,6 +60,19 @@ sealed class GossipPacket {
     ) : GossipPacket()
 
     /**
+     * End-of-messages terminator, sent after the last [Message] frame (or
+     * immediately, when there is nothing to send). The MESSAGE phase is the only
+     * variable-length phase in the session; without an explicit terminator each
+     * side's receive loop can only be broken by the peer's [Ack] — which the peer
+     * sends only after its own loop exits. Both sides block forever. Zero messages
+     * to exchange (fresh installs) hits this on the very first frame.
+     */
+    @Serializable @SerialName("messages_done")
+    data class MessagesDone(
+        val count: Int = 0,
+    ) : GossipPacket()
+
+    /**
      * Lightweight delivery acknowledgement sent after the MESSAGE phase.
      * Lists the message IDs the receiver actually accepted and ingested in this
      * session. Only confirms peer-hop delivery (the message left this device and

@@ -97,7 +97,13 @@ class MessageStore(
     suspend fun markRead(id: String) = messageRepo.markRead(id)
     suspend fun markRelayed(id: String) = messageRepo.markRelayed(id)
 
-    private suspend fun ensureContact(userId: String, publicKeyB64: String) {
+    /**
+     * Public because the engine also creates contacts from completed gossip
+     * exchanges — a HELLO challenge-response is stronger identity provenance
+     * than a relayed message signature, and a zero-message exchange (two fresh
+     * installs meeting) must still produce a contact.
+     */
+    suspend fun ensureContact(userId: String, publicKeyB64: String) {
         val existing = contactRepo.getById(userId)
         if (existing == null) {
             contactRepo.upsert(

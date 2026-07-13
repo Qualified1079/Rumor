@@ -29,7 +29,7 @@ class SettingsViewModel(
     private val context: Context,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(SettingsState())
+    private val _state = MutableStateFlow(SettingsState(debugLogging = RumorLog.debugMode))
     val state: StateFlow<SettingsState> = _state.asStateFlow()
 
     init {

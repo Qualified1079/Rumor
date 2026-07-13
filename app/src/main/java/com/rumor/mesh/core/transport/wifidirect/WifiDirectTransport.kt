@@ -26,7 +26,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Semaphore
 
 /**
  * Wi-Fi Direct transport layer.
@@ -55,6 +54,8 @@ class WifiDirectTransport(
     private val context: Context,
 ) {
     private val TAG = "WifiDirect"
+    /** What Android 10+ reports as our own P2P MAC unless the app is privileged. */
+    private val ANONYMIZED_MAC = "02:00:00:00:00:00"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val wifiP2pManager: WifiP2pManager? =
@@ -111,9 +112,17 @@ class WifiDirectTransport(
     private val _peerCount = MutableStateFlow(0)
     val peerCount: StateFlow<Int> = _peerCount.asStateFlow()
 
-    // Serialise WifiP2pManager calls — BUSY errors occur if commands overlap
-    private val commandQueue = Semaphore(1)
     private val handler = Handler(Looper.getMainLooper())
+
+    /**
+     * Serialises WifiP2pManager calls — BUSY errors occur if commands overlap.
+     * A real FIFO rather than a try-acquire: a dropped command has no caller-side
+     * recovery, and the "peer visible → connect" command lands ~150ms after
+     * discovery's command, inside the previous 300ms settle window. With the old
+     * semaphore that connect was silently discarded and the transport wedged.
+     */
+    private val pendingCommands = ArrayDeque<() -> Unit>()
+    private var commandRunning = false
 
     /**
      * Multiple independent triggers can ask for rediscovery around the same time
@@ -143,8 +152,18 @@ class WifiDirectTransport(
      * reaches a stable group — the connection stalls for the full ~40s framework
      * negotiation timeout and repeats forever. Guards against re-triggering connect
      * while one is already in flight.
+     *
+     * A failed GO negotiation often produces NO connection-changed broadcast
+     * (disconnected → still disconnected), so onConnected/onDisconnected alone
+     * cannot be trusted to clear this — the watchdog is the backstop that keeps
+     * one failed negotiation from wedging connects for the rest of the session.
      */
     private var connectAttemptInFlight = false
+    private val CONNECT_WATCHDOG_MS = 45_000L
+    private val connectWatchdog = Runnable {
+        RumorLog.d(TAG, "Connect watchdog expired — clearing in-flight flag")
+        connectAttemptInFlight = false
+    }
 
     /**
      * Tracks which session won the dual-role tiebreak per peer. Value is the
@@ -229,9 +248,15 @@ class WifiDirectTransport(
         // connection passively. This is a connection-role tiebreak only — never
         // an identity signal (device.deviceAddress is never trusted as identity;
         // see the architecture invariant on MAC addresses).
-        if (!DeviceQuirks.wifiDirectDualRoleRequired) {
-            val ourAddress = localDeviceAddress
-            if (ourAddress != null && ourAddress >= device.deviceAddress) {
+        //
+        // Android 10+ anonymises our own address in THIS_DEVICE_CHANGED to
+        // 02:00:00:00:00:00, which compares below any real peer MAC — both sides
+        // would conclude they're the initiator and collide anyway. When the OS
+        // won't give us a real address, skip the tiebreak and rely on randomised
+        // GO intent in issueConnect() to break the symmetry instead.
+        val usableLocalAddress = localDeviceAddress?.takeUnless { it == ANONYMIZED_MAC }
+        if (!DeviceQuirks.wifiDirectDualRoleRequired && usableLocalAddress != null) {
+            if (usableLocalAddress >= device.deviceAddress) {
                 RumorLog.d(TAG, "Yielding initiator role to ${device.deviceAddress} — waiting to be connected")
                 return
             }
@@ -239,6 +264,8 @@ class WifiDirectTransport(
 
         if (connectAttemptInFlight) return
         connectAttemptInFlight = true
+        handler.removeCallbacks(connectWatchdog)
+        handler.postDelayed(connectWatchdog, CONNECT_WATCHDOG_MS)
         issueConnect(device)
     }
 
@@ -250,9 +277,17 @@ class WifiDirectTransport(
         // in runSession() — we cannot trust device.deviceAddress as a userId proxy.
         val p2pCfg = WifiP2pConfig().apply {
             deviceAddress = device.deviceAddress
-            // Neutral GO intent. Samsung/MediaTek ignore this and always demand GO —
-            // dual-role (server + client) below handles that case transparently.
-            groupOwnerIntent = if (DeviceQuirks.wifiDirectDualRoleRequired) 0 else 7
+            // Samsung/MediaTek ignore this and always demand GO — dual-role
+            // (server + client) below handles that case transparently.
+            groupOwnerIntent = when {
+                DeviceQuirks.wifiDirectDualRoleRequired -> 0
+                localDeviceAddress?.takeUnless { it == ANONYMIZED_MAC } != null -> 7
+                // No usable address tiebreak (API 29+ anonymised MAC): both sides
+                // initiate, so equal intents would deadlock GO negotiation. Random
+                // intent resolves it; a 1-in-15 tie just retries next round.
+                // 15 excluded — it means "must be GO" and recreates the deadlock.
+                else -> kotlin.random.Random.nextInt(0, 15)
+            }
         }
         enqueueCommand {
             wifiP2pManager?.connect(channel, p2pCfg, object : WifiP2pManager.ActionListener {
@@ -264,6 +299,7 @@ class WifiDirectTransport(
                     if (reason == WifiP2pManager.BUSY) {
                         handler.postDelayed({ issueConnect(device) }, 1_000)
                     } else {
+                        handler.removeCallbacks(connectWatchdog)
                         connectAttemptInFlight = false
                     }
                 }
@@ -399,6 +435,7 @@ class WifiDirectTransport(
     private fun onP2pEnabled() = removeGroupThenDiscover()
 
     private fun onConnected() {
+        handler.removeCallbacks(connectWatchdog)
         connectAttemptInFlight = false
         wifiP2pManager?.requestConnectionInfo(channel) { info ->
             val isGo = info?.isGroupOwner == true
@@ -422,6 +459,7 @@ class WifiDirectTransport(
 
     private fun onDisconnected() {
         _isGroupOwner.value = false
+        handler.removeCallbacks(connectWatchdog)
         connectAttemptInFlight = false
         serverJob?.cancel()
         runCatching { serverSocket?.close() }
@@ -517,16 +555,23 @@ class WifiDirectTransport(
     }
 
     /**
-     * Serialises WifiP2pManager calls to avoid BUSY errors.
-     * Releases the permit 300ms after the call returns to give the framework
-     * time to settle before the next command.
+     * Serialises WifiP2pManager calls to avoid BUSY errors. Commands run in FIFO
+     * order with a 300ms settle gap after each so the framework isn't hammered.
      */
     private fun enqueueCommand(block: () -> Unit) {
-        if (commandQueue.tryAcquire()) {
-            try { block() }
-            finally { handler.postDelayed({ commandQueue.release() }, 300) }
-        } else {
-            RumorLog.d(TAG, "Command skipped — queue busy")
+        handler.post {
+            pendingCommands.addLast(block)
+            drainCommandQueue()
+        }
+    }
+
+    private fun drainCommandQueue() {
+        if (commandRunning) return
+        val next = pendingCommands.removeFirstOrNull() ?: return
+        commandRunning = true
+        try { next() }
+        finally {
+            handler.postDelayed({ commandRunning = false; drainCommandQueue() }, 300)
         }
     }
 

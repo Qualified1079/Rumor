@@ -20,7 +20,7 @@ import java.security.SecureRandom
  *
  * Wire format: each frame is [4-byte big-endian length][UTF-8 JSON payload].
  *
- * Sequence: HELLO → HELLO_PROOF → BLOOM → REQUEST → MESSAGE* → ACK → ONLINE_STATUS → BYE
+ * Sequence: HELLO → HELLO_PROOF → NEIGHBOR_DIGEST → SUMMARY → REQUEST → MESSAGE* → MESSAGES_DONE → ACK → ONLINE_STATUS → BYE
  *
  * Authentication: each side sends a random nonce in HELLO and signs the peer's
  * nonce with their Ed25519 private key. A peer that can't produce a valid signature
@@ -186,14 +186,18 @@ class GossipSession(
             val theirRequest = receive(inp) as? GossipPacket.Request
                 ?: return@withTimeout null
 
-            // Phase 4: MESSAGE exchange — send what they asked for + what they're missing
+            // Phase 4: MESSAGE exchange — send what they asked for + what they're
+            // missing, then the MESSAGES_DONE terminator (see its KDoc: without it
+            // both receive loops deadlock waiting for a frame the other side only
+            // sends after its own loop exits).
             val toSend = (theyNeed + messagesToOffer.filter { it.id in theirRequest.messageIds })
                 .distinctBy { it.id }
             for (msg in toSend) {
                 send(out, GossipPacket.Message(msg))
             }
+            send(out, GossipPacket.MessagesDone(toSend.size))
 
-            // Receive their messages
+            // Receive their messages until their terminator
             val received = mutableListOf<RumorMessage>()
             var packet = receive(inp)
             while (packet is GossipPacket.Message) {
@@ -201,19 +205,15 @@ class GossipSession(
                 packet = receive(inp)
             }
 
-            // Phase 4b: ACK — confirm which messages we accepted in this session.
-            // Reaching this point means signature checks (done by the engine on ingest)
-            // haven't run yet, so we acknowledge what we received at the wire layer.
+            // Phase 4b–6: send our whole tail without waiting, then read theirs.
+            // Neither side ever blocks on a frame the peer hasn't already committed
+            // to sending, so the tail cannot deadlock either.
             send(out, GossipPacket.Ack(received.map { it.id }))
-            val ackedByPeer = (packet as? GossipPacket.Ack)?.acceptedIds ?: emptyList()
-            if (packet is GossipPacket.Ack) packet = receive(inp)
-
-            // Phase 5: ONLINE_STATUS
             send(out, GossipPacket.OnlineStatus(recentOnlineUsers))
-            val theirOnline = (packet as? GossipPacket.OnlineStatus)?.recentUsers ?: emptyMap()
-
-            // Phase 6: BYE
             send(out, GossipPacket.Bye())
+
+            val ackedByPeer = (receive(inp) as? GossipPacket.Ack)?.acceptedIds ?: emptyList()
+            val theirOnline = (receive(inp) as? GossipPacket.OnlineStatus)?.recentUsers ?: emptyMap()
 
             val duration = System.currentTimeMillis() - startMs
 

@@ -135,6 +135,12 @@ class GossipEngine(
     fun onExchange(result: PeerExchangeResult) {
         scope.launch {
             if (result.peerUserId.isNotEmpty()) {
+                // The peer proved ownership of this key via HELLO challenge-response,
+                // so a completed exchange creates the contact even when zero messages
+                // moved (two fresh installs meeting for the first time).
+                if (result.peerPublicKey.isNotEmpty()) {
+                    messageStore.ensureContact(result.peerUserId, result.peerPublicKey)
+                }
                 topologyTracker.recordSession(
                     peerId           = result.peerUserId,
                     latencyMs        = result.durationMs,

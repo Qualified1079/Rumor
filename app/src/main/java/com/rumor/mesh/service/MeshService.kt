@@ -37,7 +37,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import java.util.Base64
@@ -65,6 +68,8 @@ class MeshService : Service(), MeshController {
     private val TAG = "MeshService"
     private val CHANNEL_ID = "rumor_mesh"
     private val NOTIFICATION_ID = 1
+    /** Gossip-round cadence while a Rumor peer is BLE-visible. */
+    private val GOSSIP_ROUND_INTERVAL_MS = 15_000L
 
     private val bleDiscovery: BleDiscoveryManager by inject()
     private val wifiDirectTransport: WifiDirectTransport by inject()
@@ -165,11 +170,21 @@ class MeshService : Service(), MeshController {
 
         // ── BLE nearby signal → Wi-Fi Direct rediscovery ─────────────────────
         // BLE has no identity, just presence — a detected beacon means "worth
-        // re-scanning for a Wi-Fi Direct peer now" rather than waiting for the
-        // next periodic window.
+        // re-scanning for a Wi-Fi Direct peer now".
+        //
+        // The signal is a level, not an edge: it stays true while a peer remains
+        // visible. A plain collect fires once per appearance, so two colocated
+        // devices would gossip exactly once and never sync anything composed
+        // afterwards. While the signal holds, keep starting gossip rounds on a
+        // fixed cadence; when it drops, park until the next appearance.
         scope.launch {
-            bleDiscovery.peerNearbySignal.collect { nearby ->
-                if (nearby) wifiDirectTransport.rediscoverPeers()
+            while (isActive) {
+                if (bleDiscovery.peerNearbySignal.value) {
+                    wifiDirectTransport.rediscoverPeers()
+                    delay(GOSSIP_ROUND_INTERVAL_MS)
+                } else {
+                    bleDiscovery.peerNearbySignal.first { it }
+                }
             }
         }
         // Re-arm BLE on toggle so the new scan/advertise duty cycle takes effect
