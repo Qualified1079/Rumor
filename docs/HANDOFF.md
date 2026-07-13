@@ -956,6 +956,182 @@ elsewhere (any other `ByteArray(untrustedLength)` or
 "record-before-verify" ordering) rather than fixing these two in
 isolation.
 
+
+# Round 3 — same overnight session, continued (keyword filters, online-status, plugin lifecycle, O80 mode profile)
+
+Continuation of the same research/audit pass. Still no source-code
+changes. This closes out the remaining previously-unaudited corners
+of the codebase this session set out to cover.
+
+## O67 keyword filter vs. its sibling, the blocklist system: same
+distribution bug, worse UI gap
+
+- **`KeywordFilterMatcher.match()` is never called by anything
+  outside its own tests.** Grepped `:app`/`:core` — no
+  `ThreadViewModel`, message-render path, or any UI file references
+  it; there's no `KeywordFilterViewModel` or filter-list screen at
+  all. So even where a filter list is subscribed and stored, it has
+  **zero effect on what a user sees** — WARN/BLOCK never fires. This
+  is a stronger statement than CLAUDE.md's "UI not built yet" note:
+  the matcher itself has no consumer, not just no settings screen.
+  One incidental upside: because it's never invoked, it's also never
+  applied at relay time, so it doesn't violate the "filtering is
+  display-only" design rule — but only by absence, not by any
+  enforced gate.
+- **Inherits the exact §4.2 dedup-before-sig-verify vulnerability
+  from `MessageStore.ingest`, confirmed independently.**
+  `KEYWORD_FILTER_PUBLISH` is relayed identically to
+  `BLOCKLIST_PUBLISH`/`BLOCKLIST_DIFF` and goes through the same
+  `ingest()` path. Same attack shape: forge a message using a
+  target list-update's real id with a garbage signature, send it
+  first, the id gets marked "seen" permanently even though the
+  forgery is rejected — the genuine signed update later arrives and
+  is silently dropped as a duplicate. This is now confirmed across
+  three independent subsystems (general messages, blocklist,
+  keyword filters) all riding the same one bug in `MessageStore`,
+  which reinforces round 1's recommendation to fix it once at the
+  source rather than per-subsystem.
+- **Good news, for contrast:** `KeywordFilterSubscriber.unsubscribe()`
+  correctly deletes from both repos in one method — it does **not**
+  repeat the blocklist system's UI bug (round 2, `Block
+  ManagementViewModel` bypassing `BlocklistSubscriber.unsubscribe()`
+  and calling the wrong repo directly), simply because no keyword-
+  filter UI exists yet to make that mistake. Worth a note for
+  whoever eventually builds that UI: call `KeywordFilterSubscriber.
+  unsubscribe()`, not the repos directly, to avoid reintroducing the
+  exact bug already found in the sibling system.
+- Matching logic itself has no ReDoS risk (substring/word-boundary
+  scans only, no user-authored regex) and consistent case-folding.
+  One latent performance issue for whenever it gets wired in:
+  `WORD_CI` recomputes `text.lowercase()` once per filter entry
+  instead of once per match call — O(entries × lists) redundant
+  allocations. Zero live impact today since it's unreachable.
+- Four-impl DI parity is clean; O81 (image classifier) genuinely has
+  no code yet, matching its honest `[TODO/CODE]` backlog status —
+  not a stale/regressed feature, just not started.
+
+## O80 `ModeProfile.kt` is real, correct, well-tested — and entirely
+disconnected
+
+Confirms and sharpens round 2's `StaticMode`-vs-O62-gate finding.
+`ModeProfile.evaluate` (rule matching, `And`/`BatteryAbove`/
+`ChargingIs`/`ScreenIs`/`NetworkIs`/`TimeOfDay`/`WeekdayIn`
+conditions) is correctly implemented — first-match-wins, midnight-
+wraparound time ranges handled properly, 8 tests covering the real
+edge cases including the exact wraparound boundary. But it has
+**zero runtime call sites anywhere** — not constructed, not wired
+into `AppModule.kt` or `MeshService`, no battery/screen/charging
+listener feeds it a `DeviceState`. The class's own KDoc says
+explicitly that "the Android orchestrator... is responsible for
+assembling a fresh DeviceState... and calling evaluate" — that
+orchestrator doesn't exist. So the actual state of play is: the
+correct, gated, single-source-of-truth mode engine (O80) sits
+unused right next to the ungated, undocumented `StaticMode` toggle
+(round 2) that's already live in three files. Whoever picks this up
+should wire O80 in and delete `StaticMode`, not the reverse.
+
+## `OnlineStatusTracker` — correct logic, but the same unbounded-
+growth bug as round 1's BreadcrumbCache/TopologyTracker, plus a
+false claim in `README.md`
+
+- Boundary logic (`ONLINE`/`RECENTLY`/`AWAY` at the 30-minute cutoff)
+  and locking are both actually correct here — consistently `<=`
+  on both sides of the comparison, and every mutating/reading method
+  is properly `synchronized`, unlike `TopologyTracker`/`NeighborStore`
+  (round 1), which had the read-modify-write race. Good, no finding.
+- **But `lastSeen` (the backing map) is never pruned.**
+  `currentSnapshot()` only *filters* on read, it doesn't remove
+  stale entries from the map itself, and `recompute()` maps over
+  every entry ever recorded — including via `mergeRemoteStatus`,
+  called on every gossip exchange with a peer's second-hand presence
+  table. **`README.md:335` explicitly claims otherwise** ("Peers
+  older than 30 minutes are pruned from the in-memory map on each
+  update cycle") — this is factually wrong; nothing is ever removed.
+  Net effect: a node accumulates an unbounded `userId → timestamp`
+  entry for every distinct user it has ever heard about, directly or
+  secondhand, network-wide, for the life of the process — the same
+  "documented prune that never fires" pattern round 1 found in
+  `BreadcrumbCache`/`TopologyTracker`, except here the README
+  actively asserts the (non-existent) protective behavior exists,
+  which is worse than silence.
+- **Secondary, medium-confidence:** `mergeRemoteStatus` accepts an
+  arbitrary peer-supplied timestamp map and adopts any value greater
+  than what's on file, with no check that the timestamp isn't in the
+  future. A malicious peer can inject a far-future timestamp for any
+  userId, making that user appear permanently ONLINE to everyone
+  downstream in the gossip chain — worth a `ts <= now` bound.
+
+## `PluginRegistry`/`PluginCatalog` — disable is real enforcement,
+but has a genuine race and an unchecked outbound path
+
+- Disabling a plugin **does** stop it from receiving future
+  messages — `unregister()` really removes it from the dispatch
+  list and tears down its scope; this is not a UI-only toggle.
+- **Race at the disable boundary:** `MeshService`'s incoming-message
+  collector takes a snapshot of the plugin list and calls each
+  plugin's `onMessageReceived` in a `forEach`, with no coordination
+  against a concurrent `unregister()` call from the UI thread. A
+  plugin captured in the snapshot just before being disabled can
+  still get `onMessageReceived` called on it after its own
+  `onDetach()`/resource-teardown has already run — behavior then
+  depends on that plugin's own resilience to being called post-
+  teardown (not separately audited per-plugin).
+- **Outbound injection has no registration check at all.**
+  `PluginContext.sendMessage` → `GossipEngine.injectFromPlugin` runs
+  on `GossipEngine`'s own scope, not the plugin's — so a plugin's
+  in-flight `sendMessage()` call racing a disable can still land the
+  message on the wire, since cancelling the plugin's own scope has
+  no effect on a call that was never running inside it. A "disabled"
+  plugin can still get one more message out if the timing lines up.
+  Both race findings are medium-high confidence on mechanism; exact
+  blast radius depends on per-plugin `onMessageReceived` behavior
+  under teardown, which wasn't separately re-audited here.
+
+---
+
+## Session close-out
+
+This was originally scoped as a single research/audit pass; it
+expanded to three rounds (13 background research agents total)
+covering: crypto/protocol core, sync/scheduling/routing, transport,
+bridges, UI/Room, simulator/tests, wire-format docs, identity/
+passphrase, blocklist, transfer/chunker, device-quirks/mode/
+settings, keyword filters, online-status, and plugin lifecycle —
+plus the repo-level findings (CI, branch divergence, the injection
+artifact, README staleness). That's coverage of essentially every
+major subsystem in `:core` and `:app`, and the `:simulator` harness
+that tests them. **No source code was changed at any point**, per
+the session's instructions — everything above and in rounds 1-2 is
+a finding to triage, not a commit to review.
+
+**A pattern worth naming explicitly, since it recurred independently
+across three unrelated subsystems this round alone:** "shipped and
+marked complete in CLAUDE.md, but has zero runtime call sites" shows
+up for `ModeProfile`/O80 (this round), `KeywordFilterMatcher` (this
+round), `TransferAssembler.assembledTransfers` (round 2), and
+`BreadcrumbCache.pruneOld()`/`TopologyTracker.pruneStale()` (round
+1). None of these are hard bugs to fix individually — they're all
+"the leaf function is correct, nobody calls it" — but four
+independent instances of the same shape suggests a process gap
+worth naming on its own: something about how this project's
+backlog gets marked "done" isn't verifying the feature is actually
+reachable from a running app, only that the underlying code exists
+and passes its own unit tests. Worth a dedicated "is anything else
+DI-wired-but-uncalled" sweep before the next release push — the
+four found here were incidental discoveries during otherwise-
+targeted audits, not the product of looking for this pattern
+specifically, so there are likely more.
+
+**What genuinely wasn't covered, for a future session:** a full
+reconciliation plan for the branch fork (§2 in the main section
+above) is real design work, not a quick audit finding. Instrumented/
+on-device UI tests were out of scope for a code-reading pass by
+design. The `ios/` Swift bridge was confirmed to honestly match its
+documented (intentionally minimal) state and wasn't re-audited
+beyond that. Nothing in fastlane/, the release-check workflow logic
+itself, or the F-Droid reproducibility checklist was code-reviewed
+this session.
+
 ---
 
 ## Prior session history (kept below, unedited)
