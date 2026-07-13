@@ -1,0 +1,22 @@
+{
+  "name": "bursty-broadcast",
+  "durationSec": 90,
+  "seed": 42,
+  "speedMult": 10.0,
+  "topology": { "kind": "mesh", "nodes": 40, "connectionsPerNode": 4 },
+  "params": {
+    "msg_per_sec": "0.25",
+    "broadcaster_count": "3",
+    "broadcaster_mult": "4.0",
+    "burst_prob": "0.05",
+    "burst_mult": "6",
+    "hops_to_live": "7",
+    "dm_fraction": "0.0"
+  },
+  "assertions": [
+    { "kind": "min-total-messages", "min": 8000 },
+    { "kind": "no-bridged-rerelay" },
+    { "kind": "heap-bounded", "maxMb": 2048 }
+  ],
+  "trace": true
+}

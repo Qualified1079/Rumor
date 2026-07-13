@@ -62,8 +62,28 @@ class TopologyTracker(
     }
 
     /**
-     * Peers to prefer for gossip — ranked by cumulative bytes transferred then
-     * session count; latency is not used (see [recordSession]).
+     * Record an exchange that failed (handshake failure, mid-exchange
+     * disconnect, sig-failure storm). Increments [Route.failureCount] for
+     * the peer, which the O3 ranking score (`bytesRelayed / (1 + failureCount)`)
+     * uses to demote unreliable peers.
+     */
+    fun recordSessionFailed(peerId: String) {
+        if (peerId.isEmpty()) return
+        scope.launch {
+            val existing = routeRepo.getForPeer(peerId)
+            val updated = if (existing == null) {
+                Route(peerId, 0L, 0, System.currentTimeMillis(), 0, 0L, failureCount = 1)
+            } else {
+                existing.copy(failureCount = existing.failureCount + 1, lastUpdatedMs = System.currentTimeMillis())
+            }
+            routeRepo.upsert(updated)
+            RumorLog.d(TAG, "Session FAILED with ${peerId.take(8)}… (failureCount=${updated.failureCount})")
+        }
+    }
+
+    /**
+     * Peers to prefer for gossip — ranked by bytesRelayed / (1 + failureCount),
+     * then session count. Latency is stored as diagnostic only (see [recordSession]).
      */
     suspend fun preferredPeers(limit: Int = 20): List<String> =
         routeRepo.getPreferred(limit).map { it.peerId }

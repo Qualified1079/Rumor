@@ -132,6 +132,21 @@ class SimParamRegistry {
         ParamCategory.TRAFFIC, 0.0, 1.0, 0.0, step = 0.05,
         randomFn = { rng -> rng.nextDouble(0.0, 0.1) })
 
+    /**
+     * Number of "broadcaster" nodes (the first N by index) that send traffic
+     * at [broadcasterMultiplier] times the baseline rate. Models the realistic
+     * disaster-comms pattern where a small fraction of nodes (organizers,
+     * news-spreaders) originates most of the traffic. Set to 0 to keep traffic
+     * symmetric. Default 0 — preserves prior scenario behaviour.
+     */
+    val broadcasterCount = SimParam("broadcaster_count", "Broadcaster nodes",
+        ParamCategory.TRAFFIC, 0, 100, 0,
+        randomFn = { rng -> rng.nextInt(0, 6) })
+
+    val broadcasterMultiplier = SimParam("broadcaster_mult", "Broadcaster rate ×",
+        ParamCategory.TRAFFIC, 1.0, 20.0, 5.0, step = 0.5,
+        randomFn = { rng -> rng.nextDouble(2.0, 8.0) })
+
     // ── Protocol ─────────────────────────────────────────────────────────────
     val hopsToLive = SimParam("hops_to_live", "Hops to live",
         ParamCategory.PROTOCOL, 1, 15, 7,
@@ -140,6 +155,18 @@ class SimParamRegistry {
     val schedulerQuantumKb = SimParam("scheduler_quantum_kb", "Scheduler quantum (KB)",
         ParamCategory.PROTOCOL, 10, 500, 60,
         randomFn = { rng -> rng.nextInt(10, 181) })
+
+    /**
+     * O29/O42 A/B-comparison toggles. Default 1 = on. Set to 0 to disable for
+     * side-by-side runs. Slider snaps to 0 or 1; not randomized.
+     */
+    val useBreadcrumbs = SimParam("use_breadcrumbs", "Breadcrumb routing (0/1)",
+        ParamCategory.PROTOCOL, 0, 1, 1, step = 1.0,
+        randomFn = { _ -> 1 })
+
+    val useRbsr = SimParam("use_rbsr", "RBSR sync (0/1)",
+        ParamCategory.PROTOCOL, 0, 1, 0, step = 1.0,
+        randomFn = { _ -> 0 })
 
     val gossipIntervalMs = SimParam("gossip_interval_ms", "Gossip interval (ms)",
         ParamCategory.PROTOCOL, 500L, 60_000L, 5_000L,
@@ -159,8 +186,9 @@ class SimParamRegistry {
         linkLatencyMs, linkJitterMs, lossRate, bandwidthKbps, partitionProbability, partitionDurationSec,
         nodeCount, connectionsPerNode, churnRatePerMinute,
         msgPerSecondPerNode, minPayloadBytes, maxPayloadBytes, burstProbability, burstMultiplier,
-        dmFraction, largeMessageFraction,
+        dmFraction, largeMessageFraction, broadcasterCount, broadcasterMultiplier,
         hopsToLive, schedulerQuantumKb, gossipIntervalMs,
+        useBreadcrumbs, useRbsr,
         speedMultiplier, seed,
     )
 

@@ -20,7 +20,15 @@ private const val TAG = "ScenarioRunner"
  */
 class ScenarioRunner {
 
-    fun run(scenario: Scenario): ScenarioResult = runBlocking {
+    fun run(
+        scenario: Scenario,
+        /**
+         * Periodic in-scenario progress callback. Called from the tick loop
+         * each polled second with a `0.0..1.0` fraction of `simTimeMs /
+         * durationMs`. Default is a no-op for callers that don't care.
+         */
+        onProgress: (Float) -> Unit = {},
+    ): ScenarioResult = runBlocking {
         val params = SimParamRegistry()
         // Seed deterministically per scenario so replays line up.
         params.seed.value = scenario.seed
@@ -45,8 +53,13 @@ class ScenarioRunner {
         val deadlineMs = scenario.durationSec * 1000L
         val pollIntervalMs = 100L
         // Safety: cap wall-clock so a paused engine (heap pressure / hang) can't loop forever.
+        // The cap was originally 5× expected, plus 30s grace; in practice heavy-traffic
+        // scenarios (high broadcaster_mult, large topologies, bursty params) can exceed
+        // that even when the engine is healthy. Bumped to 15× expected plus 60s grace
+        // so a 120s sim at 10× has up to ~3 minutes of wall time before declaring
+        // failure. A genuinely hung engine still gets caught — just less aggressively.
         val wallStartMs = System.currentTimeMillis()
-        val maxWallMs = (deadlineMs / params.speedMultiplier.value).toLong() * 5L + 30_000L
+        val maxWallMs = (deadlineMs / params.speedMultiplier.value).toLong() * 15L + 60_000L
 
         var lastTracedSec = -1L
         val errors = mutableListOf<String>()
@@ -64,11 +77,26 @@ class ScenarioRunner {
             }
             if (scenario.trace) {
                 val curSec = world.simTimeMs.value / 1000L
+                // Sample per-node every 5 sim-seconds; aggregate metrics every
+                // 1 sim-second. Per-node snapshots allocate O(nodes) per call
+                // and dominate trace overhead on 50+ node scenarios.
                 if (curSec != lastTracedSec) {
-                    trace.add(world.metrics.value.toSample())
+                    val perNode = if (curSec % 5L == 0L) {
+                        world.nodes.value.map { n ->
+                            NodeTraceSample(
+                                index = n.index,
+                                queueDepth = n.schedulerQueueDepth,
+                                messagesProcessed = n.messagesProcessed.value,
+                                dupDrops = n.dupDrops.value,
+                                bloomSkips = n.bloomSkips.value,
+                            )
+                        }
+                    } else emptyList()
+                    trace.add(world.metrics.value.toSample().copy(nodes = perNode))
                     lastTracedSec = curSec
                 }
             }
+            onProgress((world.simTimeMs.value.toFloat() / deadlineMs.coerceAtLeast(1L)).coerceIn(0f, 1f))
             delay(pollIntervalMs)
         }
         world.stop()
@@ -298,4 +326,21 @@ data class TraceSample(
     val totalMessages: Long,
     val totalDropped: Long,
     val heapUsedMb: Long,
+    /**
+     * Per-node breakdown at this tick. Empty for samples taken before nodes
+     * exist (e.g. t=0) and for the final-metrics snapshot in the result. When
+     * present, lets the bundle viewer plot per-node curves: queue-depth
+     * hotspots, asymmetric broadcaster load, dup-on-ingest, bloom efficiency,
+     * breadcrumb-cache growth.
+     */
+    val nodes: List<NodeTraceSample> = emptyList(),
+)
+
+@Serializable
+data class NodeTraceSample(
+    val index: Int,
+    val queueDepth: Int,
+    val messagesProcessed: Long,
+    val dupDrops: Long,
+    val bloomSkips: Long,
 )

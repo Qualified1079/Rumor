@@ -32,7 +32,26 @@ object ScenarioBundle {
         classDiscriminator = "kind"
     }
 
-    fun runAll(scenariosDir: File, outputZip: File): Boolean {
+    fun runAll(
+        scenariosDir: File,
+        outputZip: File,
+        /**
+         * Polled between scenarios. When true, the loop exits early and the
+         * partial bundle (results collected so far) is written to disk so the
+         * dashboard's Cancel button produces a usable download instead of a
+         * never-written zip. Default is "never cancel" which preserves
+         * original CLI behaviour.
+         */
+        isCancelled: () -> Boolean = { false },
+        /**
+         * Periodic progress callback. Called with the 0-based index of the
+         * scenario currently running, total count, its name, and an
+         * in-scenario 0.0..1.0 fraction. Lets the dashboard render an
+         * actual progress bar instead of just "elapsed seconds." Default
+         * is a no-op for the CLI.
+         */
+        onProgress: (currentIndex: Int, total: Int, currentName: String, currentFraction: Float) -> Unit = { _, _, _, _ -> },
+    ): Boolean {
         require(scenariosDir.isDirectory) { "not a directory: $scenariosDir" }
         val scenarioFiles = scenariosDir.listFiles { f -> f.isFile && f.extension == "json" }
             ?.sortedBy { it.name }
@@ -41,8 +60,14 @@ object ScenarioBundle {
 
         val runner = ScenarioRunner()
         val results = mutableListOf<RunRecord>()
+        val numScenarios = scenarioFiles.size
 
-        for (file in scenarioFiles) {
+        for ((idx, file) in scenarioFiles.withIndex()) {
+            if (isCancelled()) {
+                RumorLog.i(TAG, "cancelled before ${file.name} — writing partial bundle")
+                break
+            }
+            onProgress(idx, numScenarios, file.nameWithoutExtension, 0f)
             RumorLog.i(TAG, "── running ${file.name} ──")
             val (scenario, parseError) = runCatching {
                 json.decodeFromString<Scenario>(file.readText())
@@ -61,7 +86,9 @@ object ScenarioBundle {
                 continue
             }
 
-            val result = runCatching { runner.run(scenario) }
+            val result = runCatching {
+                runner.run(scenario) { fraction -> onProgress(idx, numScenarios, file.nameWithoutExtension, fraction) }
+            }
                 .getOrElse { e ->
                     RumorLog.e(TAG, "runtime error in ${file.name}: ${e.message}", e)
                     ScenarioResult(

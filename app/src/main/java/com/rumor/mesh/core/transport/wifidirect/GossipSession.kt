@@ -7,9 +7,11 @@ import com.rumor.mesh.core.model.GossipPacket
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.helloChallengeBytes
 import com.rumor.mesh.core.logging.RumorLog
+import com.rumor.mesh.core.sync.toMemory
+import com.rumor.mesh.core.sync.toWire
 import kotlinx.coroutines.withTimeout
+import com.rumor.mesh.core.wire.WireJson
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.Socket
@@ -49,6 +51,16 @@ class GossipSession(
     private val isInbound: Boolean,
     /** Returns true if this session should proceed; false aborts. Called after HELLO. */
     private val sessionGate: (peerUserId: String, isInbound: Boolean) -> Boolean,
+    /**
+     * Optional snapshot of `(sentAtMs, id)` tuples for every message in the local
+     * store. When non-null AND both peers advertise `rbsr-v1` in HELLO, the
+     * summary phase uses Range-Based Set Reconciliation (O42) instead of the
+     * bloom-filter offer/want. Defaulting null keeps the existing bloom path
+     * for builds that haven't wired the storage adapter through yet.
+     */
+    private val rbsrItems: List<com.rumor.mesh.core.sync.RbsrItem>? = null,
+    /** Capability flags this session advertises in HELLO. See [LOCAL_SUPPORTED_FEATURES]. */
+    private val supportedFeatures: List<String> = LOCAL_SUPPORTED_FEATURES,
 ) {
     private val TAG = "GossipSession"
     private val SESSION_TIMEOUT_MS = 30_000L
@@ -70,10 +82,24 @@ class GossipSession(
      */
     private val BLOOM_THRESHOLD = 500
 
-    private val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = true
-        classDiscriminator = "type"
+    private val json get() = WireJson
+
+    companion object {
+        /** Wire-format version this build emits. */
+        const val LOCAL_PROTOCOL_VERSION: Int = 1
+        /** Highest wire-format version this build can parse. Session uses `min(mine, theirs)`. */
+        const val LOCAL_MAX_PROTOCOL_VERSION: Int = 1
+        /** Range-Based Set Reconciliation capability flag (O42). */
+        const val RBSR_FEATURE: String = "rbsr-v1"
+        /**
+         * Capability flags this build advertises. Empty for v0.1 production —
+         * RBSR ([RBSR_FEATURE]) is opt-in per session for now via the
+         * `supportedFeatures` constructor parameter, until wire-locked against
+         * the reference impl. Simulator scenarios override this to drive the
+         * RBSR path; production transport leaves it empty so the bloom path
+         * remains canonical.
+         */
+        val LOCAL_SUPPORTED_FEATURES: List<String> = emptyList()
     }
 
     data class SessionResult(
@@ -105,9 +131,17 @@ class GossipSession(
             // full session budget once the handshake proves the socket actually works.
             socket.soTimeout = HELLO_TIMEOUT_MS
 
-            // Phase 1: HELLO — exchange identities + challenge nonces
+            // Phase 1: HELLO — exchange identities + challenge nonces + version bits
             val ourNonce = ByteArray(32).also { SecureRandom().nextBytes(it) }.toBase64()
-            send(out, GossipPacket.Hello(localUserId, localPublicKey, ourNonce))
+            val ourHello = GossipPacket.Hello(
+                userId = localUserId,
+                publicKey = localPublicKey,
+                nonce = ourNonce,
+                protocolVersion = LOCAL_PROTOCOL_VERSION,
+                maxProtocolVersion = LOCAL_MAX_PROTOCOL_VERSION,
+                supportedFeatures = supportedFeatures,
+            )
+            send(out, ourHello)
             val hello = receive(inp) as? GossipPacket.Hello
                 ?: run { RumorLog.w(TAG, "Expected HELLO, got something else"); return@withTimeout null }
             RumorLog.d(TAG, "Handshake with ${hello.userId.take(16)}…")
@@ -122,15 +156,29 @@ class GossipSession(
                 return@withTimeout null
             }
 
-            // Phase 1b: HELLO_PROOF — each side signs the other's nonce
-            val ourProof = signer(helloChallengeBytes(hello.nonce))
+            // Phase 1b: HELLO_PROOF — each side signs the other's nonce bound to
+            // that side's claimed version bits. A downgrade-MITM that strips the
+            // peer's supportedFeatures would invalidate the proof we verify below.
+            val ourChallenge = helloChallengeBytes(
+                nonceBase64 = hello.nonce,
+                protocolVersion = ourHello.protocolVersion,
+                maxProtocolVersion = ourHello.maxProtocolVersion,
+                supportedFeatures = ourHello.supportedFeatures,
+            )
+            val ourProof = signer(ourChallenge)
                 ?: run { RumorLog.w(TAG, "Local signer unavailable"); return@withTimeout null }
             send(out, GossipPacket.HelloProof(ourProof.toBase64()))
             val proof = receive(inp) as? GossipPacket.HelloProof
                 ?: run { RumorLog.w(TAG, "Expected HELLO_PROOF"); return@withTimeout null }
             val proofBytes = try { proof.signature.fromBase64() }
                 catch (e: Exception) { RumorLog.w(TAG, "Bad proof encoding"); return@withTimeout null }
-            if (!CryptoManager.verify(helloChallengeBytes(ourNonce), proofBytes, peerPubKeyBytes)) {
+            val peerChallenge = helloChallengeBytes(
+                nonceBase64 = ourNonce,
+                protocolVersion = hello.protocolVersion,
+                maxProtocolVersion = hello.maxProtocolVersion,
+                supportedFeatures = hello.supportedFeatures,
+            )
+            if (!CryptoManager.verify(peerChallenge, proofBytes, peerPubKeyBytes)) {
                 RumorLog.w(TAG, "Peer ${hello.userId.take(16)}… failed challenge — aborting")
                 return@withTimeout null
             }
@@ -156,32 +204,77 @@ class GossipSession(
             send(out, buildNeighborDigest())
             val peerDigest = receive(inp) as? GossipPacket.NeighborDigest
 
-            // Phase 2: SUMMARY — exchange knowledge sets.
-            // Below the bloom threshold, send a raw ID list (zero false positives, more
-            // compact at small sizes). Above it, send a bloom filter. Either form is
-            // accepted on receive.
-            send(out, buildSummary())
-            val peerKnows = when (val peerSummary = receive(inp)) {
-                is GossipPacket.IdList -> peerSummary.ids.toHashSet().let { set ->
-                    { id: String -> id in set }
+            // Phase 2: SUMMARY — exchange knowledge sets. Capability-gated:
+            // RBSR (O42) replaces the bloom/idlist path when both peers advertise
+            // `rbsr-v1` in HELLO AND we have an `rbsrItems` snapshot wired through.
+            // Falls back to bloom/idlist on any precondition miss for clean
+            // backwards compatibility with v0.1 peers.
+            val useRbsr = supportedFeatures.contains(RBSR_FEATURE) &&
+                hello.supportedFeatures.contains(RBSR_FEATURE) &&
+                rbsrItems != null
+
+            val theyNeed: List<RumorMessage>
+            val weNeedIds: List<String>
+            val overlapFraction: Float
+
+            if (useRbsr) {
+                val rbsr = com.rumor.mesh.core.sync.Rbsr(
+                    com.rumor.mesh.core.sync.SortedListRbsrStorage(rbsrItems!!),
+                )
+                val peerHas = HashSet<String>()
+                val peerNeeds = HashSet<String>()
+                var ourFrames = rbsr.initiate()
+                for (round in 0 until com.rumor.mesh.core.sync.MAX_RBSR_ROUNDS) {
+                    send(out, GossipPacket.Rbsr(ourFrames.map { it.toWire() }))
+                    val incoming = receive(inp) as? GossipPacket.Rbsr
+                        ?: return@withTimeout null
+                    val r = rbsr.respond(incoming.frames.map { it.toMemory() })
+                    peerHas.addAll(r.peerHas)
+                    peerNeeds.addAll(r.peerNeeds)
+                    if (ourFrames.isEmpty() && incoming.frames.isEmpty()) break
+                    ourFrames = r.outgoing
                 }
-                is GossipPacket.Bloom -> BloomFilterData.deserialize(
-                    peerSummary.filter, peerSummary.expectedItems,
-                ).let { f -> { id: String -> f.mightContain(id) } }
-                else -> return@withTimeout null
+                theyNeed = messagesToOffer.filter { it.id in peerNeeds }
+                weNeedIds = peerHas.toList()
+                overlapFraction = if (messagesToOffer.isEmpty()) 0f
+                else (messagesToOffer.size - theyNeed.size).toFloat() / messagesToOffer.size
+            } else {
+                // Legacy bloom/idlist path: send our summary, derive a `peerKnows`
+                // predicate from theirs, and compute the offer side. Peer requests
+                // what they need in a separate Request frame because they cannot
+                // enumerate that just from our summary.
+                send(out, buildSummary())
+                // O13: a peer can send an adversarial bloom (expectedItems =
+                // Int.MAX_VALUE) that would OOM the receiver. deserializeOrNull
+                // returns null on OOM/IAE; we treat that as "peer's bloom is
+                // unusable — assume they know nothing" and fall back to capped
+                // flood. Receiver stays alive; sender over-offers this exchange.
+                val peerKnows: (String) -> Boolean = when (val peerSummary = receive(inp)) {
+                    is GossipPacket.IdList -> peerSummary.ids.toHashSet().let { set ->
+                        { id: String -> id in set }
+                    }
+                    is GossipPacket.Bloom -> {
+                        val f = BloomFilterData.deserializeOrNull(
+                            peerSummary.filter, peerSummary.expectedItems,
+                        )
+                        if (f == null) {
+                            RumorLog.w(TAG, "Peer bloom unusable (oversized?) — over-offering this exchange")
+                            { _: String -> false }
+                        } else {
+                            { id: String -> f.mightContain(id) }
+                        }
+                    }
+                    else -> return@withTimeout null
+                }
+                overlapFraction = if (messagesToOffer.isEmpty()) 0f
+                else messagesToOffer.count { peerKnows(it.id) }.toFloat() / messagesToOffer.size
+                theyNeed = messagesToOffer.filter { msg -> !peerKnows(msg.id) }
+                weNeedIds = emptyList()
             }
 
-            // How much of our offer did the peer already know? Lower = more valuable relay.
-            val overlapFraction = if (messagesToOffer.isEmpty()) 0f
-            else messagesToOffer.count { peerKnows(it.id) }.toFloat() / messagesToOffer.size
-
-            // Phase 3: REQUEST — ask for what we're missing.
-            // We can't enumerate "what we're missing" without knowing what they have
-            // beyond their summary, so send empty here; peer will reply with what they
-            // think we're missing based on our own summary.
-            val theyNeed = messagesToOffer.filter { msg -> !peerKnows(msg.id) }
-            val weNeedIds = emptyList<String>()
-
+            // Phase 3: REQUEST — RBSR path knows what we need; bloom path doesn't
+            // (we send empty, peer replies with what they think we need based on
+            // our summary).
             send(out, GossipPacket.Request(weNeedIds))
             val theirRequest = receive(inp) as? GossipPacket.Request
                 ?: return@withTimeout null

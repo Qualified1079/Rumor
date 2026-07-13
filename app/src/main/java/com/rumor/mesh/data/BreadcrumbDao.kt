@@ -20,9 +20,9 @@ interface BreadcrumbDao {
         SELECT * FROM breadcrumbs
         WHERE targetUserId = :targetId
         ORDER BY recordedAtMs DESC
-        LIMIT 5
+        LIMIT :limit
     """)
-    suspend fun getRecent(targetId: String): List<BreadcrumbEntity>
+    suspend fun getRecent(targetId: String, limit: Int): List<BreadcrumbEntity>
 
     /** Keep only the 5 freshest crumbs per target; delete the rest. */
     @Query("""

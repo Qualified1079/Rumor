@@ -8,6 +8,7 @@ import com.rumor.mesh.core.data.ChunkRepository
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.data.MessageRepository
 import com.rumor.mesh.core.data.RouteRepository
+import com.rumor.mesh.core.data.ScheduledMessageRepository
 import com.rumor.mesh.core.data.SubscribedBlocklistRepository
 import com.rumor.mesh.core.data.TransferRecord
 import com.rumor.mesh.core.data.TransferRepository
@@ -18,6 +19,7 @@ import com.rumor.mesh.core.model.Breadcrumb
 import com.rumor.mesh.core.model.Contact
 import com.rumor.mesh.core.model.Route
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.model.ScheduledMessage
 import com.rumor.mesh.core.model.TransferStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -106,6 +108,21 @@ class InMemoryContactRepository : ContactRepository {
         contacts[userId]?.let { contacts[userId] = it.copy(isPriorityPeer = enabled) }
     }
     override suspend fun getPriorityPeers(): List<Contact> = contacts.values.filter { it.isPriorityPeer }
+
+    override suspend fun rebindIdentity(
+        oldUserId: String,
+        newUserId: String,
+        newPublicKey: String,
+    ): Boolean {
+        val existing = contacts.remove(oldUserId) ?: return false
+        contacts[newUserId] = existing.copy(
+            userId = newUserId,
+            publicKey = newPublicKey,
+            lastSeenMs = System.currentTimeMillis(),
+        )
+        _flow.value = contacts.values.toList()
+        return true
+    }
 }
 
 // ── RouteRepository ───────────────────────────────────────────────────────────
@@ -121,7 +138,9 @@ class InMemoryRouteRepository : RouteRepository {
     override suspend fun getPreferred(limit: Int): List<Route> =
         routes.values
             .sortedWith(
-                compareByDescending<Route> { it.bytesRelayed }
+                // O3: rank by bytesRelayed / (1 + failureCount), tie-break on
+                // sessionCount then recency. Mirrors the Room DAO query.
+                compareByDescending<Route> { it.bytesRelayed.toDouble() / (1 + it.failureCount) }
                     .thenByDescending { it.sessionCount }
                     .thenByDescending { it.lastUpdatedMs }
             )
@@ -148,6 +167,8 @@ class InMemoryBreadcrumbRepository : BreadcrumbRepository {
     }
     override suspend fun getLatest(targetUserId: String): Breadcrumb? =
         crumbs[targetUserId]?.maxByOrNull { it.recordedAtMs }
+    override suspend fun getCandidates(targetUserId: String, limit: Int): List<Breadcrumb> =
+        crumbs[targetUserId]?.sortedByDescending { it.recordedAtMs }?.take(limit) ?: emptyList()
     override suspend fun pruneForTarget(targetUserId: String) {
         crumbs[targetUserId]?.let { list ->
             if (list.size > 5) {
@@ -242,4 +263,22 @@ class InMemoryChunkRepository : ChunkRepository {
         forTransfer(transferId)[chunkIndex]?.let { forTransfer(transferId)[chunkIndex] = it.copy(ackedAtMs = ackedAtMs) }
     }
     override suspend fun deleteAllForTransfer(transferId: String) { chunks.remove(transferId) }
+}
+
+class InMemoryScheduledMessageRepository : ScheduledMessageRepository {
+    private val items = ConcurrentHashMap<String, ScheduledMessage>()
+    private val _flow = MutableStateFlow<List<ScheduledMessage>>(emptyList())
+
+    override suspend fun upsert(message: ScheduledMessage) {
+        items[message.id] = message
+        _flow.value = items.values.toList()
+    }
+    override suspend fun delete(id: String) {
+        items.remove(id)
+        _flow.value = items.values.toList()
+    }
+    override suspend fun dueAt(nowMs: Long, limit: Int): List<ScheduledMessage> =
+        items.values.filter { it.fireAtMs <= nowMs }.sortedBy { it.fireAtMs }.take(limit)
+    override suspend fun getById(id: String): ScheduledMessage? = items[id]
+    override fun observeAll(): Flow<List<ScheduledMessage>> = _flow
 }

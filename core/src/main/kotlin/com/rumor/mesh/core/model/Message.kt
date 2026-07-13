@@ -2,6 +2,7 @@ package com.rumor.mesh.core.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /** Wire-format message — exactly what travels between nodes. */
 @Serializable
@@ -28,6 +29,14 @@ data class RumorMessage(
     /** Ed25519 signature over all other fields (Base64). */
     val signature: String,
     /**
+     * Reserved forward-compat carrier. v0.1 ignores; v0.2+ uses for additive
+     * fields without bumping `protocolVersion`. NOT covered by [signature] —
+     * any security-relevant value placed here must self-authenticate. Survives
+     * relay because `data class.copy()` preserves it through `decrementHops`.
+     */
+    @SerialName("_ext")
+    val ext: Map<String, JsonElement>? = null,
+    /**
      * How this node established trust in the message. Set by [GossipEngine] from
      * the ingress transport — never travels on the wire, so a peer cannot assert
      * its own trust level.
@@ -43,7 +52,47 @@ data class RumorMessage(
     /** Whether the local user manually relayed this (reset hops-to-live). Not propagated. */
     @kotlinx.serialization.Transient
     val wasRelayed: Boolean = false,
+    /**
+     * O29 per-peer routing marker. When non-null, this message is targeted to
+     * specific peers (chosen by breadcrumb match at relay time) and the
+     * transport's `messagesForExchange(peerUserId)` filters out peers not in
+     * this set. Null means "broadcast, offer to anyone" (the default for
+     * non-DMs and for DMs without a breadcrumb match). Transient on purpose —
+     * intended peers are a local routing decision, not part of the wire frame,
+     * and would leak the routing graph to in-mesh observers if shipped.
+     */
+    @kotlinx.serialization.Transient
+    val intendedPeers: Set<String>? = null,
 )
+
+/**
+ * O32 split-TTL helpers. `floodedHops` decrements only when the relay falls
+ * back to flood (no breadcrumb match for this hop); `routedHops` counts
+ * confirmed-route hops separately for diagnostics and the hard ceiling.
+ * Stored inside the O37-reserved `_ext` map so v0.1 ignores them gracefully.
+ *
+ * Default reads when `_ext` is absent: `floodedHops = hopsToLive` (legacy
+ * behaviour), `routedHops = 0`. This preserves bit-exact compatibility for
+ * any pre-O32 message that hits a post-O32 node.
+ */
+val RumorMessage.routedHops: Int
+    get() = (ext?.get("routedHops") as? kotlinx.serialization.json.JsonPrimitive)
+        ?.content?.toIntOrNull() ?: 0
+
+val RumorMessage.floodedHops: Int
+    get() = (ext?.get("floodedHops") as? kotlinx.serialization.json.JsonPrimitive)
+        ?.content?.toIntOrNull() ?: hopsToLive
+
+/** Hard ceiling on total path length regardless of routed/flooded split (O32). */
+const val MAX_TOTAL_HOPS: Int = 30
+
+fun RumorMessage.withTtlSplit(routedHops: Int, floodedHops: Int): RumorMessage {
+    val updated = (ext ?: emptyMap()).toMutableMap().apply {
+        this["routedHops"] = kotlinx.serialization.json.JsonPrimitive(routedHops)
+        this["floodedHops"] = kotlinx.serialization.json.JsonPrimitive(floodedHops)
+    }
+    return copy(ext = updated)
+}
 
 /**
  * Per-hop trust in a message, decided locally from the transport it arrived on.
@@ -52,7 +101,23 @@ data class RumorMessage(
 enum class TrustLevel {
     /** [RumorMessage.signature] was verified against the sender's Ed25519 key. */
     VERIFIED,
-    /** Carried in from a non-Rumor network by a local bridge plugin; unsigned. */
+    /**
+     * Bridge-vouched content (O17). The OUTER Rumor signature on this message
+     * is by a bridge node's long-term key — that's verified. The INNER payload
+     * is from a foreign network (Meshtastic, MeshCore, etc.) and the bridge
+     * vouches only for *having received* it, never for content authenticity.
+     * Unlike [BRIDGED], BRIDGE_VOUCHED messages relay normally so the bridge's
+     * reach extends beyond its direct peers. The display layer must surface
+     * the via-bridge framing explicitly so users don't conflate it with
+     * native Rumor authenticity (O47).
+     */
+    BRIDGE_VOUCHED,
+    /**
+     * Carried in from a non-Rumor network by a local bridge plugin; outer
+     * signature is `BRIDGE_UNSIGNED` sentinel. Never re-relayed onto the
+     * signed mesh — a BRIDGED message reaches only its bridge's direct peers.
+     * Use [BRIDGE_VOUCHED] for cross-mesh propagation.
+     */
     BRIDGED,
 }
 
@@ -76,6 +141,41 @@ enum class MessageType {
     @SerialName("priority_link_request") PRIORITY_LINK_REQUEST,
     /** Accept an incoming priority link request. Routed as DM back to originator. */
     @SerialName("priority_link_accept")  PRIORITY_LINK_ACCEPT,
+    /**
+     * Signed announcement that the sender is migrating from an old identity
+     * (userId / Ed25519 key) to a new one. The outer [RumorMessage.signature]
+     * is by the *new* key (so existing relay-layer signature checks still
+     * verify against [RumorMessage.senderPublicKey]); the inner
+     * [IdentityRotationPayload.continuitySignature] is by the *old* key and
+     * proves the rotation is authorized (old-key holder consents). Recipients
+     * holding [IdentityRotationPayload.oldUserId] as a contact rebind to the
+     * new userId locally. See O41.
+     */
+    @SerialName("identity_rotation") IDENTITY_ROTATION,
+    /**
+     * Self-presence beacon (O30 + O57). Sender declares its current [UserMode]
+     * to the mesh — entry-pulse on mode-up (going Static/Free), exit-pulse on
+     * mode-down (back to Mobile). Mesh peers consume this to weight the sender
+     * as a routing anchor (Static, Free) or drop the anchor weight immediately
+     * (exit pulse). Self-only: a node beacons its OWN mode; never relays
+     * someone else's mode for them.
+     */
+    @SerialName("self_presence") SELF_PRESENCE,
+    /**
+     * Bridge-vouched cross-network content (O17). Outer Rumor signature by a
+     * bridge node certifies "I received this content from {originNetwork}".
+     * Recipients verify the outer sig, set [TrustLevel.BRIDGE_VOUCHED], and
+     * allow normal relay so the bridge's reach extends beyond direct peers.
+     * Payload is a [BridgeVouchedPayload].
+     */
+    @SerialName("bridge_vouched") BRIDGE_VOUCHED,
+    /**
+     * Receiver-originated cancel for an in-flight chunked transfer (O18).
+     * Routed as a DM to the original sender; on receipt the sender stops
+     * responding to chunk-requests for the named transferId and the
+     * transfer record is marked ABANDONED on both sides.
+     */
+    @SerialName("transfer_cancel") TRANSFER_CANCEL,
 }
 
 @Serializable
@@ -155,16 +255,20 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.PING,
             MessageType.PONG,
             MessageType.CHUNK_REQUEST,
+            MessageType.TRANSFER_CANCEL,
             MessageType.BLOCKLIST_DIFF,
             MessageType.PRIORITY_LINK_REQUEST,
-            MessageType.PRIORITY_LINK_ACCEPT -> TrafficClass.INFRASTRUCTURE
+            MessageType.PRIORITY_LINK_ACCEPT,
+            MessageType.IDENTITY_ROTATION,
+            MessageType.SELF_PRESENCE -> TrafficClass.INFRASTRUCTURE
             // A full blocklist snapshot is bulky sync data, not handshake-tier
             // traffic — only the small incremental diff stays INFRASTRUCTURE.
             MessageType.TRANSFER_METADATA,
             MessageType.BLOCKLIST_PUBLISH -> TrafficClass.TRANSFER_SETUP
             MessageType.CHUNK             -> TrafficClass.BULK
             MessageType.BROADCAST,
-            MessageType.DIRECT -> when (payload?.contentType) {
+            MessageType.DIRECT,
+            MessageType.BRIDGE_VOUCHED -> when (payload?.contentType) {
                 ContentType.IMAGE, ContentType.VOICE, ContentType.FILE -> TrafficClass.BULK
                 ContentType.CONTROL                                    -> TrafficClass.INFRASTRUCTURE
                 ContentType.TEXT, null                                 -> TrafficClass.REALTIME

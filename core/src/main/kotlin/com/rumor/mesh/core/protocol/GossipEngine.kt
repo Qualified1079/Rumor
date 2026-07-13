@@ -2,8 +2,14 @@ package com.rumor.mesh.core.protocol
 
 import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.crypto.CryptoManager
+import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
 import com.rumor.mesh.core.crypto.Ed25519ToX25519
+import com.rumor.mesh.core.model.IdentityRotationPayload
+import com.rumor.mesh.core.model.BridgeVouchedPayload
+import com.rumor.mesh.core.model.SelfPresencePayload
+import com.rumor.mesh.core.model.UserMode
+import com.rumor.mesh.core.model.identityRotationSignableBytes
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.identity.IdentityProvider
 import com.rumor.mesh.core.identity.LocalIdentity
@@ -12,9 +18,14 @@ import com.rumor.mesh.core.model.ChunkRequest
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
+import com.rumor.mesh.core.model.MAX_TOTAL_HOPS
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.TrustLevel
+import com.rumor.mesh.core.model.floodedHops
+import com.rumor.mesh.core.model.routedHops
+import com.rumor.mesh.core.model.withTtlSplit
 import com.rumor.mesh.core.policy.InboxFilter
+import com.rumor.mesh.core.routing.BreadcrumbCache
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.scheduler.Scheduler
@@ -27,10 +38,10 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_HOPS = 7
@@ -77,6 +88,14 @@ class GossipEngine(
      * never on the relay path — same architectural rule as [blockManager].
      */
     private val inboxFilter: InboxFilter,
+    /**
+     * Optional Tier-1 routing substrate (O29). When non-null, records a
+     * breadcrumb per inbound signed message so future DMs to that sender
+     * can prefer the peer that just delivered. The routing-decision side
+     * (handing DMs to candidatePeers vs flooding) lands in a follow-up
+     * commit. Null disables recording — preserves baseline flood behaviour.
+     */
+    private val breadcrumbs: BreadcrumbCache? = null,
     val canaryMetrics: CanaryMetrics = CanaryMetrics(),
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
     private val dmEnvelopeRegistry: DmEnvelopeRegistry = DmEnvelopeRegistry(),
@@ -161,7 +180,7 @@ class GossipEngine(
 
             for (msg in result.messagesReceived) {
                 val adjusted = msg.copy(receivedAtMs = System.currentTimeMillis())
-                processIncoming(adjusted, MessageSource.PEER, autoRelayIds)
+                processIncoming(adjusted, MessageSource.PEER, autoRelayIds, fromPeerId = result.peerUserId)
             }
         }
     }
@@ -169,6 +188,10 @@ class GossipEngine(
     fun onExchangeFailed(peerId: String) {
         scope.launch {
             canaryMetrics.recordExchange(success = false, rttMs = 0)
+            // O3: penalise unreliable peers in the route ranking. Empty peerId
+            // means the failure happened before HELLO completed — no route
+            // record to update.
+            if (peerId.isNotEmpty()) topologyTracker.recordSessionFailed(peerId)
             RumorLog.d(TAG, "Exchange failed with ${peerId.take(8)}…")
         }
     }
@@ -320,10 +343,34 @@ class GossipEngine(
         originalSenderId: String,
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
-        val body = Json.encodeToString(ChunkRequest(transferId, missingIndices))
+        val body = WireJson.encodeToString(ChunkRequest(transferId, missingIndices))
         val msg = buildMessage(
             identity = identity,
             type = MessageType.CHUNK_REQUEST,
+            hopsToLive = DEFAULT_DIRECT_HOPS,
+            payload = MessagePayload(ContentType.CONTROL, body),
+            recipientId = originalSenderId,
+        )
+        enqueueImmediate(msg)
+        return msg
+    }
+
+    /**
+     * O18: tell the original sender of a chunked transfer to abandon it.
+     * The receiver calls this when the user hits Cancel; the sender stops
+     * responding to chunk-requests for [transferId] on receipt.
+     */
+    fun composeTransferCancel(
+        transferId: String,
+        originalSenderId: String,
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val body = WireJson.encodeToString(
+            com.rumor.mesh.core.model.TransferCancel(transferId = transferId)
+        )
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.TRANSFER_CANCEL,
             hopsToLive = DEFAULT_DIRECT_HOPS,
             payload = MessagePayload(ContentType.CONTROL, body),
             recipientId = originalSenderId,
@@ -394,6 +441,120 @@ class GossipEngine(
         enqueueImmediate(reply)
     }
 
+    /**
+     * Compose and broadcast an [MessageType.IDENTITY_ROTATION] migrating the
+     * local identity from [oldUserId] (proven via [oldKeySign]) to the current
+     * identity. The outer message is signed by the current (new) key in the
+     * usual way; [oldKeySign] produces the inner continuity signature with the
+     * old key, which contacts holding [oldUserId] verify before rebinding.
+     * See O41.
+     */
+    suspend fun composeIdentityRotation(
+        oldUserId: String,
+        oldKeySign: (ByteArray) -> ByteArray,
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val newPublicKeyB64 = identity.publicKeyBytes.toBase64()
+        val authorizedAtMs = System.currentTimeMillis()
+        val continuityBytes = identityRotationSignableBytes(
+            oldUserId = oldUserId,
+            newUserId = identity.userId,
+            newPublicKey = newPublicKeyB64,
+            authorizedAtMs = authorizedAtMs,
+        )
+        val continuitySig = oldKeySign(continuityBytes).toBase64()
+        val payload = IdentityRotationPayload(
+            oldUserId = oldUserId,
+            newUserId = identity.userId,
+            newPublicKey = newPublicKeyB64,
+            authorizedAtMs = authorizedAtMs,
+            continuitySignature = continuitySig,
+        )
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.IDENTITY_ROTATION,
+            hopsToLive = DEFAULT_BROADCAST_HOPS,
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(payload)),
+        )
+        enqueueImmediate(msg)
+        return msg
+    }
+
+    /**
+     * Compose and broadcast a [MessageType.SELF_PRESENCE] beacon (O30 + O57).
+     * The sender declares its current [mode] to the mesh. Used both as the
+     * entry pulse when going Static or Free, and as the symmetric exit pulse
+     * (mode = MOBILE) when leaving a higher mode — without the exit pulse,
+     * peers continue to route through a ghost anchor for the full presence-
+     * decay window.
+     *
+     * [recentlyExchangedWith] is the optional O31 route advertisement payload;
+     * pass an empty list (the default) unless the user has opted into Tier-3
+     * broadcast routing-visibility for their own visibility (typically Free
+     * mode). The receiver decides how to weight this list given its own
+     * O58 visibility settings.
+     */
+    fun composeSelfPresence(
+        mode: UserMode,
+        recentlyExchangedWith: List<String> = emptyList(),
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val payload = SelfPresencePayload(
+            mode = mode,
+            authorizedAtMs = System.currentTimeMillis(),
+            recentlyExchangedWith = recentlyExchangedWith,
+        )
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.SELF_PRESENCE,
+            hopsToLive = DEFAULT_BROADCAST_HOPS,
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(payload)),
+        )
+        enqueueImmediate(msg)
+        return msg
+    }
+
+    /**
+     * Compose and broadcast a [MessageType.BRIDGE_VOUCHED] envelope (O17).
+     * Called by a bridge plugin when it wants to propagate foreign-network
+     * content across the Rumor mesh beyond its direct peers. The outer message
+     * is signed by the local (bridge) Rumor key in the usual way; the
+     * [BridgeVouchedPayload] carries the foreign-network framing.
+     *
+     * Trust model: the outer Ed25519 signature certifies "this bridge
+     * received this content from {originNetwork}." It does NOT vouch for
+     * content authenticity — the foreign sender is not a Rumor user. The
+     * display layer (O47) MUST render this as "via {bridge} from
+     * {originNetwork}:{senderId}" so users don't conflate it with native
+     * Rumor authenticity.
+     */
+    fun composeBridgeVouched(
+        originNetwork: String,
+        originSenderId: String,
+        originContentType: ContentType,
+        payload: String,
+        originSignatureIfAny: String? = null,
+        receivedAtMs: Long = System.currentTimeMillis(),
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val body = BridgeVouchedPayload(
+            originNetwork = originNetwork,
+            originSenderId = originSenderId,
+            originSignatureIfAny = originSignatureIfAny,
+            originContentType = originContentType,
+            payload = payload,
+            receivedAtMs = receivedAtMs,
+        )
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.BRIDGE_VOUCHED,
+            hopsToLive = DEFAULT_BROADCAST_HOPS,
+            payload = MessagePayload(originContentType, WireJson.encodeToString(body)),
+        )
+        enqueueImmediate(msg)
+        return msg
+    }
+
     // ── Transport supply ──────────────────────────────────────────────────────
 
     /**
@@ -411,7 +572,32 @@ class GossipEngine(
             overlap >= 0.5f -> 100
             else            -> 200   // novel peer or unknown — send the full batch
         }
-        return scheduler.take(cap)
+        val batch = scheduler.take(cap)
+
+        // O29 per-peer routing filter. A relayed DM marked with intendedPeers
+        // (set at relay time when breadcrumbs named candidates) is only
+        // offered to peers in that set — other peers see the batch without
+        // it. Locally-composed DMs and broadcasts have null intendedPeers and
+        // are offered to everyone. This is hard exclusion, not bias: the
+        // hard ceiling on routedHops+floodedHops in relay() bounds worst-case
+        // loops if a breadcrumb is stale.
+        val routedFiltered = batch.filter { msg ->
+            val intended = msg.intendedPeers ?: return@filter true
+            peerUserId in intended
+        }
+        if (breadcrumbs == null) return routedFiltered
+
+        // O29 ordering bias for messages that haven't been pre-routed
+        // (locally-composed DMs and intended-peer-null relays): DMs whose
+        // breadcrumbs include this peer float to the front of the batch.
+        // Stable-partition preserves scheduler order within each class.
+        val (preferred, rest) = routedFiltered.partition { msg ->
+            msg.intendedPeers == null &&
+                msg.type == MessageType.DIRECT &&
+                msg.recipientId != null &&
+                peerUserId in breadcrumbs.candidatePeersSync(msg.recipientId)
+        }
+        return preferred + rest
     }
     fun knownMessageIds(): Set<String> = duplicateFilter.knownIds()
     val queueDepth: Int get() = scheduler.queueDepth
@@ -422,6 +608,13 @@ class GossipEngine(
         rawMsg: RumorMessage,
         source: MessageSource,
         autoRelayIds: Set<String>,
+        /**
+         * The peer userId that handed us this message, when known. Used to
+         * record a breadcrumb (O29 Tier 1) — "messages to sender X are
+         * reachable via peer P." Null for locally-composed messages and
+         * for bridge-injected traffic where the concept doesn't apply.
+         */
+        fromPeerId: String? = null,
     ) {
         val clamped = clampTtl(rawMsg)
         // Per-transport trust gate. The BRIDGE_UNSIGNED sentinel is honored only
@@ -440,9 +633,30 @@ class GossipEngine(
         canaryMetrics.recordIncoming(isDuplicate = !isNew)
         if (!isNew) return
 
-        val msg = clamped.copy(
-            trustLevel = if (bridged) TrustLevel.BRIDGED else TrustLevel.VERIFIED,
-        )
+        // O17: BRIDGE_VOUCHED messages have a real outer Ed25519 (the bridge's)
+        // which has already been verified by messageStore.ingest above. The
+        // trust level reflects the foreign-content semantics, not the bridge's
+        // delivery signature. Display layer (O47) surfaces the via-bridge
+        // framing so users don't conflate this with native Rumor authenticity.
+        val finalTrust = when {
+            bridged -> TrustLevel.BRIDGED
+            clamped.type == MessageType.BRIDGE_VOUCHED -> TrustLevel.BRIDGE_VOUCHED
+            else -> TrustLevel.VERIFIED
+        }
+        val msg = clamped.copy(trustLevel = finalTrust)
+
+        // O29 Tier 1: record a breadcrumb pointing back through the peer that
+        // delivered this message. Bridged messages are skipped because the
+        // synthetic senderId doesn't map to a Rumor-mesh path. The cost of
+        // recording every signed inbound is one upsert + prune per message —
+        // dwarfed by signature verification already done in MessageStore.ingest.
+        if (!bridged && fromPeerId != null && fromPeerId != msg.senderId) {
+            breadcrumbs?.record(
+                targetUserId = msg.senderId,
+                fromPeerId = fromPeerId,
+                hopCount = (DEFAULT_BROADCAST_HOPS - msg.hopsToLive).coerceAtLeast(1),
+            )
+        }
 
         // Auto-accept incoming priority link acceptance: mark the sender as priority peer.
         if (msg.type == MessageType.PRIORITY_LINK_ACCEPT &&
@@ -450,8 +664,60 @@ class GossipEngine(
             scope.launch { contactRepo.setPriorityPeer(msg.senderId, true) }
         }
 
+        // O41: identity rotation. The outer signature on `msg` is by the *new*
+        // key (already verified above). We additionally check the *inner*
+        // continuity signature against the existing contact's old public key —
+        // proves the rotation is authorized by the old-key holder. Only then
+        // do we rebind the contact record so display-name pinning (O21) and
+        // routing breadcrumbs (O29) follow the same human across the rotation.
+        if (msg.type == MessageType.IDENTITY_ROTATION) {
+            scope.launch { applyIdentityRotation(msg) }
+        }
+
         emitToInbox(msg)
         relay(msg, autoRelayIds)
+    }
+
+    private suspend fun applyIdentityRotation(msg: RumorMessage) {
+        val payloadJson = msg.payload?.content ?: return
+        val rotation = runCatching {
+            WireJson.decodeFromString<IdentityRotationPayload>(payloadJson)
+        }.getOrNull() ?: return
+
+        // Outer-signature pubkey must equal claimed new pubkey, otherwise an
+        // attacker could broadcast someone else's rotation with their own
+        // outer key. The userId↔pubkey binding is cryptographic
+        // (userId = SHA-256(pubkey)) so a simple equality on the new userId is
+        // sufficient: if senderId != newUserId, drop.
+        if (msg.senderId != rotation.newUserId) return
+        if (msg.senderPublicKey != rotation.newPublicKey) return
+
+        // Old key on file determines whether we accept this rotation. If we
+        // don't have the old contact, there is nothing to rebind — drop
+        // silently. (Relaying the message is fine; rebinding requires prior
+        // knowledge of the old key.)
+        val existing = contactRepo.getById(rotation.oldUserId) ?: return
+        val oldPubKeyBytes = runCatching { existing.publicKey.fromBase64() }.getOrNull() ?: return
+        val continuityBytes = runCatching { rotation.continuitySignature.fromBase64() }.getOrNull() ?: return
+        val signable = identityRotationSignableBytes(
+            oldUserId = rotation.oldUserId,
+            newUserId = rotation.newUserId,
+            newPublicKey = rotation.newPublicKey,
+            authorizedAtMs = rotation.authorizedAtMs,
+        )
+        if (!CryptoManager.verify(signable, continuityBytes, oldPubKeyBytes)) {
+            RumorLog.w(TAG, "Identity rotation from ${rotation.oldUserId.take(16)}… failed continuity check")
+            return
+        }
+
+        val rebound = contactRepo.rebindIdentity(
+            oldUserId = rotation.oldUserId,
+            newUserId = rotation.newUserId,
+            newPublicKey = rotation.newPublicKey,
+        )
+        if (rebound) {
+            RumorLog.i(TAG, "Identity rotation: ${rotation.oldUserId.take(16)}… → ${rotation.newUserId.take(16)}…")
+        }
     }
 
     /**
@@ -474,10 +740,13 @@ class GossipEngine(
     private fun relay(msg: RumorMessage, autoRelayIds: Set<String>) {
         // Unsigned bridge traffic is never re-relayed onto the signed mesh: peers
         // reject unverifiable messages anyway, and re-signing here would launder a
-        // foreign message into a vouch this node never made.
+        // foreign message into a vouch this node never made. BRIDGE_VOUCHED is
+        // explicitly allowed because the bridge's outer Rumor signature certifies
+        // delivery (not content) and is checked on every hop like any other.
         if (msg.trustLevel == TrustLevel.BRIDGED) return
         when (msg.type) {
-            MessageType.BROADCAST -> {
+            MessageType.BROADCAST,
+            MessageType.BRIDGE_VOUCHED -> {
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 val boosted = if (msg.senderId in autoRelayIds) {
                     messageStore.boostHopsForManualRelay(forwarded)
@@ -488,7 +757,37 @@ class GossipEngine(
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
                 val forwarded = messageStore.decrementHops(msg) ?: return
-                enqueueRelayed(forwarded)
+
+                // O29 per-peer routing decision. If breadcrumbs name candidate
+                // peers for the recipient, mark this relay as routed-to-those-
+                // peers and increment routedHops (NOT floodedHops). Otherwise
+                // fall back to flood: leave intendedPeers null and decrement
+                // floodedHops via the legacy hopsToLive path. Hard ceiling at
+                // MAX_TOTAL_HOPS regardless of split.
+                val recipientId = forwarded.recipientId
+                val candidates = if (breadcrumbs != null && recipientId != null) {
+                    breadcrumbs.candidatePeersSync(recipientId).toSet().takeIf { it.isNotEmpty() }
+                } else null
+
+                val withSplit = if (candidates != null) {
+                    // Routed hop: increment routedHops, leave floodedHops at
+                    // the inherited value (don't decrement). intendedPeers
+                    // restricts the next offer batch to the matched peers.
+                    val newRouted = (forwarded.routedHops + 1).coerceAtMost(MAX_TOTAL_HOPS)
+                    forwarded.withTtlSplit(
+                        routedHops = newRouted,
+                        floodedHops = forwarded.floodedHops,
+                    ).copy(intendedPeers = candidates)
+                } else {
+                    // Flood fallback: floodedHops decrements via the existing
+                    // hopsToLive path already done by decrementHops.
+                    forwarded.withTtlSplit(
+                        routedHops = forwarded.routedHops,
+                        floodedHops = forwarded.hopsToLive,
+                    )
+                }
+                if (withSplit.routedHops + withSplit.floodedHops > MAX_TOTAL_HOPS) return
+                enqueueRelayed(withSplit)
             }
             MessageType.PING -> {
                 val forwarded = msg.copy(hopsToLive = (msg.hopsToLive - 1).coerceAtLeast(0))
@@ -501,13 +800,16 @@ class GossipEngine(
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
-            MessageType.CHUNK_REQUEST -> {
+            MessageType.CHUNK_REQUEST,
+            MessageType.TRANSFER_CANCEL -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
-            MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF -> {
+            MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
+            MessageType.IDENTITY_ROTATION,
+            MessageType.SELF_PRESENCE -> {
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
@@ -523,9 +825,12 @@ class GossipEngine(
     private fun clampTtl(msg: RumorMessage): RumorMessage {
         val ceiling = when (msg.type) {
             MessageType.BROADCAST, MessageType.PING, MessageType.PONG,
-            MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF -> MAX_BROADCAST_HOPS
+            MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
+            MessageType.IDENTITY_ROTATION, MessageType.SELF_PRESENCE,
+            MessageType.BRIDGE_VOUCHED -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,
+            MessageType.TRANSFER_CANCEL,
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT -> MAX_DIRECT_HOPS
         }

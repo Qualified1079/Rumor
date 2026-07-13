@@ -55,9 +55,31 @@
   </div>
   <div class="controls">
     <button id="btnRandom">Randomize all</button>
-    <button id="btnReport">Download report</button>
+    <button id="btnReport" title="Point-in-time snapshot of current world state">Snapshot live sim</button>
+    <button id="btnTrace" title="Download the per-tick history of this dashboard run (last 10 sim-minutes)">Download run history</button>
   </div>
   <div id="params"></div>
+
+  <h2>Scenarios</h2>
+  <div class="controls" style="margin-bottom:6px;">
+    <button id="btnRefreshScenarios">Refresh</button>
+    <button id="btnUpload">Upload .json</button>
+    <input id="uploadInput" type="file" accept=".json" multiple style="display:none;">
+  </div>
+  <div id="scenarioList" style="max-height:200px;overflow-y:auto;border:1px solid var(--line);border-radius:4px;padding:6px;font-size:12px;"></div>
+  <div id="scenarioEstimate" style="font-size:11px;color:var(--muted);margin-top:4px;"></div>
+  <div class="controls" style="margin-top:6px;">
+    <button id="btnRunSelected">Run selected</button>
+    <button id="btnCancelRun" disabled>Cancel</button>
+    <button id="btnDownloadZip" disabled>Download bundle</button>
+  </div>
+  <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:var(--muted);">
+    <input id="autoDownload" type="checkbox" checked> Auto-download when ready
+  </label>
+  <div id="scenarioStatus" style="margin-top:6px;font-size:12px;color:var(--fg);min-height:18px;"></div>
+  <div id="scenarioProgressWrap" style="margin-top:4px;height:6px;background:var(--line);border-radius:3px;overflow:hidden;display:none;">
+    <div id="scenarioProgressBar" style="height:100%;width:0;background:var(--accent);transition:width .2s;"></div>
+  </div>
 </div>
 <div id="main">
   <canvas id="graph"></canvas>
@@ -88,6 +110,16 @@ $("btnStep").onclick   = e => post("/api/step",  e.currentTarget);
 $("btnReset").onclick  = e => { post("/api/reset", e.currentTarget); nodeActivity.clear(); edgeActivity.clear(); };
 $("btnRandom").onclick = e => post("/api/randomize", e.currentTarget).then(loadParams);
 $("btnReport").onclick = e => { flash(e.currentTarget); window.location = "/api/report"; };
+$("btnTrace").onclick = async e => {
+  flash(e.currentTarget);
+  const res = await fetch("/api/trace");
+  if (!res.ok) return;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = "rumor-live-trace.json";
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+};
 
 // ── Parameter sliders (auto-generated from /api/init) ───────────────────────
 async function loadParams() {
@@ -317,7 +349,189 @@ function connect() {
   };
 }
 
+// ── Scenario runner ─────────────────────────────────────────────────────────
+// Cache scenario metadata so we can estimate runtime from durationSec + speedMult.
+const scenarioMeta = new Map();
+
+async function loadScenarios() {
+  const list = await fetch("/api/scenarios").then(r => r.json());
+  const root = $("scenarioList");
+  root.innerHTML = "";
+  if (list.length === 0) {
+    root.textContent = "(no scenarios — upload some .json files)";
+    updateEstimate();
+    return;
+  }
+  list.forEach(entry => {
+    const row = document.createElement("label");
+    row.style.cssText = "display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = entry.name;
+    cb.dataset.source = entry.source;
+    cb.onchange = updateEstimate;
+    row.appendChild(cb);
+    const label = document.createElement("span");
+    label.textContent = entry.name;
+    if (entry.source === "UPLOADED") {
+      label.style.color = "var(--accent)";
+      label.title = "uploaded";
+    }
+    row.appendChild(label);
+    root.appendChild(row);
+  });
+  // Best-effort fetch of durationSec for each scenario (small files, parallel).
+  await Promise.all(list.map(async entry => {
+    if (scenarioMeta.has(entry.name)) return;
+    try {
+      const j = await fetch("/api/scenarios/preview?name=" + encodeURIComponent(entry.name))
+        .then(r => r.ok ? r.json() : null);
+      if (j) scenarioMeta.set(entry.name, j);
+    } catch { /* preview is best-effort */ }
+  }));
+  updateEstimate();
+}
+
+function updateEstimate() {
+  const selected = Array.from(document.querySelectorAll("#scenarioList input:checked")).map(cb => cb.value);
+  if (selected.length === 0) {
+    $("scenarioEstimate").textContent = "select scenarios to run";
+    return;
+  }
+  let totalSimSec = 0;
+  let unknown = 0;
+  for (const name of selected) {
+    const meta = scenarioMeta.get(name);
+    if (meta && meta.durationSec && meta.speedMult) {
+      totalSimSec += meta.durationSec / meta.speedMult;
+    } else {
+      unknown++;
+    }
+  }
+  const wallSec = Math.ceil(totalSimSec);
+  const suffix = unknown > 0 ? ` (+${unknown} unknown)` : "";
+  $("scenarioEstimate").textContent =
+    `${selected.length} selected — est. ${wallSec}s wall-clock${suffix}`;
+}
+$("btnRefreshScenarios").onclick = e => { flash(e.currentTarget); loadScenarios(); };
+
+$("btnUpload").onclick = () => $("uploadInput").click();
+$("uploadInput").onchange = async ev => {
+  const files = Array.from(ev.target.files);
+  if (files.length === 0) return;
+  const fd = new FormData();
+  files.forEach(f => fd.append("file", f, f.name));
+  const res = await fetch("/api/scenarios/upload", { method: "POST", body: fd });
+  const body = await res.json();
+  $("scenarioStatus").textContent = `uploaded: ${body.accepted.join(", ")}`;
+  ev.target.value = "";
+  loadScenarios();
+};
+
+let pollHandle = null;
+$("btnRunSelected").onclick = async e => {
+  flash(e.currentTarget);
+  const selected = Array.from(document.querySelectorAll("#scenarioList input:checked")).map(cb => cb.value);
+  if (selected.length === 0) {
+    $("scenarioStatus").textContent = "select one or more scenarios first";
+    return;
+  }
+  $("btnDownloadZip").disabled = true;
+  $("btnCancelRun").disabled = false;
+  $("scenarioStatus").textContent = `submitting ${selected.length} scenario(s)…`;
+  const res = await fetch("/api/scenarios/run?names=" + encodeURIComponent(selected.join(",")), { method: "POST" });
+  if (!res.ok) {
+    $("scenarioStatus").textContent = "submit failed: " + (await res.text());
+    $("btnCancelRun").disabled = true;
+    return;
+  }
+  const { id } = await res.json();
+  $("scenarioStatus").textContent = `job ${id} started — polling for progress…`;
+  if (pollHandle) clearInterval(pollHandle);
+  // Fire the first poll immediately so the user sees movement; then schedule.
+  pollJob();
+  pollHandle = setInterval(pollJob, 750);
+};
+
+$("btnCancelRun").onclick = async e => {
+  flash(e.currentTarget);
+  await fetch("/api/scenarios/cancel", { method: "POST" });
+  $("scenarioStatus").textContent = "cancel requested — current scenario will finish first";
+};
+
+async function pollJob() {
+  const r = await fetch("/api/scenarios/job").then(x => x.json());
+  if (!r.id) return;
+  const elapsed = ((r.finishedAtMs ?? Date.now()) - r.startedAtMs) / 1000;
+  if (r.status === "RUNNING") {
+    const idx = r.currentIndex ?? 0;
+    const total = r.selected.length;
+    const inner = Math.max(0, Math.min(1, r.currentFraction || 0));
+    const overall = (idx + inner) / Math.max(1, total);
+    $("scenarioProgressWrap").style.display = "block";
+    $("scenarioProgressBar").style.width = `${(overall * 100).toFixed(1)}%`;
+    const name = r.currentName ?? "—";
+    if (r.cancelRequested) {
+      $("scenarioStatus").textContent = `cancelling… (current scenario finishing; bundle being written)`;
+      $("btnCancelRun").disabled = true;
+    } else {
+      $("scenarioStatus").textContent =
+        `${idx + 1}/${total}: ${name} — ${(inner * 100).toFixed(0)}%  ·  ${elapsed.toFixed(1)}s elapsed`;
+      $("btnCancelRun").disabled = false;
+    }
+  } else {
+    $("scenarioProgressWrap").style.display = "none";
+    clearInterval(pollHandle); pollHandle = null;
+    $("btnCancelRun").disabled = true;
+    const tag = ({
+      PASSED:    "✓ passed",
+      FAILED:    "✗ assertions failed",
+      ERROR:     "✗ error",
+      CANCELLED: "● cancelled (partial bundle available)",
+    })[r.status] ?? r.status;
+    $("scenarioStatus").textContent = `${tag} in ${elapsed.toFixed(1)}s` + (r.error ? ` — ${r.error}` : "");
+    $("btnDownloadZip").disabled = !r.hasZip;
+    if (r.hasZip && $("autoDownload").checked) {
+      // Stagger by a tick so the status line renders before the download UI
+      setTimeout(() => $("btnDownloadZip").click(), 50);
+    }
+  }
+}
+
+$("btnDownloadZip").onclick = async e => {
+  flash(e.currentTarget);
+  // Fetch + Blob path forces a download even if the browser would otherwise
+  // try to navigate inline; works regardless of Content-Disposition support.
+  const res = await fetch("/api/scenarios/job/zip");
+  if (!res.ok) {
+    $("scenarioStatus").textContent = "download failed: " + res.status;
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "rumor-scenarios.zip";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+};
+
+// Recover state on page load: if a job from a prior session is finished and
+// has a downloadable zip, light up the button so the user can grab it.
+(async () => {
+  const r = await fetch("/api/scenarios/job").then(x => x.json()).catch(() => null);
+  if (r && r.id && r.status !== "RUNNING" && r.hasZip) {
+    $("btnDownloadZip").disabled = false;
+    $("scenarioStatus").textContent = `last run: ${r.status.toLowerCase()} — bundle ready`;
+  } else if (r && r.status === "RUNNING") {
+    pollHandle = setInterval(pollJob, 750);
+    $("btnCancelRun").disabled = false;
+  }
+})();
+
 loadParams();
+loadScenarios();
 connect();
 </script>
 </body>

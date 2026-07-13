@@ -35,6 +35,12 @@ import kotlinx.coroutines.launch
 class SimNode(
     val index: Int,
     private val scope: CoroutineScope,
+    /**
+     * O29 A/B toggle. When false, GossipEngine is constructed with
+     * breadcrumbs=null and the routing-bias + per-peer filter become no-ops —
+     * baseline pure-flood behaviour for comparison runs.
+     */
+    private val useBreadcrumbs: Boolean = true,
 ) {
     val identityProvider = SimIdentityProvider(index)
     val userId: String get() = identityProvider.identity.value!!.userId
@@ -53,7 +59,7 @@ class SimNode(
     private val messageStore    = MessageStore(messageRepo, contactRepo, duplicateFilter)
     private val onlineTracker   = OnlineStatusTracker()
     private val topoTracker     = TopologyTracker(routeRepo)
-    private val breadcrumbs     = BreadcrumbCache(breadcrumbRepo)
+    internal val breadcrumbs    = BreadcrumbCache(breadcrumbRepo)
     private val scheduler       = Scheduler()
     private val blockManager    = BlockManager(blockEntryRepo, subscribedRepo, blocklistRepo)
     private val inboxFilter     = PermissiveInboxFilter()
@@ -68,6 +74,7 @@ class SimNode(
         blockManager    = blockManager,
         scheduler       = scheduler,
         inboxFilter     = inboxFilter,
+        breadcrumbs     = if (useBreadcrumbs) breadcrumbs else null,
         scope           = scope,
         // Flush relayed messages immediately — real wall-clock delay (100–500 ms)
         // would equal 1–5 sim-seconds at speedMult=10, breaking multi-hop propagation.
@@ -89,6 +96,20 @@ class SimNode(
                 _reassembledTransfers.value++
             }
         }
+        // Wire dup-on-ingest from CanaryMetrics into the per-node counter.
+        // Without this the per-node `dupDrops` field stays 0 even when the
+        // engine is rejecting duplicates — exactly the "dupDrops always 0"
+        // pattern that showed up in every prior report. Done via flow
+        // diff because canaryMetrics.recordIncoming publishes a snapshot,
+        // not an event stream.
+        scope.launch {
+            var lastDedupHits = 0L
+            gossipEngine.canaryMetrics.flow.collect { snap ->
+                val delta = snap.dedupHits - lastDedupHits
+                if (delta > 0) repeat(delta.toInt().coerceAtLeast(0)) { _dupDrops.value++ }
+                lastDedupHits = snap.dedupHits
+            }
+        }
     }
 
     // ── Metrics state exposed to SimWorld / dashboard ─────────────────────────
@@ -97,9 +118,18 @@ class SimNode(
     private val _messagesProcessed = MutableStateFlow(0L)
     val messagesProcessed: StateFlow<Long> = _messagesProcessed.asStateFlow()
 
-    /** Number of messages dropped by dedup (already seen). */
+    /** Number of messages dropped by dedup (already seen) at receiver-side ingest. */
     private val _dupDrops = MutableStateFlow(0L)
     val dupDrops: StateFlow<Long> = _dupDrops.asStateFlow()
+
+    /**
+     * Cumulative messages NOT offered across this node's outbound edges because
+     * the peer's bloom filter indicated they already had them. The actual
+     * measure of bloom-filter bandwidth saving — see SimTransport.ExchangeMetrics.
+     */
+    private val _bloomSkips = MutableStateFlow(0L)
+    val bloomSkips: StateFlow<Long> = _bloomSkips.asStateFlow()
+    fun recordBloomSkips(n: Int) { if (n > 0) _bloomSkips.value += n }
 
     /** Current scheduler queue depth. */
     val schedulerQueueDepth: Int get() = scheduler.queueDepth

@@ -19,9 +19,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
+import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "TransferAssembler"
 private const val NACK_INITIAL_DELAY_MS = 60_000L
@@ -41,8 +41,39 @@ class TransferAssembler(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val watchdogs = ConcurrentHashMap<String, Job>()
 
+    /**
+     * O18: transferIds the user paused locally. Incoming CHUNKs for these are
+     * dropped at ingest; the watchdog is left running so a pending transfer
+     * doesn't time out while paused. Resume re-enables ingest.
+     */
+    private val paused: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     private val _assembledTransfers = MutableSharedFlow<AssembledTransfer>(extraBufferCapacity = 32)
     val assembledTransfers: SharedFlow<AssembledTransfer> = _assembledTransfers
+
+    fun pause(transferId: String) { paused.add(transferId) }
+    fun resume(transferId: String) { paused.remove(transferId) }
+    fun isPaused(transferId: String): Boolean = transferId in paused
+
+    /**
+     * O18 receiver-initiated cancel: tells the original sender to stop
+     * queuing chunks via [GossipEngine.composeTransferCancel], drops the
+     * local transfer record, and cancels any watchdog.
+     */
+    suspend fun cancel(transferId: String) {
+        val transfer = transferRepo.getById(transferId) ?: return
+        watchdogs.remove(transferId)?.cancel()
+        paused.remove(transferId)
+        // senderId is nullable on the repo record (legacy: it can be unknown
+        // for inbound transfers whose metadata was lost). Without a sender we
+        // can't tell anyone to stop, but we still drop local state.
+        transfer.senderId?.let { gossipEngine.composeTransferCancel(transferId, it) }
+        transferRepo.upsert(transfer.copy(
+            status = TransferStatus.ABANDONED,
+            completedAtMs = System.currentTimeMillis(),
+        ))
+        chunkRepo.deleteAllForTransfer(transferId)
+    }
 
     init {
         scope.launch {
@@ -50,14 +81,17 @@ class TransferAssembler(
                 when (msg.type) {
                     MessageType.TRANSFER_METADATA -> {
                         val meta = runCatching {
-                            Json.decodeFromString<TransferMetadata>(msg.payload?.content ?: return@collect)
+                            WireJson.decodeFromString<TransferMetadata>(msg.payload?.content ?: return@collect)
                         }.getOrNull() ?: return@collect
                         handleMetadata(meta, senderUserId = msg.senderId)
                     }
                     MessageType.CHUNK -> {
                         val chunk = runCatching {
-                            Json.decodeFromString<Chunk>(msg.payload?.content ?: return@collect)
+                            WireJson.decodeFromString<Chunk>(msg.payload?.content ?: return@collect)
                         }.getOrNull() ?: return@collect
+                        // O18: paused transfers drop chunks at ingest. Watchdog
+                        // keeps running so the transfer doesn't time out while paused.
+                        if (chunk.transferId in paused) return@collect
                         handleChunk(chunk)
                     }
                     else -> {}

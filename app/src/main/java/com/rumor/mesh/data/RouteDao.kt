@@ -10,9 +10,11 @@ interface RouteDao {
     suspend fun upsert(route: RouteEntity)
 
     // Primary rank: cumulative bytes transferred (high-throughput peers first).
-    // Secondary: session count; tertiary: recency. latencyMs is stored for
-    // diagnostics only — noisy on BLE/Wi-Fi Direct (measures discovery timing).
-    @Query("SELECT * FROM routes ORDER BY bytesRelayed DESC, sessionCount DESC, lastUpdatedMs DESC LIMIT :limit")
+    // O3 reliability-aware ranking: bytesRelayed / (1 + failureCount). A peer
+    // that exchanges a lot but also fails a lot is less preferred than one
+    // with steady delivery. Tie-breakers: sessionCount, then recency.
+    // latencyMs is stored for diagnostics only — noisy on BLE/Wi-Fi Direct.
+    @Query("SELECT * FROM routes ORDER BY (CAST(bytesRelayed AS REAL) / (1 + failureCount)) DESC, sessionCount DESC, lastUpdatedMs DESC LIMIT :limit")
     suspend fun getPreferred(limit: Int = 20): List<RouteEntity>
 
     @Query("SELECT * FROM routes ORDER BY lastUpdatedMs DESC")

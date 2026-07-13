@@ -1,0 +1,25 @@
+{
+  "name": "barbell-bridge-stress",
+  "durationSec": 120,
+  "seed": 42,
+  "speedMult": 10.0,
+  "topology": { "kind": "two-cluster", "left": 25, "right": 25, "bridges": 1 },
+  "params": {
+    "msg_per_sec": "0.4",
+    "broadcaster_count": "2",
+    "broadcaster_mult": "3.0",
+    "hops_to_live": "10",
+    "dm_fraction": "0.2"
+  },
+  "events": [
+    { "kind": "partition", "atSec": 40, "target": "bridge" },
+    { "kind": "heal",      "atSec": 80, "target": "bridge" }
+  ],
+  "assertions": [
+    { "kind": "min-total-messages", "min": 10000 },
+    { "kind": "cross-cluster-delivery", "fromCluster": "left", "toCluster": "right", "minRatio": 0.25 },
+    { "kind": "heap-bounded", "maxMb": 2048 },
+    { "kind": "no-bridged-rerelay" }
+  ],
+  "trace": true
+}

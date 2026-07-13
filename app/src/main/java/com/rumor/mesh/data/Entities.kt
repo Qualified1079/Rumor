@@ -77,4 +77,5 @@ data class RouteEntity(
     val lastUpdatedMs: Long,
     val sessionCount: Int,
     val bytesRelayed: Long = 0,
+    val failureCount: Int = 0,
 )

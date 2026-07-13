@@ -13,7 +13,7 @@ import com.rumor.mesh.core.policy.InboxFilter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.serialization.json.Json
+import com.rumor.mesh.core.wire.WireJson
 
 private const val PREFS_NAME = "rumor_inbox_policy"
 private const val KEY_CONTACTS_ONLY_MEDIA = "contacts_only_media"
@@ -69,7 +69,7 @@ class InboxPolicyManager(
         // Transfer metadata gating — happens before TransferAssembler stores anything.
         if (msg.type == MessageType.TRANSFER_METADATA) {
             val meta = runCatching {
-                Json.decodeFromString<TransferMetadata>(msg.payload?.content ?: return true)
+                WireJson.decodeFromString<TransferMetadata>(msg.payload?.content ?: return true)
             }.getOrNull() ?: return true
 
             if (pol.rejectUnknownTransfers && !isContact) {

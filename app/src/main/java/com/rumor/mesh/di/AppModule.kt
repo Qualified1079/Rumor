@@ -108,7 +108,7 @@ val appModule = module {
     single { InboxPolicyManager(androidContext(), get()) }
     single<InboxFilter> { get<InboxPolicyManager>() }
     single { DmEnvelopeRegistry() }
-    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), dmEnvelopeRegistry = get()) }
+    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), dmEnvelopeRegistry = get()) }
 
     // ── Transfer layer ────────────────────────────────────────────────────────
     single { TransferAssembler(get(), get(), get()) }

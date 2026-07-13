@@ -19,7 +19,9 @@ import com.rumor.mesh.BuildConfig
         TransferEntity::class,
         ChunkEntity::class,
     ],
-    version = 4,
+    // v5: added RouteEntity.failureCount for O3 reliability-aware ranking.
+    // Dev uses fallbackToDestructiveMigration so no migration code needed.
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

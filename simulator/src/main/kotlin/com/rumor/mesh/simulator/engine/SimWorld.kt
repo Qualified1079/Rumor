@@ -62,6 +62,52 @@ class SimWorld(val params: SimParamRegistry) {
     /** Indices of nodes that have been killed by a scenario event. They generate no traffic. */
     private val killedNodes = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
 
+    /**
+     * Per-tick trace recorder for interactive dashboard runs (separate from
+     * the headless ScenarioRunner's trace). Captured at most once per sim
+     * second; latest 600 samples kept (10 minutes of sim-time at 1 sample/s,
+     * regardless of speedMult). The dashboard's "Download run history" hits
+     * a /api/trace endpoint to bundle these into a zip with the same shape
+     * scenarios produce — so the same downstream analysis tools work for both.
+     */
+    private val traceRing = java.util.concurrent.ConcurrentLinkedDeque<com.rumor.mesh.simulator.scenario.TraceSample>()
+    private val maxTraceSamples = 600
+    private var lastTracedSec: Long = -1
+
+    fun snapshotTrace(): List<com.rumor.mesh.simulator.scenario.TraceSample> = traceRing.toList()
+    fun clearTrace() { traceRing.clear(); lastTracedSec = -1 }
+
+    private fun recordTraceIfDue() {
+        val curSec = _simTimeMs.value / 1000L
+        if (curSec == lastTracedSec) return
+        lastTracedSec = curSec
+        val m = _metrics.value
+        // Per-node samples every 5 sim-seconds; aggregate every 1. Per-node
+        // is O(nodes) allocations per snapshot and dominates trace overhead.
+        val perNode = if (curSec % 5L == 0L) {
+            _nodes.value.map { n ->
+                com.rumor.mesh.simulator.scenario.NodeTraceSample(
+                    index = n.index,
+                    queueDepth = n.schedulerQueueDepth,
+                    messagesProcessed = n.messagesProcessed.value,
+                    dupDrops = n.dupDrops.value,
+                    bloomSkips = n.bloomSkips.value,
+                )
+            }
+        } else emptyList()
+        val sample = com.rumor.mesh.simulator.scenario.TraceSample(
+            simTimeMs = m.simTimeMs,
+            nodeCount = m.nodeCount,
+            edgeCount = m.edgeCount,
+            totalMessages = m.totalMessages,
+            totalDropped = m.totalDropped,
+            heapUsedMb = m.heapUsedMb,
+            nodes = perNode,
+        )
+        traceRing.addLast(sample)
+        while (traceRing.size > maxTraceSamples) traceRing.pollFirst()
+    }
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     suspend fun start() = mutex.withLock {
@@ -83,6 +129,7 @@ class SimWorld(val params: SimParamRegistry) {
         stop()
         _simTimeMs.value = 0
         _metrics.value = WorldMetrics()
+        clearTrace()
         start()
     }
 
@@ -108,8 +155,10 @@ class SimWorld(val params: SimParamRegistry) {
         }
 
         val count = params.nodeCount.value
+        val useBreadcrumbs = params.useBreadcrumbs.value == 1
+        val useRbsr = params.useRbsr.value == 1
         val nodeScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val newNodes = (0 until count).map { SimNode(it, nodeScope) }
+        val newNodes = (0 until count).map { SimNode(it, nodeScope, useBreadcrumbs = useBreadcrumbs) }
         _nodes.value = newNodes
 
         val k = params.connectionsPerNode.value
@@ -119,7 +168,7 @@ class SimWorld(val params: SimParamRegistry) {
             val candidates = newNodes.filter { it.index != node.index && SimTransport.edgeKey(node.index, it.index) !in edgeSet }
             val pick = candidates.shuffled(rng).take(k)
             for (peer in pick) {
-                val edge = SimTransport(node, peer, buildConditioner(rng))
+                val edge = SimTransport(node, peer, buildConditioner(rng), useRbsr = useRbsr)
                 newEdges.add(edge)
                 edgeSet.add(edge.edgeKey)
             }
@@ -217,9 +266,21 @@ class SimWorld(val params: SimParamRegistry) {
         val aliveNodes = nodes.filter { it.index !in killedNodes }
         val dmFraction = params.dmFraction.value
         val largeFraction = params.largeMessageFraction.value
+        // O58 efficiency-testing knobs: first N nodes act as "broadcasters"
+        // (organizers, news-spreaders) at a multiplier of the baseline rate.
+        // Models the realistic skewed-load case where a small fraction of
+        // nodes originates most traffic. broadcasterCount=0 keeps symmetry.
+        val broadcasterCount = params.broadcasterCount.value
+        val broadcasterMult = params.broadcasterMultiplier.value
+        val baseRate = params.msgPerSecondPerNode.value
         for (node in aliveNodes) {
+            val rate = if (broadcasterCount > 0 && node.index < broadcasterCount) {
+                baseRate * broadcasterMult
+            } else {
+                baseRate
+            }
             val profile = TrafficProfile(
-                msgPerSecond         = params.msgPerSecondPerNode.value,
+                msgPerSecond         = rate,
                 minPayloadBytes      = params.minPayloadBytes.value,
                 maxPayloadBytes      = params.maxPayloadBytes.value,
                 hopsToLive           = params.hopsToLive.value,
@@ -281,6 +342,7 @@ class SimWorld(val params: SimParamRegistry) {
             heapUsedMb        = (runtime.totalMemory() - runtime.freeMemory()) / 1_048_576,
             heapMaxMb         = runtime.maxMemory() / 1_048_576,
         )
+        recordTraceIfDue()
     }
 
     // ── Memory guard ─────────────────────────────────────────────────────────

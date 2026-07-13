@@ -50,4 +50,10 @@ tasks.jar {
     manifest { attributes["Main-Class"] = "com.rumor.mesh.simulator.MainKt" }
     from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    // BouncyCastle (and a few other deps) ship signed JARs; merging them into a
+    // fat jar invalidates the signature files and the JVM refuses to launch
+    // with 'Invalid signature file digest for Manifest main attributes'. Drop
+    // the signature manifest entries from the bundled artifact — Rumor doesn't
+    // rely on JAR-level signing for trust, only on Ed25519 over wire payloads.
+    exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/*.EC")
 }
