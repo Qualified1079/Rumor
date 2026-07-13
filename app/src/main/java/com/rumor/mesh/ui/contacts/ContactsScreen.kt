@@ -64,6 +64,7 @@ fun ContactsScreen(
                         onOpenThread = { onOpenThread(cws.contact.userId) },
                         onSetAutoRelay = { viewModel.setAutoRelay(cws.contact.userId, it) },
                         onSetAlwaysSave = { viewModel.setAlwaysSave(cws.contact.userId, it) },
+                        onRename = { viewModel.setDisplayName(cws.contact.userId, it) },
                     )
                     HorizontalDivider(modifier = Modifier.padding(start = 72.dp))
                 }
@@ -78,9 +79,19 @@ private fun ContactRow(
     onOpenThread: () -> Unit,
     onSetAutoRelay: (Boolean) -> Unit,
     onSetAlwaysSave: (Boolean) -> Unit,
+    onRename: (String) -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    var renameOpen by remember { mutableStateOf(false) }
     val statusColor = presenceColor(cws.presence?.status)
+
+    if (renameOpen) {
+        RenameDialog(
+            currentName = cws.contact.displayName ?: "",
+            onDismiss = { renameOpen = false },
+            onConfirm = { renameOpen = false; onRename(it) },
+        )
+    }
 
     ListItem(
         headlineContent = {
@@ -130,6 +141,7 @@ private fun ContactRow(
                         autoRelay = cws.contact.autoRelay,
                         alwaysSave = cws.contact.alwaysSave,
                         onMessage = { menuExpanded = false; onOpenThread() },
+                        onRename = { menuExpanded = false; renameOpen = true },
                         onSetAutoRelay = onSetAutoRelay,
                         onSetAlwaysSave = onSetAlwaysSave,
                     )
@@ -178,12 +190,43 @@ private fun StatusLabel(status: OnlineStatus?) {
 }
 
 @Composable
+private fun RenameDialog(
+    currentName: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf(currentName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename contact") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                singleLine = true,
+                label = { Text("Nickname") },
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name.trim()) },
+                enabled = name.isNotBlank(),
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
 private fun ContactMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
     autoRelay: Boolean,
     alwaysSave: Boolean,
     onMessage: () -> Unit,
+    onRename: () -> Unit,
     onSetAutoRelay: (Boolean) -> Unit,
     onSetAlwaysSave: (Boolean) -> Unit,
 ) {
@@ -191,6 +234,10 @@ private fun ContactMenu(
         DropdownMenuItem(
             text = { Text("Message") },
             onClick = onMessage,
+        )
+        DropdownMenuItem(
+            text = { Text("Rename") },
+            onClick = onRename,
         )
         HorizontalDivider()
         DropdownMenuItem(

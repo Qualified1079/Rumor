@@ -24,7 +24,7 @@ interface MessageDao {
         SELECT * FROM messages
         WHERE (senderId = :userId AND recipientId = :peerId)
            OR (senderId = :peerId AND recipientId = :userId)
-        ORDER BY sequenceNumber ASC
+        ORDER BY sentAtMs ASC, sequenceNumber ASC
         LIMIT :limit
     """)
     fun observeThread(userId: String, peerId: String, limit: Int = 500): Flow<List<MessageEntity>>

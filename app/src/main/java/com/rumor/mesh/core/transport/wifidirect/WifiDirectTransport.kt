@@ -98,6 +98,12 @@ class WifiDirectTransport(
         val isPriorityPeer: suspend (String) -> Boolean = { false },
         /** Invoked with the peer's userId when a session completes with no result. */
         val onExchangeFailed: (String) -> Unit = {},
+        /**
+         * True while a Rumor peer is BLE-visible. Gates the persistent-link round
+         * loop: when the peer leaves radio range the link tears down so the radio
+         * is free for new discoveries.
+         */
+        val isPeerNearby: () -> Boolean = { true },
     )
 
     private var config: TransportConfig? = null
@@ -159,11 +165,28 @@ class WifiDirectTransport(
      * one failed negotiation from wedging connects for the rest of the session.
      */
     private var connectAttemptInFlight = false
+    private var connectRetriesRemaining = 0
+    private val MAX_CONNECT_RETRIES = 5
     private val CONNECT_WATCHDOG_MS = 45_000L
     private val connectWatchdog = Runnable {
         RumorLog.d(TAG, "Connect watchdog expired — clearing in-flight flag")
         connectAttemptInFlight = false
     }
+
+    /**
+     * Persistent link (O2): once a group forms, it is held open and the client
+     * re-runs a gossip session every [LINK_ROUND_INTERVAL_MS] over a fresh TCP
+     * connect — skipping discovery, GO negotiation, and DHCP, which together cost
+     * ~60s per round when the group is torn down in between. Teardown happens when
+     * the peer stops being BLE-visible, rounds fail repeatedly, or (GO side, which
+     * has no round timer of its own) no inbound session completes for
+     * [GO_IDLE_TIMEOUT_MS].
+     */
+    private val LINK_ROUND_INTERVAL_MS = 10_000L
+    private val GO_IDLE_TIMEOUT_MS = 35_000L
+    private val MAX_ROUND_FAILURES = 3
+    @Volatile private var groupConnected = false
+    private var goIdleWatchdog: Job? = null
 
     /**
      * Tracks which session won the dual-role tiebreak per peer. Value is the
@@ -241,6 +264,11 @@ class WifiDirectTransport(
         if (!hasLocationPermission()) return
         val cfg = config ?: return
 
+        // A group is already up and the persistent-link loop owns it. Issuing
+        // connect() to a peer while grouped disrupts the live link (observed on
+        // OnePlus: repeated "Connect initiated" while connected).
+        if (groupConnected) return
+
         // Two non-dual-role peers that both auto-connect to each other collide in
         // GO negotiation (both request GO with equal intent) and neither ever
         // reaches a stable group. Break the symmetry deterministically: only the
@@ -264,6 +292,7 @@ class WifiDirectTransport(
 
         if (connectAttemptInFlight) return
         connectAttemptInFlight = true
+        connectRetriesRemaining = MAX_CONNECT_RETRIES
         handler.removeCallbacks(connectWatchdog)
         handler.postDelayed(connectWatchdog, CONNECT_WATCHDOG_MS)
         issueConnect(device)
@@ -296,11 +325,20 @@ class WifiDirectTransport(
                 }
                 override fun onFailure(reason: Int) {
                     RumorLog.w(TAG, "Connect failed: ${p2pError(reason)}")
-                    if (reason == WifiP2pManager.BUSY) {
-                        handler.postDelayed({ issueConnect(device) }, 1_000)
+                    // BUSY retries must be bounded and must die with the in-flight
+                    // flag: two peers with unbounded 1s retry chains keep the P2P
+                    // framework permanently BUSY for each other (livelock observed
+                    // after a reinstall killed the apps mid-link). When retries
+                    // exhaust, the framework is likely wedged on stale group state —
+                    // reset it instead of hammering connect.
+                    if (reason == WifiP2pManager.BUSY &&
+                        connectAttemptInFlight && connectRetriesRemaining-- > 0) {
+                        handler.postDelayed(
+                            { if (connectAttemptInFlight) issueConnect(device) }, 2_000)
                     } else {
                         handler.removeCallbacks(connectWatchdog)
                         connectAttemptInFlight = false
+                        if (reason == WifiP2pManager.BUSY) removeGroupThenDiscover()
                     }
                 }
             })
@@ -336,19 +374,44 @@ class WifiDirectTransport(
             // gets no reply (see HELLO_TIMEOUT_MS). That's a real, fast signal that this
             // attempt's data path is dead, so retry a fresh connection rather than
             // waiting out the full session budget on a socket that will never work.
+            var linked = false
             for (delayMs in DeviceQuirks.tcpConnectRetryDelaysMs) {
                 delay(delayMs)
-                try {
-                    val socket = Socket(groupOwnerAddress, DeviceQuirks.WIFI_DIRECT_GOSSIP_PORT)
-                    socket.tcpNoDelay = true
-                    RumorLog.d(TAG, "Connected as client to GO at $groupOwnerAddress")
-                    if (runSession(socket, isInbound = false)) return@launch
-                    RumorLog.d(TAG, "Session on this connection failed — retrying fresh connect")
-                } catch (e: Exception) {
-                    RumorLog.d(TAG, "Client connect attempt failed (${e.message}) — retrying")
-                }
+                if (runRound(groupOwnerAddress)) { linked = true; break }
             }
-            RumorLog.w(TAG, "All client connect attempts exhausted")
+            if (!linked) {
+                RumorLog.w(TAG, "All client connect attempts exhausted")
+                removeGroup()
+                return@launch
+            }
+
+            // Persistent link (O2): the group is up and proven. Re-gossip over a
+            // fresh TCP connect every round — no discovery / GO negotiation / DHCP.
+            var failures = 0
+            while (isActive && groupConnected && failures < MAX_ROUND_FAILURES) {
+                delay(LINK_ROUND_INTERVAL_MS)
+                if (config?.isPeerNearby?.invoke() == false) {
+                    RumorLog.d(TAG, "Peer no longer nearby — releasing persistent link")
+                    break
+                }
+                if (!groupConnected) break
+                failures = if (runRound(groupOwnerAddress)) 0 else failures + 1
+            }
+            RumorLog.d(TAG, "Persistent link ended (failures=$failures) — removing group")
+            removeGroup()
+        }
+    }
+
+    /** One gossip round over a fresh TCP connect to the GO. True on completed exchange. */
+    private suspend fun runRound(groupOwnerAddress: String): Boolean {
+        return try {
+            val socket = Socket(groupOwnerAddress, DeviceQuirks.WIFI_DIRECT_GOSSIP_PORT)
+            socket.tcpNoDelay = true
+            RumorLog.d(TAG, "Connected as client to GO at $groupOwnerAddress")
+            runSession(socket, isInbound = false)
+        } catch (e: Exception) {
+            RumorLog.d(TAG, "Client connect attempt failed (${e.message})")
+            false
         }
     }
 
@@ -398,21 +461,31 @@ class WifiDirectTransport(
             )
         )
 
-        // Priority peers hold their connection open between gossip rounds.
-        // Non-priority peers disconnect so the radio is free for new discoveries.
-        val priority = cfg.isPriorityPeer(result.peerUserId)
-        if (!priority) {
-            enqueueCommand {
-                wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
-                    override fun onSuccess() { RumorLog.d(TAG, "Group removed after session") }
-                    override fun onFailure(r: Int) {}
-                })
-            }
-        } else {
+        // Persistent link (O2): the group stays up for everyone. Teardown is owned
+        // by the client round loop (nearby-drop / repeated failures) and the GO
+        // idle watchdog — not by session completion.
+        if (cfg.isPriorityPeer(result.peerUserId)) {
             activePriorityPeers.add(result.peerUserId)
-            RumorLog.d(TAG, "Keeping group alive for priority peer ${result.peerUserId.take(8)}…")
         }
+        // Only the actual GO runs the idle watchdog — dual-role devices accept
+        // inbound sessions as client too, and their teardown is owned by the
+        // outbound round loop.
+        if (isInbound && _isGroupOwner.value) armGoIdleWatchdog()
         return true
+    }
+
+    /**
+     * The GO has no round timer of its own — the client drives the cadence. If no
+     * inbound session completes for [GO_IDLE_TIMEOUT_MS] (~3 missed rounds), the
+     * client is gone: release the group so the radio is free for new discoveries.
+     */
+    private fun armGoIdleWatchdog() {
+        goIdleWatchdog?.cancel()
+        goIdleWatchdog = scope.launch {
+            delay(GO_IDLE_TIMEOUT_MS)
+            RumorLog.d(TAG, "GO idle — no session for ${GO_IDLE_TIMEOUT_MS}ms, removing group")
+            removeGroup()
+        }
     }
 
     /**
@@ -437,9 +510,11 @@ class WifiDirectTransport(
     private fun onConnected() {
         handler.removeCallbacks(connectWatchdog)
         connectAttemptInFlight = false
+        groupConnected = true
         wifiP2pManager?.requestConnectionInfo(channel) { info ->
             val isGo = info?.isGroupOwner == true
             _isGroupOwner.value = isGo
+            if (isGo) armGoIdleWatchdog()
             // Read the actual GO address from WifiP2pInfo. The well-known constant
             // (192.168.49.1) is the typical value but is not guaranteed by spec —
             // vendor builds vary. Fall back to the constant if the API returns null.
@@ -461,6 +536,8 @@ class WifiDirectTransport(
         _isGroupOwner.value = false
         handler.removeCallbacks(connectWatchdog)
         connectAttemptInFlight = false
+        groupConnected = false
+        goIdleWatchdog?.cancel()
         serverJob?.cancel()
         runCatching { serverSocket?.close() }
         serverSocket = null

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
+import com.rumor.mesh.core.crypto.Ed25519ToX25519
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.identity.LocalIdentity
 import com.rumor.mesh.core.model.MessageType
@@ -129,7 +130,15 @@ class ThreadViewModel(
             val dotIdx = encryptedPayload.indexOf('.')
             require(dotIdx > 0) { "malformed payload" }
             val ephemeralPub = encryptedPayload.substring(0, dotIdx).fromBase64()
-            val sharedKey = CryptoManager.x25519Agreement(localPrivKey, ephemeralPub)
+            // Local identity is an Ed25519 seed; derive the X25519 scalar (O91) and
+            // zero it after use — it's a long-term-key derivative, unlike the
+            // per-message ephemeral on the compose side.
+            val xPriv = Ed25519ToX25519.ed25519PrivToX25519Priv(localPrivKey)
+            val sharedKey = try {
+                CryptoManager.x25519Agreement(xPriv, ephemeralPub)
+            } finally {
+                xPriv.fill(0)
+            }
             val ct = CryptoManager.AesGcmCiphertext.fromBase64(encryptedPayload.substring(dotIdx + 1))
             CryptoManager.aesGcmDecrypt(ct, sharedKey).toString(Charsets.UTF_8)
         }.getOrElse { "[decryption failed]" }

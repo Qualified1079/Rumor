@@ -147,6 +147,7 @@ class MeshService : Service(), MeshController {
             onlineUsersProvider = onlineStatusTracker::currentSnapshot,
             isPriorityPeer      = { userId -> contactRepo.getById(userId)?.isPriorityPeer == true },
             onExchangeFailed    = gossipEngine::onExchangeFailed,
+            isPeerNearby        = { bleDiscovery.peerNearbySignal.value },
         )
 
         // ── Wire gossip engine output → plugins ──────────────────────────────

@@ -14,6 +14,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
+import javax.crypto.Mac
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
@@ -148,10 +149,14 @@ object CryptoManager {
     }
 
     private fun deriveAesKey(secret: ByteArray, salt: ByteArray): ByteArray {
-        val spec = PBEKeySpec(null, secret + salt, 1, 256)
-        // Single iteration — the raw X25519 output is already high-entropy.
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        return factory.generateSecret(spec).encoded
+        // HKDF-extract (RFC 5869): HMAC-SHA256(salt, secret) → 32 bytes = AES-256 key.
+        // The X25519 output is already uniform; one keyed hash domain-separates it.
+        // The previous PBKDF2 shape (PBEKeySpec(null, …)) crashed on-device: Android's
+        // BouncyCastle rejects an empty password, and raw DH bytes don't survive the
+        // char[] conversion PBKDF2 wants anyway. No DM ever encrypted successfully.
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(salt, "HmacSHA256"))
+        return mac.doFinal(secret)
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

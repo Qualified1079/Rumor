@@ -3,6 +3,7 @@ package com.rumor.mesh.core.protocol
 import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
+import com.rumor.mesh.core.crypto.Ed25519ToX25519
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.identity.IdentityProvider
 import com.rumor.mesh.core.identity.LocalIdentity
@@ -277,7 +278,11 @@ class GossipEngine(
             rawCiphertext = ct
         } else {
             val ephemeral = CryptoManager.generateX25519KeyPair()
-            val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientPublicKey)
+            // Contacts carry Ed25519 identity keys; X25519 DH needs the Montgomery
+            // form (O91). Feeding Edwards bytes straight in "works" but derives a
+            // secret the recipient can never match.
+            val recipientX25519 = Ed25519ToX25519.ed25519PubToX25519Pub(recipientPublicKey)
+            val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientX25519)
             val ct = CryptoManager.aesGcmEncrypt(text.toByteArray(Charsets.UTF_8), sharedKey)
             encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
             rawCiphertext = null
