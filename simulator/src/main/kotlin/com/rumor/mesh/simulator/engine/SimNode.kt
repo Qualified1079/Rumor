@@ -165,4 +165,16 @@ class SimNode(
             }
         }
     }
+
+    /**
+     * Test/scenario seeding. Inserting into [messageRepo] directly leaves the
+     * duplicate filter empty, so the bloom/idlist summary advertises "knows
+     * nothing" while RBSR (which reads the repo) advertises the truth — the two
+     * sync paths then legitimately deliver different counts. Seed through this
+     * so every knowledge view agrees.
+     */
+    suspend fun seedMessage(msg: com.rumor.mesh.core.model.RumorMessage) {
+        duplicateFilter.recordAndCheck(msg.id)
+        messageRepo.insert(msg)
+    }
 }

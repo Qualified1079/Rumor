@@ -32,9 +32,10 @@ class BreadcrumbBiasTest {
         a.gossipEngine.composeBroadcast("hello")!!
         a.flushSchedulerToRepo()
         SimTransport(a, b).exchange(kotlin.random.Random(1))
+        awaitUntil { b.knownMessages().isNotEmpty() }
         b.flushSchedulerToRepo()
         SimTransport(b, c).exchange(kotlin.random.Random(2))
-        delay(50)
+        awaitUntil { c.breadcrumbs.candidatePeersSync(a.userId).isNotEmpty() }
         assertEquals(
             "Breadcrumb substrate must record A↔B on C before the bias test runs",
             listOf(b.userId), c.breadcrumbs.candidatePeersSync(a.userId),
@@ -52,9 +53,10 @@ class BreadcrumbBiasTest {
         ) ?: error("composeDirect returned null — recipient pubkey missing?")
 
         val noise = (0 until 5).map { c.gossipEngine.composeBroadcast("noise $it")!! }
-        c.flushSchedulerToRepo()
 
-        // Phase 3: ask C for the batch it would offer peer B.
+        // Phase 3: ask C for the batch it would offer peer B. Do NOT flush the
+        // scheduler first — messagesForExchange reads (and destructively drains)
+        // the scheduler directly; flushing would empty it before the query.
         val offer = c.gossipEngine.messagesForExchange(b.userId)
         assertTrue("Offer must contain the DM", offer.any { it.id == dmToA.id })
 

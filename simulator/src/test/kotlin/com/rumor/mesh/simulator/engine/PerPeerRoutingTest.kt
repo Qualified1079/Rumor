@@ -42,7 +42,7 @@ class PerPeerRoutingTest {
         a.flushSchedulerToRepo()
         SimTransport(c, b).exchange(kotlin.random.Random(0))  // no-op, but warms B
         SimTransport(a, b).exchange(kotlin.random.Random(1))  // B sees A's seed via A
-        delay(50)
+        awaitUntil { b.breadcrumbs.candidatePeersSync(a.userId).isNotEmpty() }
         // B's breadcrumb for A points to A itself (1-hop). That's fine — the
         // filter logic treats it as "messages for A are intended for peer A."
 
@@ -56,7 +56,8 @@ class PerPeerRoutingTest {
 
         // C → B exchange. B receives the DM (recipientId != B, so B relays it).
         SimTransport(c, b).exchange(kotlin.random.Random(2))
-        delay(100)  // give RelayBatcher (1ms in sim) time to flush
+        // Ingest + RelayBatcher (1ms in sim) are asynchronous.
+        awaitUntil { b.knownMessages().any { it.id == dm.id } && b.schedulerQueueDepth > 0 }
 
         // At B: the relayed DM should be marked with intendedPeers={a.userId}
         // because b's breadcrumb candidates for A include A. Now ask B what
@@ -79,16 +80,23 @@ class PerPeerRoutingTest {
 
     @Test
     fun `routed hop increments routedHops, not floodedHops`() = runBlocking {
-        // Same setup: warm B's breadcrumb for A, send DM for A through B.
+        // A breadcrumb for A on B only forms when B receives one of A's messages
+        // RELAYED by a third node — a message straight from its own author is
+        // skipped (fromPeerId == senderId). So establish it the real way: A → C,
+        // then C → B, which leaves B holding "to reach A, go via C". Sending a DM
+        // for A through B then takes the routed path.
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         val a = SimNode(0, scope)
         val b = SimNode(1, scope)
         val c = SimNode(2, scope)
 
-        a.gossipEngine.composeBroadcast("seed")!!
+        val seed = a.gossipEngine.composeBroadcast("seed")!!
         a.flushSchedulerToRepo()
-        SimTransport(a, b).exchange(kotlin.random.Random(11))
-        delay(50)
+        SimTransport(a, c).exchange(kotlin.random.Random(11))   // C sees A's seed, from A
+        awaitUntil { c.knownMessages().any { it.id == seed.id } }
+        c.flushSchedulerToRepo()
+        SimTransport(c, b).exchange(kotlin.random.Random(12))   // B sees A's seed, from C
+        awaitUntil { b.breadcrumbs.candidatePeersSync(a.userId).isNotEmpty() }
 
         registerContact(c, a)
         val dm = c.gossipEngine.composeDirect(
@@ -100,19 +108,25 @@ class PerPeerRoutingTest {
         val originalRoutedHops = dm.routedHops
         c.flushSchedulerToRepo()
 
-        SimTransport(c, b).exchange(kotlin.random.Random(12))
-        delay(100)
+        // C → B: B relays the DM. Its breadcrumb for A names C, so relay takes
+        // the routed path — intendedPeers = {C}, routedHops incremented.
+        SimTransport(c, b).exchange(kotlin.random.Random(13))
+        // Ingest + RelayBatcher (1ms in sim) are asynchronous.
+        awaitUntil { b.knownMessages().any { it.id == dm.id } && b.schedulerQueueDepth > 0 }
 
-        val relayed = b.knownMessages().firstOrNull { it.id == dm.id }
-        assertNotNull("B should hold the relayed DM", relayed)
+        // The routed copy carrying the bumped routedHops lives in B's offer
+        // batch (intendedPeers = {C}), NOT in knownMessages() — relay() enqueues
+        // it via the batcher/scheduler and never writes the bumped copy back to
+        // the repo. messagesForExchange destructively drains, so call it once.
+        val relayed = b.gossipEngine.messagesForExchange(c.userId).firstOrNull { it.id == dm.id }
+        assertNotNull("B should offer the routed DM to breadcrumb candidate C", relayed)
         assertTrue(
             "Routed hop must increment routedHops " +
                 "(was $originalRoutedHops, now ${relayed!!.routedHops})",
             relayed.routedHops > originalRoutedHops,
         )
-        // floodedHops should NOT have decremented because B took the routed
-        // path. The relay()-path floodedHops carries forward the original
-        // hopsToLive value when routing.
+        // floodedHops must not decrement on a routed hop — the routed path
+        // carries the inherited value forward rather than burning flood budget.
         assertTrue(
             "floodedHops must not be smaller than the original after a routed hop " +
                 "(was $originalFloodedHops, now ${relayed.floodedHops})",

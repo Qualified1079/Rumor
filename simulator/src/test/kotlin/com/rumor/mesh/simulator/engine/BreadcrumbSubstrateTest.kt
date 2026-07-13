@@ -36,6 +36,7 @@ class BreadcrumbSubstrateTest {
 
         // A → B exchange: B sees the message, hand-delivered by A.
         SimTransport(a, b).exchange(kotlin.random.Random(1))
+        awaitUntil { b.knownMessages().any { it.id == msg.id } }
         b.flushSchedulerToRepo()
 
         // Sanity: B knows the message.
@@ -45,8 +46,8 @@ class BreadcrumbSubstrateTest {
         // B → C exchange: C sees the message, hand-delivered by B.
         SimTransport(b, c).exchange(kotlin.random.Random(2))
 
-        // Give the breadcrumb-record coroutine on C a moment to flush.
-        delay(50)
+        // Ingest + breadcrumb recording on C are asynchronous.
+        awaitUntil { c.breadcrumbs.candidatePeersSync(a.userId).isNotEmpty() }
 
         // C's breadcrumb cache should now point "to reach A, go via B".
         val candidates = c.breadcrumbs.candidatePeers(a.userId)
@@ -62,7 +63,7 @@ class BreadcrumbSubstrateTest {
         val a = SimNode(0, scope)
         val b = SimNode(1, scope)
 
-        val msg = a.gossipEngine.composeBroadcast("hello")
+        a.gossipEngine.composeBroadcast("hello")
             ?: error("composeBroadcast returned null")
         a.flushSchedulerToRepo()
         SimTransport(a, b).exchange(kotlin.random.Random(3))

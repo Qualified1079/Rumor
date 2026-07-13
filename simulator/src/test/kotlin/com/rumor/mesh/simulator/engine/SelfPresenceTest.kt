@@ -34,6 +34,7 @@ class SelfPresenceTest {
         a.flushSchedulerToRepo()
 
         SimTransport(a, b).exchange(kotlin.random.Random(1))
+        awaitUntil { b.knownMessages().any { it.id == beacon.id } }
 
         val received = b.knownMessages().firstOrNull { it.id == beacon.id }
         assertNotNull("B must receive A's entry pulse", received)

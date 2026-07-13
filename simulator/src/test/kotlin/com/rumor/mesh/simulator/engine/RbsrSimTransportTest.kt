@@ -1,5 +1,7 @@
 package com.rumor.mesh.simulator.engine
 
+import com.rumor.mesh.core.crypto.CryptoManager
+import com.rumor.mesh.core.crypto.CryptoManager.toBase64
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
@@ -43,6 +45,10 @@ class RbsrSimTransportTest {
         )
 
         // After one exchange in either mode, both nodes should hold the union.
+        // onExchange ingests delivered messages asynchronously on each node's
+        // scope, so wait for both repos to settle before snapshotting.
+        val unionSize = (aRbsr.knownMessages() + bRbsr.knownMessages()).mapTo(HashSet()) { it.id }.size
+        awaitUntil { aRbsr.knownMessages().size >= unionSize && bRbsr.knownMessages().size >= unionSize }
         val aFinal = aRbsr.knownMessages().mapTo(HashSet()) { it.id }
         val bFinal = bRbsr.knownMessages().mapTo(HashSet()) { it.id }
         val expected = (aRbsr.knownMessages() + bRbsr.knownMessages()).mapTo(HashSet()) { it.id }
@@ -70,9 +76,9 @@ class RbsrSimTransportTest {
         val shared = (0 until 80).map { synthMessage(it, "shared-$it") }
         val aOnly = (0 until 20).map { synthMessage(1000 + it, "a-only-$it") }
         val bOnly = (0 until 20).map { synthMessage(2000 + it, "b-only-$it") }
-        for (m in shared) { a.messageRepo.insert(m); b.messageRepo.insert(m) }
-        for (m in aOnly) a.messageRepo.insert(m)
-        for (m in bOnly) b.messageRepo.insert(m)
+        for (m in shared) { a.seedMessage(m); b.seedMessage(m) }
+        for (m in aOnly) a.seedMessage(m)
+        for (m in bOnly) b.seedMessage(m)
 
         val metrics = SimTransport(a, b, useRbsr = true).exchange(Random(99))
         assertEquals(20, metrics.messagesAtoB)
@@ -86,27 +92,49 @@ class RbsrSimTransportTest {
         return SimNode(0, scope) to SimNode(1, scope)
     }
 
-    private fun seedDifferingSets(a: SimNode, b: SimNode) {
+    private fun seedDifferingSets(a: SimNode, b: SimNode) = kotlinx.coroutines.runBlocking {
         // 10 shared, 5 unique to A, 5 unique to B.
         val shared = (0 until 10).map { synthMessage(it, "s$it") }
         val aOnly = (0 until 5).map { synthMessage(100 + it, "a$it") }
         val bOnly = (0 until 5).map { synthMessage(200 + it, "b$it") }
-        for (m in shared) { a.messageRepo.insert(m); b.messageRepo.insert(m) }
-        for (m in aOnly) a.messageRepo.insert(m)
-        for (m in bOnly) b.messageRepo.insert(m)
+        for (m in shared) { a.seedMessage(m); b.seedMessage(m) }
+        for (m in aOnly) a.seedMessage(m)
+        for (m in bOnly) b.seedMessage(m)
         assertTrue(a.knownMessages().size >= 15)
         assertTrue(b.knownMessages().size >= 15)
     }
 
-    private fun synthMessage(seq: Int, idTag: String): RumorMessage = RumorMessage(
-        id = "msg-$idTag",
-        senderId = "synthetic-sender",
-        senderPublicKey = "",
-        sequenceNumber = seq.toLong(),
-        sentAtMs = 1_000_000L + seq,
-        type = MessageType.BROADCAST,
-        hopsToLive = 5,
-        payload = MessagePayload(ContentType.TEXT, "content-$idTag"),
-        signature = "",
-    )
+    // Delivered messages pass through MessageStore.ingest, which verifies the
+    // Ed25519 signature — an unsigned synthetic message is dropped on receipt
+    // (only the seeded copies survive, because seedMessage bypasses ingest).
+    // Sign every synthetic message from one stable synthetic identity so both
+    // the seeded and the RBSR-delivered copies are accepted identically.
+    private val synthKeyPair = CryptoManager.generateEd25519KeyPair()
+    private val synthSenderId = CryptoManager.publicKeyToUserId(synthKeyPair.publicKeyBytes)
+    private val synthPubKeyB64 = synthKeyPair.publicKeyBytes.toBase64()
+
+    private fun synthMessage(seq: Int, idTag: String): RumorMessage {
+        val unsigned = RumorMessage(
+            id = "msg-$idTag",
+            senderId = synthSenderId,
+            senderPublicKey = synthPubKeyB64,
+            sequenceNumber = seq.toLong(),
+            sentAtMs = 1_000_000L + seq,
+            type = MessageType.BROADCAST,
+            hopsToLive = 5,
+            payload = MessagePayload(ContentType.TEXT, "content-$idTag"),
+            signature = "",
+        )
+        val sig = CryptoManager.sign(signableBytes(unsigned), synthKeyPair.privateKeyBytes).toBase64()
+        return unsigned.copy(signature = sig)
+    }
+
+    // Must match MessageStore.signableBytes (rumor-msg-v1 domain tag, hopsToLive excluded).
+    private fun signableBytes(msg: RumorMessage): ByteArray = buildString {
+        append("rumor-msg-v1:")
+        append(msg.id); append(msg.senderId); append(msg.senderPublicKey)
+        append(msg.sequenceNumber); append(msg.sentAtMs); append(msg.type.name)
+        append(msg.payload?.content ?: "")
+        append(msg.encryptedPayload ?: ""); append(msg.recipientId ?: "")
+    }.toByteArray(Charsets.UTF_8)
 }
