@@ -781,6 +781,181 @@ disagreeing with each other.
   instructions — nothing above has been fixed, only found and
   written up.
 
+
+# Round 2 — same overnight session, continued (identity, blocklist, transfer, device-quirks/mode/settings)
+
+Continuation of the research/audit pass above. Still no source-code
+changes — findings only. Four more previously-unaudited areas.
+
+## Highest-severity new findings
+
+**Transfer receive path has two remote crash/DoS bugs, and the
+"working" feature it protects doesn't actually deliver files to
+users at all:**
+
+- `Chunker.kt:76` allocates `ByteArray(metadata.totalBytes.toInt())`
+  from attacker-controlled `TransferMetadata` with **no cap anywhere
+  in the codebase** (no `MAX_TRANSFER`/`MAX_FILE` constant exists).
+  A single crafted `TRANSFER_METADATA` (`totalChunks=1,
+  totalBytes=500_000_000`) plus one small `CHUNK` triggers a 500MB
+  allocation *before* the SHA-256 integrity check runs — reliable
+  OOM/throttle on a typical Android heap. This is the exact O13
+  pattern (adversarial size claim → OOM) recurring in a sibling
+  subsystem that was never given the same treatment.
+- Separately: if a chunk's actual decoded size doesn't match the
+  metadata's declared `totalBytes`, `Chunker.kt`'s `copyInto` throws
+  an uncaught `IndexOutOfBoundsException` inside the **single**
+  `scope.launch { gossipEngine.incomingMessages.collect {...} }`
+  coroutine that handles all inbound transfer traffic
+  (`TransferAssembler.kt:81-102`). Nothing catches it, nothing
+  re-arms the collector — one malformed `CHUNK` from any peer
+  silently kills transfer receiving for the rest of the app's
+  process lifetime (or crashes the app, depending on Android's
+  default coroutine exception handling).
+- Even when a transfer *does* complete and pass hash verification,
+  `TransferAssembler.assembledTransfers` (the verified-bytes
+  `SharedFlow`) **has no collector anywhere in `:app`** — only the
+  simulator collects it (to increment a counter). A fully received,
+  integrity-verified file is built in memory on-device and then
+  simply dropped: never written to disk, never surfaced to the
+  user. This is a bigger gap than the already-tracked O14
+  (extraction-warning UI) implies — O14 assumes a file arrives and
+  needs an extraction dialog; on this branch, no file arrives
+  anywhere a user could see it, full stop.
+
+**`IdentityManager.lock()` doesn't zero key material, and is never
+called by anything:**
+
+- `lock()` (`app/.../core/identity/IdentityManager.kt:76-79`) just
+  sets `_identity.value = null` — it does not zero the old
+  `LocalIdentity`'s `privateKeyBytes`, despite `Identity.kt`'s own
+  doc comment promising exactly that zeroing, and despite
+  `CLAUDE.md`'s G25 audit entry independently repeating the same
+  (incorrect) claim as an established fact. `SourceInvariantTest`
+  (G25's regression guard) only checks `GossipEngine.kt`, so this
+  gap has zero test coverage.
+- Worse: grepped the whole app — **`lock()` has no caller anywhere.**
+  No Settings menu item, no auto-lock on backgrounding, no session
+  timeout. Once unlocked at app start, the private key stays live
+  in a `MutableStateFlow` for the rest of the process's life; the
+  only way to "lock" the app today is to kill it. This makes the
+  zeroing gap above currently unreachable in practice, but also
+  means the "lock" feature has no protective effect at all after
+  first unlock — including against a future malicious DEX plugin
+  per O15/O20's own threat model.
+- Related, lower severity: the passphrase itself is held as a JVM
+  `String` (not zeroable) through `createIdentity`/`unlock`, and
+  `PBEKeySpec.clearPassword()` is never called after PBKDF2
+  derivation — the plaintext passphrase, not just the derived key,
+  has an unbounded heap-dump recovery window. PBKDF2 iteration
+  count (100,000) is roughly 6x below OWASP's current 600,000
+  recommendation, though salt handling itself is correct (unique,
+  random, no reuse).
+
+## Confirmed: the O62 "no mode-branching until ModeProfile is
+finalized" gate has already been violated
+
+`CLAUDE.md`'s O62 backlog row is explicit: "no code that branches
+on mode lands until this profile is recorded here." The formal
+`ModeProfile`/`UserMode` wire types exist but aren't wired to any
+real behavior yet — however, a **parallel, undocumented mechanism**
+already does exactly what the gate prohibits. `core/.../policy/
+StaticMode.kt` is a plain boolean toggle (manually flipped in
+Settings, persisted via `StaticModeManager`) implementing the same
+concept as O57's "Static mode," with scattered `if (isStatic)`
+branches independently in three unrelated files: BLE advertise/scan
+parameters (`BleDiscoveryManager.kt:123-132,205`), scheduler
+quantum/cap multiplier (`Scheduler.kt:55,183`), and cache-size/
+eviction multiplier (`MessageStore.kt:138-141`). `CLAUDE.md` has
+zero references to `StaticMode`/`StaticModeManager` anywhere and
+doesn't cross-link it to O57/O62/O80 — it's shipped, invisible to
+the backlog that's supposed to gate exactly this pattern, and
+already has the "scattered checks throughout the codebase" shape
+the gate exists to prevent.
+
+## Blocklist system — one concrete bug, one reinforcement of the §4.2 dedup finding
+
+- **`BlockManagementViewModel.unsubscribe()` leaves orphaned
+  blocklist entries permanently.** It calls
+  `subscribedBlocklistRepo.delete(publisherId)` directly instead of
+  `BlocklistSubscriber.unsubscribe(publisherId)`, which does that
+  *and* `blocklistEntryRepo.deleteAllForPublisher(publisherId)`.
+  `BlocklistSubscriber` isn't even injected into the ViewModel
+  (`AppModule.kt:213` only wires `BlockManager` +
+  `SubscribedBlocklistRepository`), so there's no path to the
+  correct method today. Net effect: tapping "unsubscribe" removes
+  the publisher from the roster but every userId they ever blocked
+  keeps silently suppressing messages from your inbox forever, with
+  no way to discover or clear it short of re-subscribing to the
+  same publisher (which incidentally cleans up via the next
+  snapshot apply).
+- **The critical dedup-before-signature-verification bug (§4.2 in
+  the round-1 section above) applies directly to blocklist
+  distribution.** `BLOCKLIST_PUBLISH`/`BLOCKLIST_DIFF` messages go
+  through the same `MessageStore.ingest` path as everything else —
+  a forged message using a target update's real id, sent first with
+  a garbage signature, permanently blackholes that publisher's
+  genuine signed blocklist update at a targeted node. This is a
+  concrete, high-value instance of the general bug: it's a
+  censorship-adjacent primitive (suppressing a moderation update)
+  riding a censorship-primitive bug.
+- Everything else in the blocklist module checked out clean: inner
+  snapshot/diff signature and version-monotonicity verification is
+  correctly ordered (nothing applied before full verification), the
+  "relay path never sees blocklist" invariant holds exactly as
+  documented (single call site, confirmed by grep), and
+  `trafficClass` tiering matches the documented INFRASTRUCTURE/
+  TRANSFER_SETUP split.
+
+## Smaller findings
+
+- **Device chipset detection is dead code.** `DeviceQuirks.
+  isDeviceMediaTek()`/`isDeviceQualcomm()` call
+  `System.getProperty("ro.product.board")` — on Android this only
+  exposes standard JVM properties, never build props like
+  `ro.product.board` (that needs `Build.BOARD`/`Build.HARDWARE`).
+  Both detectors always return `false`. The documented "MediaTek
+  devices demand to be Group Owner regardless of intent" Wi-Fi
+  Direct workaround (`wifiDirectDualRoleRequired`) silently never
+  fires on real MediaTek hardware — exactly the "4-year-old budget
+  phone" class O33 calls out as a target device. Of 8 documented
+  quirk flags in this class, 6 have zero references anywhere else
+  in the app; the corresponding behaviors are hardcoded directly in
+  transport code instead, bypassing the "centralized registry" the
+  class's own docstring claims exists.
+- **Cosmetic-only radio duty-cycle slider.** `SettingsScreen`'s
+  "Radio duty cycle" slider writes `scanIntervalSec`/
+  `sleepIntervalSec` into local ViewModel state only — never
+  persisted, never read by `BleDiscoveryManager`, `Scheduler`, or
+  anywhere else. A user adjusting it changes nothing.
+  `sleepIntervalSec` has no setter at all; permanently 30.
+- **Dead battery-optimization warning card.**
+  `SettingsState.showBatteryOptimisationWarning` defaults `false`
+  and nothing in the ViewModel ever sets it `true` — the warning
+  card and its otherwise-correctly-wired "Fix this" button are
+  permanently unreachable. Looks like a half-finished O33 feature
+  whose trigger (a foreground-service-killed detector, presumably)
+  was never implemented.
+- Confirmed clean: InboxPolicy, Plugins, Transfers, and Logs
+  settings screens are all genuinely wired with no dead state or
+  TODO markers.
+
+## Updated priority list (folds into the round-1 list above)
+
+Given the severity found in this round, **the transfer-receive OOM/
+crash (this section, item 1) belongs at the same priority tier as
+the round-1 dedup-before-sig-verify bug** — both are remotely
+triggerable, no-authentication-required denial-of-service/
+censorship primitives reachable over the mesh from any peer. Suggest
+treating both as a matched pair for the first hardening pass, since
+they're structurally the same class of mistake (trusting
+attacker-supplied size/ordering data before the integrity check that
+was meant to gate it) recurring in two different subsystems —
+worth a single sweep across the codebase for the same pattern
+elsewhere (any other `ByteArray(untrustedLength)` or
+"record-before-verify" ordering) rather than fixing these two in
+isolation.
+
 ---
 
 ## Prior session history (kept below, unedited)
