@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)"
+    ],
+    "allow": [
+      "Bash(adb *)",
+      "Bash(gradle *)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git show*)",
+      "Bash(git status*)",
+      "Bash(git branch*)",
+      "Bash(git merge-base*)",
+      "Bash(git ls-tree*)",
+      "Bash(git grep*)",
+      "Bash(git fetch*)",
+      "Bash(git cherry-pick*)",
+      "Bash(git add *)",
+      "Bash(git commit*)"
+    ]
+  }
+}
