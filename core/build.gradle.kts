@@ -35,6 +35,8 @@ dependencies {
     // var JAZZER_FUZZ=1 to put them into in-process fuzzing mode for CI or
     // ad-hoc bug-hunting. https://github.com/CodeIntelligenceTesting/jazzer
     testImplementation("com.code-intelligence:jazzer-junit:0.22.1")
+    // Run plain JUnit4 tests (e.g. routing/) on the JUnit5 platform below.
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.10.2")
 }
 
 // Surface Jazzer's JUnit5 platform so the @FuzzTest methods actually run when
