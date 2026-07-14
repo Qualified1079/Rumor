@@ -137,6 +137,10 @@ class MessageStore(
     suspend fun markRead(id: String) = messageRepo.markRead(id)
     suspend fun markRelayed(id: String) = messageRepo.markRelayed(id)
 
+    /** O92 reseed sources: offer-eligible content, and recent ids for dedup. */
+    suspend fun offerable(limit: Int): List<RumorMessage> = messageRepo.offerable(limit)
+    suspend fun knownIds(limit: Int): List<String> = messageRepo.knownIds(limit)
+
     /**
      * Public because the engine also creates contacts from completed gossip
      * exchanges — a HELLO challenge-response is stronger identity provenance

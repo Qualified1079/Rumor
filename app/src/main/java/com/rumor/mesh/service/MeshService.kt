@@ -136,6 +136,11 @@ class MeshService : Service(), MeshController {
             return
         }
 
+        // O92: rehydrate the volatile scheduler + dedup filter from the durable
+        // store so a restarted phone actually offers its buffered messages on the
+        // next exchange (otherwise: "0 sent, 0 received" with a full repo).
+        scope.launch { gossipEngine.reseedFromStore() }
+
         // ── Wire transport → gossip engine ───────────────────────────────────
         // TransportConfig is immutable — no mutable vars on WifiDirectTransport.
         val transportConfig = WifiDirectTransport.TransportConfig(

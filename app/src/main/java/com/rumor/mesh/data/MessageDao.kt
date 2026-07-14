@@ -50,6 +50,19 @@ interface MessageDao {
     """)
     fun observeAllDirect(userId: String, limit: Int = 500): Flow<List<MessageEntity>>
 
+    /** O92 reseed source: offer-eligible content only, freshest first. */
+    @Query("""
+        SELECT * FROM messages
+        WHERE type IN ('BROADCAST', 'DIRECT') AND ttl > 0
+        ORDER BY sentAtMs DESC
+        LIMIT :limit
+    """)
+    suspend fun offerable(limit: Int): List<MessageEntity>
+
+    /** O92 dedup reseed source: recent ids across all types. */
+    @Query("SELECT id FROM messages ORDER BY receivedAtMs DESC LIMIT :limit")
+    suspend fun knownIds(limit: Int): List<String>
+
     @Query("UPDATE messages SET isRead = 1 WHERE id = :id")
     suspend fun markRead(id: String)
 

@@ -25,6 +25,17 @@ class DuplicateFilter {
             size > capacity
     }
 
+    /**
+     * Bulk-seed previously-seen ids (O92). Called once on mesh start to restore
+     * an accurate "what we hold" summary from the durable store after the volatile
+     * cache reset on restart. Ids beyond [capacity] are evicted LRU as usual, so
+     * the freshest-first order the caller passes decides what survives.
+     */
+    @Synchronized
+    fun seed(ids: Collection<String>) {
+        for (id in ids) cache[id] = Unit
+    }
+
     /** Returns true if [id] is new (not previously seen). Records it either way. */
     @Synchronized
     fun recordAndCheck(id: String): Boolean {

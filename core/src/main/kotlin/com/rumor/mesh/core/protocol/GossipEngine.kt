@@ -48,6 +48,10 @@ private const val DEFAULT_BROADCAST_HOPS = 7
 private const val DEFAULT_DIRECT_HOPS = 15
 private const val MAX_BROADCAST_HOPS = DEFAULT_BROADCAST_HOPS
 private const val MAX_DIRECT_HOPS = DEFAULT_DIRECT_HOPS
+/** O92 reseed bounds. Offer set is capped near the scheduler's own backlog cap;
+ *  dedup seed is wider so our summary reflects everything we hold, not just what's offerable. */
+private const val OFFER_RESEED_LIMIT = 4_000
+private const val DEDUP_RESEED_LIMIT = 50_000
 
 /**
  * Core protocol logic. No radio code. No transport types.
@@ -601,6 +605,30 @@ class GossipEngine(
     }
     fun knownMessageIds(): Set<String> = duplicateFilter.knownIds()
     val queueDepth: Int get() = scheduler.queueDepth
+
+    /**
+     * O92: rebuild the volatile outbound state from the durable store on mesh
+     * start. Without this, a phone that restarts offers nothing on its next
+     * exchange even though its repo is full (field-observed: two phones of old
+     * broadcasts traded "0 sent, 0 received") — [messagesForExchange] drains the
+     * in-memory [Scheduler], which starts empty every launch.
+     *
+     * Two reseeds, both necessary:
+     *  - **Scheduler** ← offer-eligible content, so we have something to send.
+     *  - **DuplicateFilter** ← recent stored ids, so [knownMessageIds] reports an
+     *    accurate summary and peers don't re-offer us everything we already hold.
+     *
+     * Reseeded messages carry their stored [RumorMessage.hopsToLive]; no hop
+     * mutation happens here, and the peer's want-set still dedups, so this cannot
+     * re-flood content a peer already has. Idempotent — safe to call once per start.
+     */
+    suspend fun reseedFromStore() {
+        duplicateFilter.seed(messageStore.knownIds(DEDUP_RESEED_LIMIT))
+        val offerable = messageStore.offerable(OFFER_RESEED_LIMIT)
+        offerable.forEach { scheduler.enqueue(it) }
+        canaryMetrics.publish(scheduler.queueDepth)
+        RumorLog.i(TAG, "Reseeded ${offerable.size} messages into scheduler on start")
+    }
 
     // ── Internal ──────────────────────────────────────────────────────────────
 

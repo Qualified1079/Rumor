@@ -18,6 +18,10 @@ class MessageRepositoryAdapter(private val dao: MessageDao) : MessageRepository 
     override suspend fun markRead(id: String) = dao.markRead(id)
     override suspend fun markRelayed(id: String) = dao.markRelayed(id)
 
+    override suspend fun offerable(limit: Int): List<RumorMessage> =
+        dao.offerable(limit).map(MessageEntity::toMessage)
+    override suspend fun knownIds(limit: Int): List<String> = dao.knownIds(limit)
+
     override fun observeBroadcasts(limit: Int): Flow<List<RumorMessage>> =
         dao.observeBroadcasts(limit).map { it.map(MessageEntity::toMessage) }
 

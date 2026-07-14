@@ -52,6 +52,13 @@ class InMemoryMessageRepository : MessageRepository {
     override suspend fun markRelayed(id: String) {
         messages[id]?.let { messages[id] = it.copy(wasRelayed = true) }
     }
+    override suspend fun offerable(limit: Int): List<RumorMessage> =
+        messages.values
+            .filter { (it.type.name == "BROADCAST" || it.type.name == "DIRECT") && it.hopsToLive > 0 }
+            .sortedByDescending { it.sentAtMs }
+            .take(limit)
+    override suspend fun knownIds(limit: Int): List<String> =
+        messages.values.sortedByDescending { it.receivedAtMs }.take(limit).map { it.id }
     override fun observeBroadcasts(limit: Int): Flow<List<RumorMessage>> =
         _flow.map { it.filter { m -> m.type.name == "BROADCAST" }.take(limit) }
     override fun observeThread(localUserId: String, peerId: String, limit: Int): Flow<List<RumorMessage>> =
