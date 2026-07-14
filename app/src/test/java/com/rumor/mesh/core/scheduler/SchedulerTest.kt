@@ -55,11 +55,13 @@ class SchedulerTest {
 
     @Test
     fun `drr shares bandwidth fairly across two senders`() {
-        // Alice sends 300 small messages (~306 bytes each).
-        // Bob sends 5 large messages (~60256 bytes each = one quantum each).
-        // After a full drain, both should have gotten credit proportional to bytes.
-        val smallSize = 50    // payload chars → ~306 byte message
-        val largeSize = 60_000 // payload chars → ~60256 byte message
+        // Both senders in the SAME class (REALTIME) so DRR interleaves their two
+        // flows. Alice: 300 small messages (~306 B). Bob: 5 larger messages
+        // (~10 256 B) — under the 16 KB REALTIME ceiling (so no BULK demotion) and
+        // under one quantum (so each drains within its per-round credit). A full
+        // drain should empty both flows with neither starved.
+        val smallSize = 50      // payload chars → ~306 byte message
+        val largeSize = 10_000  // payload chars → ~10 256 byte message, still REALTIME
         val s = Scheduler(quantumBytes = Scheduler.DEFAULT_QUANTUM_BYTES)
 
         repeat(300) { s.enqueue(msg("alice", smallSize)) }
@@ -70,11 +72,6 @@ class SchedulerTest {
         val aliceCount = result.count { it.senderId == "alice" }
         val bobCount   = result.count { it.senderId == "bob" }
 
-        // Alice: 300 × 306 ≈ 91 800 bytes — roughly 1.5 quanta
-        // Bob:     5 × 60 256 ≈ 301 280 bytes — roughly 5 quanta
-        // DRR doesn't guarantee exact byte equality in a single call, but neither
-        // sender should be completely starved. Bob's 5 chunks should all get through
-        // and Alice's messages should interleave.
         assertEquals("all alice messages drained", 300, aliceCount)
         assertEquals("all bob messages drained", 5, bobCount)
     }

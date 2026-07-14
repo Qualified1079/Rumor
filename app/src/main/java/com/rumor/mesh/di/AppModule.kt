@@ -6,9 +6,12 @@ import com.rumor.mesh.core.block.BlocklistPublisher
 import com.rumor.mesh.core.block.BlocklistSubscriber
 import com.rumor.mesh.core.data.BreadcrumbRepository
 import com.rumor.mesh.core.data.ChunkRepository
+import com.rumor.mesh.core.data.BlockEntryRepository
+import com.rumor.mesh.core.data.BlocklistEntryRepository
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.data.MessageRepository
 import com.rumor.mesh.core.data.RouteRepository
+import com.rumor.mesh.core.data.SubscribedBlocklistRepository
 import com.rumor.mesh.core.data.TransferRepository
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.identity.IdentityProvider
@@ -74,9 +77,9 @@ val appModule = module {
     single<BreadcrumbRepository> { BreadcrumbRepositoryAdapter(get<RumorDatabase>().breadcrumbDao()) }
     single<TransferRepository> { TransferRepositoryAdapter(get<RumorDatabase>().transferDao()) }
     single<ChunkRepository>    { ChunkRepositoryAdapter(get<RumorDatabase>().chunkDao()) }
-    single { BlockEntryRepositoryAdapter(get<RumorDatabase>().blockEntryDao()) }
-    single { SubscribedBlocklistRepositoryAdapter(get<RumorDatabase>().subscribedBlocklistDao()) }
-    single { BlocklistEntryRepositoryAdapter(get<RumorDatabase>().blocklistEntryDao()) }
+    single<BlockEntryRepository> { BlockEntryRepositoryAdapter(get<RumorDatabase>().blockEntryDao()) }
+    single<SubscribedBlocklistRepository> { SubscribedBlocklistRepositoryAdapter(get<RumorDatabase>().subscribedBlocklistDao()) }
+    single<BlocklistEntryRepository> { BlocklistEntryRepositoryAdapter(get<RumorDatabase>().blocklistEntryDao()) }
 
     // ── Raw DAOs (consumed directly by a few constructors) ────────────────────
     single { get<RumorDatabase>().contactDao() }
@@ -93,9 +96,9 @@ val appModule = module {
     single<StaticMode> { get<StaticModeManager>() }
 
     // ── Block module ──────────────────────────────────────────────────────────
-    single { BlockManager(get<BlockEntryRepositoryAdapter>(), get<SubscribedBlocklistRepositoryAdapter>(), get<BlocklistEntryRepositoryAdapter>()) }
-    single { BlocklistPublisher(get<BlockEntryRepositoryAdapter>(), get<IdentityProvider>()) }
-    single { BlocklistSubscriber(get<SubscribedBlocklistRepositoryAdapter>(), get<BlocklistEntryRepositoryAdapter>()) }
+    single { BlockManager(get(), get(), get()) }
+    single { BlocklistPublisher(get(), get<IdentityProvider>()) }
+    single { BlocklistSubscriber(get(), get()) }
 
     // ── Protocol layer ────────────────────────────────────────────────────────
     single { DuplicateFilter() }

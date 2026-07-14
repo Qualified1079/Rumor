@@ -1,6 +1,8 @@
 package com.rumor.mesh.di
 
 import android.content.Context
+import com.rumor.mesh.core.protocol.CanaryMetrics
+import kotlinx.coroutines.CoroutineScope
 import org.junit.Test
 import org.koin.core.annotation.KoinExperimentalAPI
 import org.koin.test.verify.verify
@@ -13,9 +15,12 @@ import org.koin.test.verify.verify
  * type) at unit-test time rather than as an opaque crash on a real device the
  * first time a user opens the app.
  *
- * [extraTypes] lists types that Koin can't see because they're supplied via
- * Android-specific helpers like `androidContext()`. We declare those here so
- * verify() doesn't flag them as unresolved.
+ * [extraTypes] lists types that Koin can't see: those supplied via
+ * Android-specific helpers like `androidContext()` (Context), plus constructor
+ * params that have Kotlin default values the DI graph deliberately doesn't
+ * override (GossipEngine's CanaryMetrics, CoroutineScope, and the two Long
+ * relay-batch windows). verify() doesn't model default params, so we declare
+ * them here rather than binding scopes/primitives into Koin.
  */
 class AppModuleTest {
 
@@ -23,7 +28,12 @@ class AppModuleTest {
     @Test
     fun `appModule resolves all bindings`() {
         appModule.verify(
-            extraTypes = listOf(Context::class),
+            extraTypes = listOf(
+                Context::class,
+                CanaryMetrics::class,
+                CoroutineScope::class,
+                Long::class,
+            ),
         )
     }
 }

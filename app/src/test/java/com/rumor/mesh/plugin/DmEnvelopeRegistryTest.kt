@@ -5,7 +5,8 @@ import org.junit.Test
 
 class DmEnvelopeRegistryTest {
 
-    private fun makeEnvelope(prefix: String, id: String = "env-$prefix") = object : DmEnvelope {
+    // Default id drops the prefix's ':' — envelopeId must match ^[A-Za-z0-9_.-]+$.
+    private fun makeEnvelope(prefix: String, id: String = "env-${prefix.trimEnd(':')}") = object : DmEnvelope {
         override val recipientPrefix = prefix
         override val envelopeId = id
         override val selfAuthenticating = true

@@ -44,7 +44,11 @@ class NeighborStore {
             id to (data[id]?.overlapFraction ?: 0.5f)
         }.sortedBy { it.second }
 
-        val coverageCount = (limit * 0.8).toInt().coerceAtLeast(limit - 1)
+        // At least one coverage pick so the lowest-overlap peer is always chosen
+        // (at limit=1 a coerce to limit-1 = 0 made the single slot pure random
+        // exploration, dropping the low-overlap guarantee). Upper-bounded by
+        // limit implicitly since 0.8 * limit < limit.
+        val coverageCount = (limit * 0.8).toInt().coerceAtLeast(1)
         val explorationCount = limit - coverageCount
 
         val coverageSet = scored.take(coverageCount).map { it.first }

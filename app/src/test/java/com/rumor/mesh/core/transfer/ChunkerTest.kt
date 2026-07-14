@@ -86,7 +86,10 @@ class ChunkerTest {
 
     @Test
     fun `reassemble returns null when chunk index gap exists`() {
-        val data = ByteArray(180_000) { 1 }
+        // Non-uniform payload so each chunk holds distinct bytes — a uniform
+        // fill would make chunk 0 and chunk 1 identical and the substitution
+        // below a no-op that legitimately reassembles.
+        val data = ByteArray(180_000) { (it % 255).toByte() }
         val (meta, chunks) = Chunker.chunk(data, ContentType.FILE, chunkSize = 60_000)
 
         // Remove chunk 1, replace with a duplicate of chunk 0 at wrong index.
