@@ -7,7 +7,10 @@ import com.rumor.mesh.core.sync.MAX_RBSR_ROUNDS
 import com.rumor.mesh.core.sync.Rbsr
 import com.rumor.mesh.core.sync.RbsrItem
 import com.rumor.mesh.core.sync.SortedListRbsrStorage
+import com.rumor.mesh.core.sync.toWire
 import com.rumor.mesh.core.transport.wifidirect.BloomFilterData
+import com.rumor.mesh.core.wire.WireJson
+import kotlinx.serialization.encodeToString
 import kotlin.random.Random
 
 /**
@@ -17,7 +20,9 @@ import kotlin.random.Random
  * exchanges they propagate via different paths, but a poorly-chosen
  * falsePositiveRate is exactly the kind of bug worth catching here.
  */
-private const val BLOOM_FALSE_POSITIVE_RATE = 0.01
+// Mirror production (BloomFilterData.DEFAULT_FALSE_POSITIVE_RATE) so sim
+// bandwidth/crossover numbers reflect what actually ships.
+private const val BLOOM_FALSE_POSITIVE_RATE = BloomFilterData.DEFAULT_FALSE_POSITIVE_RATE
 
 /**
  * In-process transport between two [SimNode]s. Applies [NetworkConditioner]
@@ -46,6 +51,13 @@ class SimTransport(
      * Scenarios flip this to compare bloom-vs-RBSR bandwidth and convergence.
      */
     val useRbsr: Boolean = false,
+    /**
+     * O42 adaptive selection: when true, ignore [useRbsr] and pick the method
+     * per exchange via `shouldUseRbsr` on the two nodes' set sizes — exactly the
+     * production decision (both peers deterministically agree). Lets a scenario
+     * exercise the real bloom↔RBSR switch as stores grow.
+     */
+    val adaptiveRbsr: Boolean = false,
 ) {
     /**
      * Perform a bidirectional exchange between [nodeA] and [nodeB].
@@ -71,14 +83,30 @@ class SimTransport(
 
         var bloomSkipped = 0
         var rbsrRounds = 0
-        val (aToB, bToA) = if (useRbsr) {
-            rbsrExchange(rng, onDrop = { dropped++ }, onRounds = { rbsrRounds = it })
+        // Summary-phase wire bytes — the cost of *computing* the diff, before any
+        // message payloads move. This is where O42's win shows: bloom scales with
+        // the known-set size (a full filter each way), RBSR with the symmetric
+        // difference. Payload bytes after the diff are identical either way, so
+        // this is the honest bandwidth axis to compare.
+        var summaryBytes = 0L
+        val effectiveRbsr = if (adaptiveRbsr) {
+            com.rumor.mesh.core.sync.shouldUseRbsr(
+                bothSupportRbsr = true,
+                localSetSize = nodeA.knownMessages().size,
+                peerSetSize = nodeB.knownMessages().size,
+            )
+        } else useRbsr
+        val (aToB, bToA) = if (effectiveRbsr) {
+            rbsrExchange(rng, onDrop = { dropped++ }, onRounds = { rbsrRounds = it },
+                onSummaryBytes = { summaryBytes += it })
         } else {
             // src side gets credit for the skip — it's the offerer who saved the bandwidth.
             val a = exchangeOneDirection(nodeA, nodeB, rng, onDrop = { dropped++ },
-                onBloomSkip = { bloomSkipped += it; nodeA.recordBloomSkips(it) })
+                onBloomSkip = { bloomSkipped += it; nodeA.recordBloomSkips(it) },
+                onSummaryBytes = { summaryBytes += it })
             val b = exchangeOneDirection(nodeB, nodeA, rng, onDrop = { dropped++ },
-                onBloomSkip = { bloomSkipped += it; nodeB.recordBloomSkips(it) })
+                onBloomSkip = { bloomSkipped += it; nodeB.recordBloomSkips(it) },
+                onSummaryBytes = { summaryBytes += it })
             a to b
         }
 
@@ -110,7 +138,8 @@ class SimTransport(
 
         return ExchangeMetrics(messagesAtoB, messagesBtoA, dropped,
             System.currentTimeMillis() - start,
-            bloomOffersSkipped = bloomSkipped, rbsrRoundsUsed = rbsrRounds)
+            bloomOffersSkipped = bloomSkipped, rbsrRoundsUsed = rbsrRounds,
+            summaryBytes = summaryBytes)
     }
 
     /**
@@ -120,7 +149,12 @@ class SimTransport(
      * resolve in a subsequent exchange). After convergence, A sends to B
      * exactly the message IDs B didn't have, and vice versa.
      */
-    private fun rbsrExchange(rng: Random, onDrop: () -> Unit, onRounds: (Int) -> Unit = {}): Pair<List<RumorMessage>, List<RumorMessage>> {
+    private fun rbsrExchange(
+        rng: Random,
+        onDrop: () -> Unit,
+        onRounds: (Int) -> Unit = {},
+        onSummaryBytes: (Int) -> Unit = {},
+    ): Pair<List<RumorMessage>, List<RumorMessage>> {
         val itemsA = nodeA.knownMessages().map { RbsrItem(it.sentAtMs, it.id) }
         val itemsB = nodeB.knownMessages().map { RbsrItem(it.sentAtMs, it.id) }
         val rbsrA = Rbsr(SortedListRbsrStorage(itemsA))
@@ -132,6 +166,7 @@ class SimTransport(
         var framesA = rbsrA.initiate()
         var framesB = rbsrB.initiate()
         var roundsUsed = 0
+        onSummaryBytes(frameBytes(framesA) + frameBytes(framesB))  // the initiate() frames go on the wire too
         for (round in 0 until MAX_RBSR_ROUNDS) {
             roundsUsed = round + 1
             val responseA = rbsrA.respond(framesB)
@@ -141,6 +176,7 @@ class SimTransport(
             if (framesA.isEmpty() && framesB.isEmpty()) break
             framesA = responseA.outgoing
             framesB = responseB.outgoing
+            onSummaryBytes(frameBytes(framesA) + frameBytes(framesB))
         }
         onRounds(roundsUsed)
 
@@ -170,6 +206,7 @@ class SimTransport(
         rng: Random,
         onDrop: () -> Unit,
         onBloomSkip: (Int) -> Unit = {},
+        onSummaryBytes: (Int) -> Unit = {},
     ): List<RumorMessage> {
         val dstKnownIds = dst.knownIds()
         if (dstKnownIds.isEmpty()) {
@@ -185,7 +222,9 @@ class SimTransport(
             falsePositiveRate = BLOOM_FALSE_POSITIVE_RATE,
         )
         for (id in dstKnownIds) bloom.add(id)
-        val onWire = BloomFilterData.deserialize(bloom.serialize(), dstKnownIds.size.coerceAtLeast(64))
+        val serialized = bloom.serialize()
+        onSummaryBytes(serialized.length)  // dst's bloom crosses the wire so src can compute its offer
+        val onWire = BloomFilterData.deserialize(serialized, dstKnownIds.size.coerceAtLeast(64))
 
         val all = src.knownMessages()
         val candidates = all.asSequence().filter { !onWire.mightContain(it.id) }
@@ -211,6 +250,10 @@ class SimTransport(
     private fun estimatedBytes(msg: RumorMessage): Int =
         256 + (msg.payload?.content?.length ?: 0) + (msg.encryptedPayload?.length ?: 0)
 
+    /** Serialized wire size of a batch of RBSR frames, via the real wire codec. */
+    private fun frameBytes(frames: List<com.rumor.mesh.core.sync.RbsrFrame>): Int =
+        if (frames.isEmpty()) 0 else WireJson.encodeToString(frames.map { it.toWire() }).length
+
     val edgeKey: String = edgeKey(nodeA.index, nodeB.index)
 }
 
@@ -233,6 +276,14 @@ data class ExchangeMetrics(
      * the cap is the bottleneck, not the algorithm — see O61.
      */
     val rbsrRoundsUsed: Int = 0,
+    /**
+     * Summary-phase wire bytes: the cost of *discovering* the diff before any
+     * payload moves. Bloom path = serialized filter size each direction (scales
+     * with known-set size); RBSR path = all frames across all rounds (scales
+     * with the symmetric difference). The O42 bandwidth axis — see the
+     * `RbsrBandwidthScenarioTest` comparison.
+     */
+    val summaryBytes: Long = 0,
 ) {
     val totalMessages get() = messagesAtoB + messagesBtoA
     val hasTraffic get() = totalMessages > 0

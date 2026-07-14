@@ -11,11 +11,17 @@ import kotlin.math.ln
  * Lives in :core so both the Android transport (GossipSession) and the
  * simulator (SimTransport) exercise the same code path. False positives are
  * the protocol's primary failure mode at scale — a peer that thinks it has
- * a message it doesn't will silently miss it forever.
+ * a message it doesn't will silently miss it (until its set changes and the
+ * filter shifts). At the default rate that's a skipped/late chat message ~1
+ * in several thousand — see [DEFAULT_FALSE_POSITIVE_RATE].
+ *
+ * The rate is an implicit wire constant: [deserialize] rebuilds the filter at
+ * the default rate, so both peers MUST use the same value or their bit layouts
+ * won't align. Change it only via the default here.
  */
 class BloomFilterData(
     expectedItems: Int,
-    falsePositiveRate: Double = 0.01,
+    falsePositiveRate: Double = DEFAULT_FALSE_POSITIVE_RATE,
 ) {
     private val bitCount: Int
     private val hashCount: Int
@@ -66,6 +72,17 @@ class BloomFilterData(
     }
 
     companion object {
+        /**
+         * O42/UX: 0.01% — empirically ~1 skipped message in 5,000-8,000 per
+         * exchange (measured in `BloomFalsePositiveTest`; the custom murmur mix
+         * + hashCount cap keep it close to configured). The old 0.01 (1%) meant
+         * ~1 in 100, which on a quiet mesh (static filter) strands a chat message
+         * noticeably. Adaptive selection (O42) keeps bloom on small sets only, so
+         * the ~2× wire cost vs 1% is still under 2 KB — a near-free UX win. Above
+         * the adaptive set-size threshold, RBSR takes over and is exact (zero FP).
+         */
+        const val DEFAULT_FALSE_POSITIVE_RATE: Double = 0.0001
+
         /**
          * O13: graceful-fallback variant. A peer can send an adversarial
          * `expectedItems` (e.g. `Int.MAX_VALUE`) that drives the constructor

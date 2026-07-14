@@ -80,19 +80,31 @@ class RbsrTest {
     fun `fingerprint is order-independent`() {
         val a = items(1L to "x", 2L to "y", 3L to "z")
         val b = items(3L to "z", 1L to "x", 2L to "y")
-        assertTrue(Rbsr.xorFingerprint(a).contentEquals(Rbsr.xorFingerprint(b)))
+        assertTrue(Rbsr.fingerprint(a).contentEquals(Rbsr.fingerprint(b)))
     }
 
     @Test
     fun `fingerprint differs on single-item change`() {
         val a = items(1L to "x", 2L to "y")
         val b = items(1L to "x", 2L to "z")
-        assertTrue(!Rbsr.xorFingerprint(a).contentEquals(Rbsr.xorFingerprint(b)))
+        assertTrue(!Rbsr.fingerprint(a).contentEquals(Rbsr.fingerprint(b)))
     }
 
     @Test
-    fun `empty range fingerprint is zero block`() {
-        val zero = ByteArray(32)
-        assertTrue(Rbsr.xorFingerprint(emptyList()).contentEquals(zero))
+    fun `empty range fingerprint is deterministic and distinct from non-empty`() {
+        assertTrue(Rbsr.fingerprint(emptyList()).contentEquals(Rbsr.fingerprint(emptyList())))
+        assertTrue(!Rbsr.fingerprint(emptyList()).contentEquals(Rbsr.fingerprint(items(1L to "a"))))
+    }
+
+    @Test
+    fun `count is bound into the fingerprint`() {
+        // Two sets whose per-item hashes sum to the same value would still
+        // differ because the count is hashed in. We can't cheaply construct a
+        // sum-collision, but binding the count guards against the whole class:
+        // a fingerprint over N items is never equal to one over M != N items
+        // sharing a prefix.
+        val small = items(1L to "a")
+        val large = items(1L to "a", 2L to "b", 3L to "c")
+        assertTrue(!Rbsr.fingerprint(small).contentEquals(Rbsr.fingerprint(large)))
     }
 }

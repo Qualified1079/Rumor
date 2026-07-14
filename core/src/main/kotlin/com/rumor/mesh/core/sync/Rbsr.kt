@@ -18,10 +18,16 @@ import java.security.MessageDigest
  * range is either skipped (agreement) or small enough to enumerate by id-list.
  *
  * Integration into [com.rumor.mesh.core.transport.wifidirect.GossipSession] is
- * gated on both peers advertising the `rbsr-v1` feature in HELLO. Until that
- * lands, the algorithm is unwired — exercised only by tests. Wire-locking the
- * format requires a review pass against the reference impl (hoytech/negentropy)
- * for fingerprint stability under bound-edge items.
+ * gated on both peers advertising the `rbsr-v1` feature in HELLO.
+ *
+ * Reference review (O42) done: fingerprint aligned to negentropy's additive +
+ * count construction (see [Rbsr.fingerprint]); bound values survive the wire
+ * exactly (kotlinx encodes `Long` as an integer literal, no `Double` round-trip,
+ * and both ends are Rumor — this is deliberately not strfry-compatible); range
+ * membership is a pure `(timestamp, id)` comparison applied identically on both
+ * sides, so a boundary landing on an item key partitions consistently. Bound ids
+ * are assumed to sort below [RbsrBound.MAX]'s `"￿"` sentinel — true for
+ * Rumor message ids (hex/base64/UUID, all ASCII).
  */
 
 /** A single item participating in the set being reconciled. */
@@ -63,13 +69,37 @@ data class RbsrBound(val timestamp: Long, val id: String) : Comparable<RbsrBound
  */
 const val MAX_RBSR_ROUNDS: Int = 12
 
+/**
+ * Adaptive summary-method threshold (O42). Below this set size the bloom filter
+ * is cheaper AND — at the tuned 0.01% false-positive rate — near-exact, so bloom
+ * wins outright. Above it, re-shipping a full bloom every exchange (linear in the
+ * set) is wasteful next to RBSR (scales with the *difference*), and RBSR is
+ * exact. Simulator crossover with the 0.01%-FP bloom sits ~2.5k; 3k gives RBSR a
+ * clear-win margin (see `RbsrBandwidthScenarioTest`).
+ *
+ * The RBSR win is largest exactly where the app is headed: persistent links
+ * (O2/G19) between static/free anchors (O55) re-syncing a big store where the
+ * difference is tiny — bloom re-sends ~N every round to deliver nothing.
+ */
+const val RBSR_MIN_SET_SIZE: Int = 3_000
+
+/**
+ * Symmetric, deterministic choice of summary method — BOTH peers compute the
+ * same answer from the same inputs (each other's advertised set size + shared
+ * capability), so they never split modes (one RBSR, one bloom → session stall).
+ * Gated on the *larger* set: if either side is carrying a big store, the full-
+ * bloom-every-round cost is what we're avoiding.
+ */
+fun shouldUseRbsr(bothSupportRbsr: Boolean, localSetSize: Int, peerSetSize: Int): Boolean =
+    bothSupportRbsr && maxOf(localSetSize, peerSetSize) >= RBSR_MIN_SET_SIZE
+
 interface RbsrStorage {
     /** Items in `[lower, upper)` in ascending order. */
     fun items(lower: RbsrBound, upper: RbsrBound): List<RbsrItem>
 
-    /** XOR fingerprint of items in `[lower, upper)`. Must equal across peers iff the sets match. */
+    /** Fingerprint of items in `[lower, upper)`. Must equal across peers iff the sets match. */
     fun fingerprint(lower: RbsrBound, upper: RbsrBound): ByteArray =
-        Rbsr.xorFingerprint(items(lower, upper))
+        Rbsr.fingerprint(items(lower, upper))
 }
 
 /** Sorted in-memory storage. Useful for tests and small in-memory deltas. */
@@ -215,18 +245,41 @@ class Rbsr(
 
     companion object {
         /**
-         * XOR over SHA-256 of each item — order-independent, matches across peers
-         * iff sets match. Empty range yields the zero block.
+         * Range fingerprint: sum of per-item SHA-256 hashes mod 2^256, then
+         * SHA-256 over `(sum || count)`. Order-independent (addition commutes)
+         * and equal across peers iff the sets match.
+         *
+         * **Addition, not XOR**, and the count is bound in — this follows the
+         * hoytech/negentropy reference rather than the naive XOR accumulator.
+         * XOR is linear over GF(2)^256, so a peer that can choose message ids
+         * could solve for two *different* ranges with an equal fingerprint; the
+         * range would then be wrongly `Skip`ped and its messages silently fail
+         * to reconcile. Forging a collision under modular addition is a 256-bit
+         * subset-sum problem — infeasible. Binding the count additionally
+         * distinguishes sets that happen to share a sum. Empty range → SHA-256
+         * of `(0^32 || 0)`, a fixed non-zero block; the algorithm only compares
+         * fingerprints for equality, so the constant is immaterial.
          */
-        fun xorFingerprint(items: List<RbsrItem>): ByteArray {
-            val acc = ByteArray(32)
+        fun fingerprint(items: List<RbsrItem>): ByteArray {
             val md = MessageDigest.getInstance("SHA-256")
+            val sum = ByteArray(32)
             for (item in items) {
                 md.reset()
                 val hash = md.digest("rumor-rbsr-v1:${item.timestamp}:${item.id}".toByteArray(Charsets.UTF_8))
-                for (i in acc.indices) acc[i] = (acc[i].toInt() xor hash[i].toInt()).toByte()
+                var carry = 0
+                for (i in 31 downTo 0) {
+                    val s = (sum[i].toInt() and 0xFF) + (hash[i].toInt() and 0xFF) + carry
+                    sum[i] = s.toByte()
+                    carry = s ushr 8   // final carry out of byte 0 is dropped → mod 2^256
+                }
             }
-            return acc
+            md.reset()
+            md.update("rumor-rbsr-fp-v1:".toByteArray(Charsets.UTF_8))
+            md.update(sum)
+            val count = items.size.toLong()
+            val countBytes = ByteArray(8) { i -> (count ushr (8 * (7 - i))).toByte() }
+            md.update(countBytes)
+            return md.digest()
         }
     }
 }

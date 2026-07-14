@@ -44,6 +44,14 @@ sealed class GossipPacket {
          * the feature is not advertised. Nostr-style additive feature detection.
          */
         val supportedFeatures: List<String> = emptyList(),
+        /**
+         * Local known-message count, for the O42 adaptive summary decision
+         * (`shouldUseRbsr`). Defaults 0 so a pre-O42 peer's HELLO reads as a
+         * small set → bloom, the safe fallback. Advisory only — it selects a
+         * reconciliation method, never a trust or size-allocation decision, so a
+         * peer lying about it just picks a suboptimal (still-correct) method.
+         */
+        val knownCount: Int = 0,
         @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
     ) : GossipPacket()
 

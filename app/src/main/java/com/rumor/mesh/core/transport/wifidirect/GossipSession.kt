@@ -140,6 +140,7 @@ class GossipSession(
                 protocolVersion = LOCAL_PROTOCOL_VERSION,
                 maxProtocolVersion = LOCAL_MAX_PROTOCOL_VERSION,
                 supportedFeatures = supportedFeatures,
+                knownCount = knownMessageIds.size,
             )
             send(out, ourHello)
             val hello = receive(inp) as? GossipPacket.Hello
@@ -204,14 +205,21 @@ class GossipSession(
             send(out, buildNeighborDigest())
             val peerDigest = receive(inp) as? GossipPacket.NeighborDigest
 
-            // Phase 2: SUMMARY — exchange knowledge sets. Capability-gated:
-            // RBSR (O42) replaces the bloom/idlist path when both peers advertise
-            // `rbsr-v1` in HELLO AND we have an `rbsrItems` snapshot wired through.
-            // Falls back to bloom/idlist on any precondition miss for clean
-            // backwards compatibility with v0.1 peers.
-            val useRbsr = supportedFeatures.contains(RBSR_FEATURE) &&
-                hello.supportedFeatures.contains(RBSR_FEATURE) &&
-                rbsrItems != null
+            // Phase 2: SUMMARY — exchange knowledge sets. O42 adaptive selection:
+            // RBSR replaces the bloom/idlist path only when both peers advertise
+            // `rbsr-v1`, we have an `rbsrItems` snapshot wired through, AND the
+            // larger of the two set sizes clears RBSR_MIN_SET_SIZE. Below that,
+            // the (now near-exact, 0.01%-FP) bloom is cheaper. Both sides compute
+            // the same decision from the same inputs (own size + peer's HELLO
+            // knownCount + shared capability), so they never split modes. Falls
+            // back to bloom/idlist on any precondition miss for clean backwards
+            // compatibility with v0.1 peers.
+            val bothSupportRbsr = supportedFeatures.contains(RBSR_FEATURE) &&
+                hello.supportedFeatures.contains(RBSR_FEATURE)
+            val useRbsr = rbsrItems != null &&
+                com.rumor.mesh.core.sync.shouldUseRbsr(
+                    bothSupportRbsr, knownMessageIds.size, hello.knownCount,
+                )
 
             val theyNeed: List<RumorMessage>
             val weNeedIds: List<String>
