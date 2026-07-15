@@ -39,7 +39,8 @@ O42 remnants → deeper O92 → O98 MeshView substrate → O98 Phase 3 (Wi-Fi Di
    today's `scheduler.take()` is still destructive within a run, reseed only
    heals restarts). Pairs with O40 (relay-deletion-on-ACK) since there's no
    per-message delivered state to prune on. Benefits from RBSR being live for
-   cheap large-set diffs.
+   cheap large-set diffs. **Bundle O105 here** (hoist GossipSession :app→:core,
+   structural — same files touched).
 3. **O98 MeshView substrate** — O62 ModeProfile decision (gate: no mode
    branching lands until the profile is recorded in CLAUDE.md) → consume
    SELF_PRESENCE into a peer-mode map with recency decay → BLE-neighbor-list
