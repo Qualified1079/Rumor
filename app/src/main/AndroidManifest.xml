@@ -83,17 +83,15 @@
             </intent-filter>
         </receiver>
 
-        <!-- Wi-Fi Direct change notifications -->
-        <receiver
-            android:name=".core.transport.WifiDirectBroadcastReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.net.wifi.p2p.STATE_CHANGED" />
-                <action android:name="android.net.wifi.p2p.PEERS_CHANGED" />
-                <action android:name="android.net.wifi.p2p.CONNECTION_STATE_CHANGE" />
-                <action android:name="android.net.wifi.p2p.THIS_DEVICE_CHANGED" />
-            </intent-filter>
-        </receiver>
+        <!-- Wi-Fi Direct broadcasts are handled by a DYNAMICALLY registered
+             receiver (WifiDirectTransport registers .core.transport.wifidirect.
+             WifiDirectBroadcastReceiver, which takes constructor args and cannot
+             be manifest-instantiated). A stale manifest <receiver> here used to
+             point at the pre-refactor FQN (.core.transport.…) — a class that no
+             longer exists — and any OS delivery to it (ColorOS delivers sticky
+             P2P broadcasts to manifest receivers) killed the process with
+             ClassNotFoundException. Field-caught on the OnePlus 2026-07-15.
+             Do not re-add a manifest receiver for P2P actions. -->
 
         <provider
             android:name="androidx.core.content.FileProvider"
