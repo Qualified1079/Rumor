@@ -49,8 +49,13 @@ O42 remnants → deeper O92 → O98 MeshView substrate → O98 Phase 3 (Wi-Fi Di
    G19 link machinery; prompt-free joins (deterministic networkName+passphrase
    from pair userIds, legacy-STA join, no WPS); channel selection at
    autonomous `createGroup` (only path that honors the channel — field-verified;
-   `preferredGoFrequencyMhz()` scanner is the reusable piece). Three USB
+   `preferredGoFrequencyMhz()` scanner is the reusable piece). Four USB
    phones, see memory/rumor-test-devices.md, passphrase `passphrase1`.
+5. **After the chain, ranked (user-agreed 2026-07-15):** O100 content-addressed
+   swarm chunks (wire-format decision — schedule early; per-chunk hashes are a
+   hard constraint) → O101 sites (make the no-HTML/no-WebView format decision
+   FIRST) → O103 geotag plugin (comments-not-decay; adopt osmdroid/MapLibre)
+   → O102 delegation sim experiment (expected to close as DECISION).
 
 ## Hardware checkpoint (user asked to be told)
 
