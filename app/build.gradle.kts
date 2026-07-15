@@ -128,7 +128,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
 
     // Crypto — BouncyCastle for Ed25519 / X25519 on API < 33
-    implementation("org.bouncycastle:bcprov-jdk15on:1.70")
+    // Keep in lockstep with :core (jdk15on line is discontinued at 1.70).
+    implementation("org.bouncycastle:bcprov-jdk18on:1.85")
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")

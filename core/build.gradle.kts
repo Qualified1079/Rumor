@@ -22,8 +22,14 @@ dependencies {
     // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
 
-    // Crypto — BouncyCastle for Ed25519 / X25519
-    implementation("org.bouncycastle:bcprov-jdk15on:1.70")
+    // Crypto — BouncyCastle for Ed25519 / X25519. jdk18on is the maintained
+    // line — jdk15on ended at 1.70 (2021) with CVEs fixed only in jdk18on.
+    // Same org.bouncycastle packages; keep :app in lockstep.
+    implementation("org.bouncycastle:bcprov-jdk18on:1.85")
+
+    // Real MurmurHash3 for BloomFilterData — the previous hand-rolled mix
+    // wasn't murmur despite the name. Pure Java, tiny, F-Droid compatible.
+    implementation("commons-codec:commons-codec:1.22.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

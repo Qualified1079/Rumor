@@ -1,59 +1,75 @@
-# Handoff — O98 Smart Persistence
+# Handoff — foundational roadmap (reliability first, then O98 Phase 3)
 
 **Signal to next instance: sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
 
-## Where things stand
+## Roadmap (user-chosen order)
 
-O98 (smart persistence) is being built in three phases, algorithm-first — the
-opposite of the O99 approach that was tried on-device and reverted (negotiated
-`connect()` ignores the channel hint; naive host-election fragments; createGroup
-joins hit WPS prompts). See the O98 row in CLAUDE.md for the full field record.
+O42 remnants → deeper O92 → O98 MeshView substrate → O98 Phase 3 (Wi-Fi Direct wiring).
 
-- **Phase 1 — DONE, committed, all tests green.** Pure deterministic backbone
-  solver + hysteresis reconciler in `:core`.
-  - `core/src/main/kotlin/com/rumor/mesh/core/routing/PersistencePlanner.kt`
-  - `core/src/main/kotlin/com/rumor/mesh/core/routing/PersistenceReconciler.kt`
-  - Tests: `core/src/test/kotlin/com/rumor/mesh/core/routing/{PersistencePlannerTest,PersistenceReconcilerTest}.kt` (13 tests)
-- **Phase 2 — DONE, committed, all tests green.** Simulator validation.
-  - `simulator/src/test/kotlin/com/rumor/mesh/simulator/engine/SmartPersistenceScenarioTest.kt` (5 tests, 20-node apartment building)
-- **Phase 3 — NOT STARTED.** This is where you begin.
+## Done this cycle (committed on claude/check-online-status-vef1H)
 
-## START HERE (Phase 3 — Wi-Fi Direct wiring, the fragile part)
+- **O92 reseed-from-store** (`f375d02`) — restart no longer wipes the offer set.
+  `GossipEngine.reseedFromStore()` reseeds Scheduler (repo `offerable()`) +
+  DuplicateFilter (repo `knownIds()`) from `MeshService.startMesh`.
+- **Dead `:app` test suite revived** (`372a9db`) — junit-vintage-engine was missing;
+  12 JUnit4 files never ran. 5 stale tests fixed + 1 real bug
+  (`NeighborStore.selectDiverse` limit=1 was pure-random, not lowest-overlap).
+- **O42** (`b13c157`) — fingerprint hardened to negentropy construction
+  (additive mod 2^256 + count; XOR was forgeable). Bloom FP 1% → **0.01%**
+  (chat UX: skip rate 1-in-100 → ~1-in-5000–8000, <2 KB on small sets).
+  Size-gated adaptive selection built and sim-validated:
+  `shouldUseRbsr(bothSupport, max(sizes) ≥ RBSR_MIN_SET_SIZE=3000)`, symmetric
+  via new advisory `knownCount` in HELLO. Crossover measured ≈2.5k msgs
+  (JSON framing; see `RbsrBandwidthScenarioTest`).
 
-The algorithm is proven and radio-agnostic. Phase 3 connects it to
-`app/src/main/java/com/rumor/mesh/core/transport/wifidirect/WifiDirectTransport.kt`.
-Do this incrementally with on-device regression testing — it touches the
-hard-won G18/G22/G19 connection flow. Three devices are on USB (see
-`memory/rumor-test-devices.md`, app passphrase `passphrase1`).
+## Remaining work, in order
 
-Concrete first steps, smallest-risk first:
+1. **O42 go-live wiring** — RBSR is dormant in production
+   (`LOCAL_SUPPORTED_FEATURES` empty, `rbsrItems` null). Go-live must set both
+   **atomically** in `MeshService`: advertise `rbsr-v1` AND provide the
+   `rbsrItems` snapshot (invariant: advertise iff items wired, else two
+   honest peers could split modes). Then hardware regression.
+   **⚠ Wire-compat note for hardware testing:** the bloom FP change is a *soft*
+   wire break — `BloomFilterData.deserialize` rebuilds at the local default
+   rate, so an old-build peer's filter is misparsed by a new build (wrong bit
+   layout → garbage overlap for that exchange, no crash). Flash **all** test
+   phones with the same build.
+2. **Deeper O92** — source `messagesForExchange` from the durable repo
+   continuously (scheduler stays as the priority/fairness shaping layer;
+   today's `scheduler.take()` is still destructive within a run, reseed only
+   heals restarts). Pairs with O40 (relay-deletion-on-ACK) since there's no
+   per-message delivered state to prune on. Benefits from RBSR being live for
+   cheap large-set diffs.
+3. **O98 MeshView substrate** — O62 ModeProfile decision (gate: no mode
+   branching lands until the profile is recorded in CLAUDE.md) → consume
+   SELF_PRESENCE into a peer-mode map with recency decay → BLE-neighbor-list
+   advertisement (new INFRASTRUCTURE gossip) → assemble `MeshView` →
+   simulator convergence scenario.
+4. **O98 Phase 3** (the fragile on-device part) — realize planner edges via
+   G19 link machinery; prompt-free joins (deterministic networkName+passphrase
+   from pair userIds, legacy-STA join, no WPS); channel selection at
+   autonomous `createGroup` (only path that honors the channel — field-verified;
+   `preferredGoFrequencyMhz()` scanner is the reusable piece). Three USB
+   phones, see memory/rumor-test-devices.md, passphrase `passphrase1`.
 
-1. **Assemble the `MeshView` on-device.** Feed the planner real inputs:
-   - `modes`: local `UserMode` (O57) + peers' modes from SELF_PRESENCE beacons.
-   - `edges`: who-can-BLE-see-whom. Advertise each node's neighbor list as a
-     small INFRASTRUCTURE gossip message so views converge (like presence).
-   - Run `PersistencePlanner.plan(view)` → `PersistenceReconciler.reconcile(plan)`
-     on the mesh scheduler coroutine (reconciler is NOT thread-safe — single
-     coroutine only). Act on `PlanDelta.toAdd` / `.toRemove`.
-2. **Realize a backbone edge as a link.** `persistentPeersOf(myUserId)` gives the
-   peers to hold. Map to the existing persistent-link machinery (G19). GO/client
-   role for an edge stays the existing first-come / lower-userId rule.
-3. **Prompt-free joins (blocker from O99 spike).** createGroup joins hit a WPS
-   invitation-accept on some devices (Moto wouldn't auto-join OnePlus's ch149
-   group → 0 sessions). Derive a deterministic pre-shared `networkName` +
-   `passphrase` from the pair's userIds so the client joins as a legacy STA
-   without WPS PBC.
-4. **Channel selection at createGroup (absorbed O99).** Only autonomous
-   `WifiP2pManager.createGroup(channel, WifiP2pConfig.Builder()…setGroupOperatingFrequency(quietFreq)…, listener)`
-   honors the channel (field-verified — `connect()` ignores it). Scan
-   `WifiManager.getScanResults()` for the least-congested non-DFS 5 GHz channel
-   (candidate MHz: 5745/5765/5785/5805/5825/5180/5200/5220/5240, UNII-3 first).
-   The `preferredGoFrequencyMhz()` scanner is the reusable piece.
+## Hardware checkpoint (user asked to be told)
 
-Keep it **android-agnostic** (user's standing constraint — no Xiaomi/OEM-specific
-gating; they'll test other hardware later). Capacity numbers in
-`PersistencePlanner.capacityFor` are deliberately conservative; the transport
-layer should clamp further to what a given radio actually sustains, not raise them.
+Ready to field-test now: **O92 reseed** (restart a phone with stored
+broadcasts → next exchange offers them) and **bloom FP=0.01%** (chat delivery
+skip rate). RBSR itself is not on the wire yet — needs item 1 first.
+
+## Prebuild assay (user-requested, this cycle)
+
+Adopted: BC `jdk15on:1.70` → `jdk18on` (discontinued artifact, CVE fixes);
+real MurmurHash3 via commons-codec in BloomFilterData (the hand-rolled
+"murmur3" was a weak xor-mult mix; wire-breaking, bundled with the FP-rate
+break in the same pre-release window). Deferred with reasoning (see CLAUDE.md
+design decisions): CBOR RBSR frames (JSON envelope forces base64, cuts the
+win to ~25–35%; adaptive gate already handles the tax), Square Wire for
+Meshtastic protobuf (do when S1 resumes), libsodium for Ed25519↔X25519
+(BigInteger map only touches public keys; native .so bloat not yet justified),
+HKDF via BC (current HKDF-extract is sound; swapping breaks existing DM keys).
+Future O45/O46: MUST adopt (kotlin-bip39, SLIP-0039 lib) — never hand-roll.
 
 ## Build/test commands (this environment)
 
@@ -61,21 +77,23 @@ Gradle is NOT on PATH. Java home must be passed as `-D`, NOT as a leading
 `JAVA_HOME=` (breaks the permission match):
 
 ```
-/home/user/AndroidStudioProjects/Rumor/gradlew -Dorg.gradle.java.home=/home/user/jdk17 :core:test --tests "com.rumor.mesh.core.routing.*"
-/home/user/AndroidStudioProjects/Rumor/gradlew -Dorg.gradle.java.home=/home/user/jdk17 :simulator:test --tests "com.rumor.mesh.simulator.engine.SmartPersistenceScenarioTest"
+/home/user/AndroidStudioProjects/Rumor/gradlew -Dorg.gradle.java.home=/home/user/jdk17 :core:test :simulator:test :app:testDebugUnitTest
 ```
 
 `adb` works via absolute path (allow rules already granted). `.claude/settings.json`
 is intentionally modified-but-uncommitted (permission allowlist) — do NOT commit it.
 
-## Design notes worth keeping in mind
+Known-flaky under full-suite CPU load (pass in isolation and on rerun; their
+`awaitUntil` polls time out under contention): `BreadcrumbSubstrateTest`
+"relayed message records breadcrumb…" and `PerPeerRoutingTest` "routed hop
+increments…". If one fails in a full run, rerun before suspecting your change.
 
-- The planner emits an **undirected** backbone; it does not decide GO vs client
-  or channel — those are transport concerns by design.
-- Wi-Fi Direct reality the abstract graph doesn't model: a client is in exactly
-  one group; a phone can't be client of two GOs on one radio. A backbone edge
+## O98 Phase 3 design notes (kept from previous handoff)
+
+- The planner emits an **undirected** backbone; GO/client role and channel are
+  transport concerns. Reconciler is NOT thread-safe — single coroutine only.
+- Wi-Fi Direct reality: a client is in exactly one group; a backbone edge
   between two would-be-hubs is realized by one becoming client of the other.
-  True inter-group bridging (or same-LAN mDNS per O93) is a deeper follow-up.
-- Redundancy: `plan(view, redundancy=2)` gives leaves a second link so no single
-  drop partitions them. Phase 3 can start with `redundancy=1` (tree) and raise it
-  once stable.
+- Start Phase 3 with `redundancy=1` (tree), raise once stable.
+- Keep it android-agnostic (no OEM-specific gating); transport clamps
+  `PersistencePlanner.capacityFor` numbers down, never up.

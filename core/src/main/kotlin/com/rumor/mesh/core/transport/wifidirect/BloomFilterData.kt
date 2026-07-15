@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.transport.wifidirect
 
+import org.apache.commons.codec.digest.MurmurHash3
 import java.util.Base64
 import kotlin.math.ceil
 import kotlin.math.ln
@@ -34,8 +35,7 @@ class BloomFilterData(
     }
 
     fun add(item: String) {
-        val h1 = murmur3(item.toByteArray(), 0)
-        val h2 = murmur3(item.toByteArray(), h1)
+        val (h1, h2) = itemHashes(item)
         for (i in 0 until hashCount) {
             val bit = ((h1 + i.toLong() * h2) % bitCount + bitCount) % bitCount
             bits[(bit / 64).toInt()] = bits[(bit / 64).toInt()] or (1L shl (bit % 64).toInt())
@@ -43,13 +43,26 @@ class BloomFilterData(
     }
 
     fun mightContain(item: String): Boolean {
-        val h1 = murmur3(item.toByteArray(), 0)
-        val h2 = murmur3(item.toByteArray(), h1)
+        val (h1, h2) = itemHashes(item)
         for (i in 0 until hashCount) {
             val bit = ((h1 + i.toLong() * h2) % bitCount + bitCount) % bitCount
             if (bits[(bit / 64).toInt()] and (1L shl (bit % 64).toInt()) == 0L) return false
         }
         return true
+    }
+
+    /**
+     * Both double-hashing bases from one MurmurHash3 x64/128 pass
+     * (commons-codec). Replaces a hand-rolled byte-wise xor-multiply mix that
+     * was labelled murmur3 but wasn't — real murmur has characterized
+     * avalanche/independence, which the double-hashing scheme assumes.
+     * Wire-affecting: bit layouts differ from the old mix, so peers must run
+     * the same build (bundled with the 0.01%-FP change in the same
+     * pre-release window — see DEFAULT_FALSE_POSITIVE_RATE).
+     */
+    private fun itemHashes(item: String): Pair<Long, Long> {
+        val h = MurmurHash3.hash128x64(item.toByteArray())
+        return h[0] to h[1]
     }
 
     fun serialize(): String {
