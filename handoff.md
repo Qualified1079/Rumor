@@ -58,11 +58,16 @@ O42 remnants → deeper O92 → O98 MeshView substrate → O98 Phase 3 (Wi-Fi Di
    FIRST) → O103 geotag plugin (comments-not-decay; adopt osmdroid/MapLibre)
    → O102 delegation sim experiment (expected to close as DECISION).
 
-## Hardware checkpoint (user asked to be told)
+## Hardware checkpoint — DONE 2026-07-15 (see G24 in CLAUDE.md)
 
-Ready to field-test now: **O92 reseed** (restart a phone with stored
-broadcasts → next exchange offers them) and **bloom FP=0.01%** (chat delivery
-skip rate). RBSR itself is not on the wire yet — needs item 1 first.
+Full pass on 3 phones: new wire format (murmur bloom 0.01% FP + HELLO
+knownCount), O92 reseed on every restart, store-and-forward across
+restart+crash multi-hop (Moto→Samsung→reinstall→OnePlus), three-node star,
+adaptive gate correctly on bloom. Found+fixed a ColorOS process-killer
+(stale manifest receiver, commit 183efee). O42 is CLOSED. Item 1 below is
+done; next work is item 2 (deeper O92 + O105 hoist — the `git mv` of
+GossipSession to :core was prepared but deliberately deferred until after
+this hardware pass; do it first, the wire harness is the safety net).
 
 ## Prebuild assay (user-requested, this cycle)
 
