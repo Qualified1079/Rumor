@@ -59,6 +59,9 @@ class InMemoryMessageRepository : MessageRepository {
             .take(limit)
     override suspend fun knownIds(limit: Int): List<String> =
         messages.values.sortedByDescending { it.receivedAtMs }.take(limit).map { it.id }
+    override suspend fun rbsrItems(limit: Int): List<com.rumor.mesh.core.sync.RbsrItem> =
+        messages.values.sortedByDescending { it.sentAtMs }.take(limit)
+            .map { com.rumor.mesh.core.sync.RbsrItem(it.sentAtMs, it.id) }
     override fun observeBroadcasts(limit: Int): Flow<List<RumorMessage>> =
         _flow.map { it.filter { m -> m.type.name == "BROADCAST" }.take(limit) }
     override fun observeThread(localUserId: String, peerId: String, limit: Int): Flow<List<RumorMessage>> =

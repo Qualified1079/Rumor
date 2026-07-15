@@ -104,6 +104,12 @@ class WifiDirectTransport(
          * is free for new discoveries.
          */
         val isPeerNearby: () -> Boolean = { true },
+        /**
+         * O42: lazy whole-store `(sentAtMs, id)` snapshot for RBSR. Wiring this
+         * is the single go-live switch — the transport advertises `rbsr-v1`
+         * iff this is non-null, so capability and ability can't diverge.
+         */
+        val rbsrItemsProvider: (suspend () -> List<com.rumor.mesh.core.sync.RbsrItem>)? = null,
     )
 
     private var config: TransportConfig? = null
@@ -444,6 +450,10 @@ class WifiDirectTransport(
                 if (winner) claimedPeer = peerUserId
                 winner
             },
+            rbsrItemsProvider = cfg.rbsrItemsProvider,
+            // Advertise rbsr-v1 iff we can actually run it — enforced by construction.
+            supportedFeatures = if (cfg.rbsrItemsProvider != null)
+                listOf(GossipSession.RBSR_FEATURE) else GossipSession.LOCAL_SUPPORTED_FEATURES,
         )
         val result = try { session.run() }
         finally { claimedPeer?.let { activePeerSessions.remove(it) } }

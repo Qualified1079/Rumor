@@ -63,6 +63,10 @@ interface MessageDao {
     @Query("SELECT id FROM messages ORDER BY receivedAtMs DESC LIMIT :limit")
     suspend fun knownIds(limit: Int): List<String>
 
+    /** O42 RBSR snapshot: (sentAtMs, id) across the whole store, freshest first. */
+    @Query("SELECT id, sentAtMs FROM messages ORDER BY sentAtMs DESC LIMIT :limit")
+    suspend fun rbsrItems(limit: Int): List<IdAndSentAt>
+
     @Query("UPDATE messages SET isRead = 1 WHERE id = :id")
     suspend fun markRead(id: String)
 
@@ -87,3 +91,6 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun delete(id: String)
 }
+
+/** Projection row for [MessageDao.rbsrItems]. */
+data class IdAndSentAt(val id: String, val sentAtMs: Long)

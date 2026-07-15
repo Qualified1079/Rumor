@@ -52,6 +52,8 @@ private const val MAX_DIRECT_HOPS = DEFAULT_DIRECT_HOPS
  *  dedup seed is wider so our summary reflects everything we hold, not just what's offerable. */
 private const val OFFER_RESEED_LIMIT = 4_000
 private const val DEDUP_RESEED_LIMIT = 50_000
+/** O42: RBSR snapshot cap — matches the store cap (50k, 200k static) order of magnitude. */
+private const val RBSR_SNAPSHOT_LIMIT = 50_000
 
 /**
  * Core protocol logic. No radio code. No transport types.
@@ -605,6 +607,14 @@ class GossipEngine(
     }
     fun knownMessageIds(): Set<String> = duplicateFilter.knownIds()
     val queueDepth: Int get() = scheduler.queueDepth
+
+    /**
+     * O42: whole-store `(sentAtMs, id)` snapshot for RBSR reconciliation.
+     * Handed to the transport as a suspend provider so the (possibly 50k-row)
+     * query only runs when a session's adaptive gate actually selects RBSR.
+     */
+    suspend fun rbsrSnapshot(): List<com.rumor.mesh.core.sync.RbsrItem> =
+        messageStore.rbsrItems(RBSR_SNAPSHOT_LIMIT)
 
     /**
      * O92: rebuild the volatile outbound state from the durable store on mesh

@@ -1,6 +1,7 @@
 package com.rumor.mesh.core.data
 
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.sync.RbsrItem
 import kotlinx.coroutines.flow.Flow
 
 interface MessageRepository {
@@ -24,6 +25,14 @@ interface MessageRepository {
      * everything; seeding it from the store restores an accurate summary.
      */
     suspend fun knownIds(limit: Int): List<String>
+
+    /**
+     * `(sentAtMs, id)` snapshot of everything we hold, for RBSR reconciliation
+     * (O42). Must mirror the dedup summary's semantics — the whole store, not
+     * just offer-eligible content — or the two sync paths would advertise
+     * different knowledge sets.
+     */
+    suspend fun rbsrItems(limit: Int): List<RbsrItem>
 
     fun observeBroadcasts(limit: Int = 200): Flow<List<RumorMessage>>
     fun observeThread(localUserId: String, peerId: String, limit: Int = 500): Flow<List<RumorMessage>>

@@ -153,6 +153,11 @@ class MeshService : Service(), MeshController {
             isPriorityPeer      = { userId -> contactRepo.getById(userId)?.isPriorityPeer == true },
             onExchangeFailed    = gossipEngine::onExchangeFailed,
             isPeerNearby        = { bleDiscovery.peerNearbySignal.value },
+            // O42 go-live: wiring this single provider both advertises rbsr-v1
+            // and supplies the snapshot (transport derives the capability from
+            // its presence). Sessions still run bloom below the adaptive
+            // size gate (RBSR_MIN_SET_SIZE) or against pre-O42 peers.
+            rbsrItemsProvider   = gossipEngine::rbsrSnapshot,
         )
 
         // ── Wire gossip engine output → plugins ──────────────────────────────

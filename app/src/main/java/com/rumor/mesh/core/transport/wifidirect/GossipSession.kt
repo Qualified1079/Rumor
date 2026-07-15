@@ -52,13 +52,16 @@ class GossipSession(
     /** Returns true if this session should proceed; false aborts. Called after HELLO. */
     private val sessionGate: (peerUserId: String, isInbound: Boolean) -> Boolean,
     /**
-     * Optional snapshot of `(sentAtMs, id)` tuples for every message in the local
-     * store. When non-null AND both peers advertise `rbsr-v1` in HELLO, the
-     * summary phase uses Range-Based Set Reconciliation (O42) instead of the
-     * bloom-filter offer/want. Defaulting null keeps the existing bloom path
-     * for builds that haven't wired the storage adapter through yet.
+     * Lazy provider of the `(sentAtMs, id)` snapshot of the whole local store.
+     * When non-null AND both peers advertise `rbsr-v1` AND the adaptive size
+     * gate passes, the summary phase uses Range-Based Set Reconciliation (O42)
+     * instead of the bloom-filter offer/want. Suspend + lazy so the (up to
+     * 50k-row) store query only runs for sessions that actually select RBSR.
+     * Null keeps the bloom path. **Invariant: the transport must advertise
+     * `rbsr-v1` iff this is non-null** — otherwise two honest peers could
+     * agree on RBSR that one of them can't run.
      */
-    private val rbsrItems: List<com.rumor.mesh.core.sync.RbsrItem>? = null,
+    private val rbsrItemsProvider: (suspend () -> List<com.rumor.mesh.core.sync.RbsrItem>)? = null,
     /** Capability flags this session advertises in HELLO. See [LOCAL_SUPPORTED_FEATURES]. */
     private val supportedFeatures: List<String> = LOCAL_SUPPORTED_FEATURES,
 ) {
@@ -92,12 +95,12 @@ class GossipSession(
         /** Range-Based Set Reconciliation capability flag (O42). */
         const val RBSR_FEATURE: String = "rbsr-v1"
         /**
-         * Capability flags this build advertises. Empty for v0.1 production —
-         * RBSR ([RBSR_FEATURE]) is opt-in per session for now via the
-         * `supportedFeatures` constructor parameter, until wire-locked against
-         * the reference impl. Simulator scenarios override this to drive the
-         * RBSR path; production transport leaves it empty so the bloom path
-         * remains canonical.
+         * Baseline capability flags for a session constructed without an RBSR
+         * snapshot provider. [WifiDirectTransport] derives the real value per
+         * session: `rbsr-v1` is advertised **iff** `rbsrItemsProvider` is wired
+         * (O42 go-live) — advertising without the provider would let two honest
+         * peers agree on a method one of them can't run. The empty default
+         * keeps any other construction site on the canonical bloom path.
          */
         val LOCAL_SUPPORTED_FEATURES: List<String> = emptyList()
     }
@@ -216,7 +219,7 @@ class GossipSession(
             // compatibility with v0.1 peers.
             val bothSupportRbsr = supportedFeatures.contains(RBSR_FEATURE) &&
                 hello.supportedFeatures.contains(RBSR_FEATURE)
-            val useRbsr = rbsrItems != null &&
+            val useRbsr = rbsrItemsProvider != null &&
                 com.rumor.mesh.core.sync.shouldUseRbsr(
                     bothSupportRbsr, knownMessageIds.size, hello.knownCount,
                 )
@@ -227,7 +230,7 @@ class GossipSession(
 
             if (useRbsr) {
                 val rbsr = com.rumor.mesh.core.sync.Rbsr(
-                    com.rumor.mesh.core.sync.SortedListRbsrStorage(rbsrItems!!),
+                    com.rumor.mesh.core.sync.SortedListRbsrStorage(rbsrItemsProvider!!()),
                 )
                 val peerHas = HashSet<String>()
                 val peerNeeds = HashSet<String>()

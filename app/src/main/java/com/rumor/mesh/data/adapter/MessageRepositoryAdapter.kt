@@ -2,6 +2,7 @@ package com.rumor.mesh.data.adapter
 
 import com.rumor.mesh.core.data.MessageRepository
 import com.rumor.mesh.core.model.ContentType
+import com.rumor.mesh.core.sync.RbsrItem
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.data.MessageDao
@@ -21,6 +22,8 @@ class MessageRepositoryAdapter(private val dao: MessageDao) : MessageRepository 
     override suspend fun offerable(limit: Int): List<RumorMessage> =
         dao.offerable(limit).map(MessageEntity::toMessage)
     override suspend fun knownIds(limit: Int): List<String> = dao.knownIds(limit)
+    override suspend fun rbsrItems(limit: Int): List<RbsrItem> =
+        dao.rbsrItems(limit).map { RbsrItem(it.sentAtMs, it.id) }
 
     override fun observeBroadcasts(limit: Int): Flow<List<RumorMessage>> =
         dao.observeBroadcasts(limit).map { it.map(MessageEntity::toMessage) }

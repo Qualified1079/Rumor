@@ -140,6 +140,9 @@ class MessageStore(
     /** O92 reseed sources: offer-eligible content, and recent ids for dedup. */
     suspend fun offerable(limit: Int): List<RumorMessage> = messageRepo.offerable(limit)
     suspend fun knownIds(limit: Int): List<String> = messageRepo.knownIds(limit)
+    /** O42 RBSR snapshot — whole-store (sentAtMs, id), mirrors dedup-summary semantics. */
+    suspend fun rbsrItems(limit: Int): List<com.rumor.mesh.core.sync.RbsrItem> =
+        messageRepo.rbsrItems(limit)
 
     /**
      * Public because the engine also creates contacts from completed gossip
