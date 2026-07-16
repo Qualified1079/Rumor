@@ -42,11 +42,11 @@ class SentAtMsLintTest {
      */
     private val ALLOWED = listOf(
         // Field declaration + displayTimeMs computation + docstrings
-        "core/src/commonMain/kotlin/com/rumor/mesh/core/model/Message.kt",
+        "core/src/main/kotlin/com/rumor/mesh/core/model/Message.kt",
         // Compose-time stamps via clock.now() + the RBSR rbsrItems mapping
-        "core/src/commonMain/kotlin/com/rumor/mesh/core/protocol/GossipEngine.kt",
+        "core/src/main/kotlin/com/rumor/mesh/core/protocol/GossipEngine.kt",
         // Ed25519 signable bytes — value is signed so receivers detect tampering
-        "core/src/commonMain/kotlin/com/rumor/mesh/core/protocol/MessageStore.kt",
+        "core/src/main/kotlin/com/rumor/mesh/core/protocol/MessageStore.kt",
         // Room <-> model conversion (mirror of wire field)
         "app/src/main/java/com/rumor/mesh/data/adapter/MessageRepositoryAdapter.kt",
         // Bridge plugins stamping foreign-network timestamps onto bridged traffic
@@ -54,23 +54,27 @@ class SentAtMsLintTest {
         "app/src/main/java/com/rumor/mesh/plugin/meshtastic/MeshtasticBridge.kt",
         // Simulator compose + RBSR ordering key
         "simulator/src/main/kotlin/com/rumor/mesh/simulator/engine/SimTransport.kt",
+        // O92 offerable/knownIds ordering + O42 RbsrItem keys — RBSR/scheduler ordering, not display.
+        "simulator/src/main/kotlin/com/rumor/mesh/simulator/data/InMemoryRepos.kt",
         "simulator/src/main/kotlin/com/rumor/mesh/simulator/engine/MessageGenerator.kt",
         // Room entity column + DAO ordering query (the O64-safe `MIN(sentAtMs, receivedAtMs)`)
         "app/src/main/java/com/rumor/mesh/data/Entities.kt",
         "app/src/main/java/com/rumor/mesh/data/MessageDao.kt",
         // Test fixtures (stamping demo messages, fuzz seed JSON literals)
-        "core/src/jvmTest/kotlin/com/rumor/mesh/core/model/TrafficClassInvariantTest.kt",
-        "core/src/jvmTest/kotlin/com/rumor/mesh/core/fuzz/SeedCorpusTest.kt",
+        "core/src/test/kotlin/com/rumor/mesh/core/model/TrafficClassInvariantTest.kt",
+        // ours (check-online): loopback wire-harness fixtures stamp sentAtMs directly.
+        "core/src/test/kotlin/com/rumor/mesh/core/transport/wifidirect/GossipSessionWireTest.kt",
+        "core/src/test/kotlin/com/rumor/mesh/core/fuzz/SeedCorpusTest.kt",
         // O76 ext-helper test stamps a blank RumorMessage with sentAtMs=0L
-        "core/src/commonTest/kotlin/com/rumor/mesh/core/wire/CompressedPaddedExtTest.kt",
+        "core/src/test/kotlin/com/rumor/mesh/core/wire/CompressedPaddedExtTest.kt",
         // O40 delete-verifier test stamps blank DM RumorMessages with sentAtMs=0L
-        "core/src/commonTest/kotlin/com/rumor/mesh/core/protocol/MessageDeleteVerifierTest.kt",
+        "core/src/test/kotlin/com/rumor/mesh/core/protocol/MessageDeleteVerifierTest.kt",
         // O90 thread+mention ext-helper test stamps a blank RumorMessage with sentAtMs=0L
-        "core/src/commonTest/kotlin/com/rumor/mesh/core/wire/ThreadAndMentionExtTest.kt",
+        "core/src/test/kotlin/com/rumor/mesh/core/wire/ThreadAndMentionExtTest.kt",
         // O79 room routing tag ext-helper test stamps a blank RumorMessage with sentAtMs=0L
-        "core/src/commonTest/kotlin/com/rumor/mesh/core/wire/RoomRoutingTagExtTest.kt",
+        "core/src/test/kotlin/com/rumor/mesh/core/wire/RoomRoutingTagExtTest.kt",
         // This test file itself references the symbol in regex form
-        "core/src/jvmTest/kotlin/com/rumor/mesh/core/model/SentAtMsLintTest.kt",
+        "core/src/test/kotlin/com/rumor/mesh/core/model/SentAtMsLintTest.kt",
     )
 
     @Test

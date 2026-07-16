@@ -25,7 +25,7 @@ import kotlin.test.fail
 class SourceInvariantTest {
 
     private val gossipEngine by lazy {
-        File(findRepoRoot(), "core/src/commonMain/kotlin/com/rumor/mesh/core/protocol/GossipEngine.kt")
+        File(findRepoRoot(), "core/src/main/kotlin/com/rumor/mesh/core/protocol/GossipEngine.kt")
             .also { check(it.isFile) { "GossipEngine.kt not at expected path: $it" } }
             .readText()
     }

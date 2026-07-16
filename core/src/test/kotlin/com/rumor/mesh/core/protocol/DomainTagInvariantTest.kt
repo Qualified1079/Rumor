@@ -63,7 +63,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O79 OPEN room routing tag prefix is rumor-room-route-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/protocol/RoomRoutingTag.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/protocol/RoomRoutingTag.kt",
             tag = "rumor-room-route-v1:",
             purpose = "OPEN room routing tag SHA-256 prefix",
         )
@@ -72,7 +72,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O79 ENCRYPTED room per-message tag prefix is rumor-room-msg-tag-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/protocol/RoomRoutingTag.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/protocol/RoomRoutingTag.kt",
             tag = "rumor-room-msg-tag-v1:",
             purpose = "ENCRYPTED room per-message routing tag HMAC prefix",
         )
@@ -81,7 +81,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O79 routing-key HKDF info is rumor-room-routing-key-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/protocol/RoomRoutingTag.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/protocol/RoomRoutingTag.kt",
             tag = "rumor-room-routing-key-v1",
             purpose = "HKDF info string for per-room routing key derivation",
         )
@@ -90,7 +90,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O79 envelope signable-bytes domain tag is rumor-room-envelope-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/MultiRecipientEnvelope.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/MultiRecipientEnvelope.kt",
             tag = "rumor-room-envelope-v1:",
             purpose = "MultiRecipientEnvelope outer Ed25519 signature scope",
         )
@@ -99,7 +99,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O79 wrap-key HKDF info prefix is rumor-room-wrap-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/protocol/MultiRecipientEnvelopeCodec.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/protocol/MultiRecipientEnvelopeCodec.kt",
             tag = "rumor-room-wrap-v1:",
             purpose = "Per-recipient wrap-key HKDF info prefix",
         )
@@ -108,7 +108,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O53 DM recipient tag prefix is rumor-dm-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/protocol/SealedSenderTag.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/protocol/SealedSenderTag.kt",
             tag = "rumor-dm-v1:",
             purpose = "Sealed-sender DM recipient tag HMAC domain",
         )
@@ -117,7 +117,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O40 message-delete signable-bytes domain tag is rumor-message-delete-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/MessageDelete.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/MessageDelete.kt",
             tag = "rumor-message-delete-v1:",
             purpose = "MESSAGE_DELETE signed-bytes scope",
         )
@@ -126,7 +126,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O67 keyword-filter signable-bytes domain tag is rumor-keyword-filter-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/KeywordFilter.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/KeywordFilter.kt",
             tag = "rumor-keyword-filter-v1:",
             purpose = "KeywordFilterList signed-bytes scope",
         )
@@ -145,7 +145,7 @@ class DomainTagInvariantTest {
     @Test
     fun `RumorMessage signable-bytes domain tag is rumor-msg-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/protocol/MessageStore.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/protocol/MessageStore.kt",
             tag = "rumor-msg-v1:",
             purpose = "Outer Ed25519 signature scope on every RumorMessage. " +
                 "Bumping breaks every existing signature across the network.",
@@ -155,7 +155,7 @@ class DomainTagInvariantTest {
     @Test
     fun `HELLO v1 challenge-bytes domain tag is rumor-hello-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/GossipPacket.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/GossipPacket.kt",
             tag = "rumor-hello-v1:",
             purpose = "HELLO v1 challenge-response signature scope. Binds " +
                 "nonce + protocol-version-negotiation to the proof (TLS 1.3 " +
@@ -166,7 +166,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O31 HELLO v2 challenge-bytes domain tag is rumor-hello-v2`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/GossipPacket.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/GossipPacket.kt",
             tag = "rumor-hello-v2:",
             purpose = "HELLO v2 challenge-response signature scope. Adds " +
                 "recentlyExchangedWith to the signed transcript (route-adv-v1).",
@@ -178,7 +178,7 @@ class DomainTagInvariantTest {
     @Test
     fun `Blocklist signable-bytes domain tag is rumor-blocklist-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/Blocklist.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/Blocklist.kt",
             tag = "rumor-blocklist-v1:",
             purpose = "BLOCKLIST_PUBLISH full-snapshot signature scope.",
         )
@@ -187,7 +187,7 @@ class DomainTagInvariantTest {
     @Test
     fun `BlocklistDiff signable-bytes domain tag is rumor-blocklist-diff-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/Blocklist.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/Blocklist.kt",
             tag = "rumor-blocklist-diff-v1:",
             purpose = "BLOCKLIST_DIFF incremental-update signature scope. " +
                 "Separate domain from the full-snapshot tag so a snapshot " +
@@ -200,7 +200,7 @@ class DomainTagInvariantTest {
     @Test
     fun `G13 bridge-vouched signable-bytes domain tag is rumor-bridge-vouched-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/BridgeVouched.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/BridgeVouched.kt",
             tag = "rumor-bridge-vouched-v1:",
             purpose = "Outer Rumor signature scope on BRIDGE_VOUCHED messages " +
                 "(the bridge's signature certifying foreign-network delivery).",
@@ -212,7 +212,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O38 prekey-publish signable-bytes domain tag is rumor-prekey-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/Prekey.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/Prekey.kt",
             tag = "rumor-prekey-v1:",
             purpose = "PREKEY_PUBLISH signature scope. Binds publisher + key " +
                 "+ validity window so a relay can't extend the window or " +
@@ -225,7 +225,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O79 RoomCreate signable-bytes domain tag is rumor-room-create-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/Room.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/Room.kt",
             tag = "rumor-room-create-v1:",
             purpose = "RoomCreate signature scope. Separate domain from " +
                 "RoomInvite / RoomAction so a sig from one struct can't be " +
@@ -236,7 +236,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O79 RoomInvite signable-bytes domain tag is rumor-room-invite-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/Room.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/Room.kt",
             tag = "rumor-room-invite-v1:",
             purpose = "RoomInvite signature scope. Moderator-signed envelope " +
                 "delivering INVITE/CLOSED-room membership-seed token.",
@@ -246,7 +246,7 @@ class DomainTagInvariantTest {
     @Test
     fun `O79 RoomAction signable-bytes domain tag is rumor-room-action-v1`() {
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/model/Room.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/Room.kt",
             tag = "rumor-room-action-v1:",
             purpose = "RoomAction signature scope. Moderator-signed actions " +
                 "(REMOVE_MESSAGE, KICK_USER, BAN_USER, UNBAN_USER).",
@@ -262,7 +262,7 @@ class DomainTagInvariantTest {
         // strfry and any external NIP-77 implementation. The v1 (Rumor-original)
         // formula is the only one that needs a drift guard here.
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/sync/Rbsr.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/sync/Rbsr.kt",
             tag = "rumor-rbsr-v1:",
             purpose = "RBSR v1 (XOR-reduce-of-SHA-256) per-item domain prefix. " +
                 "Bumping silently desynchronises every two peers running " +
@@ -280,7 +280,7 @@ class DomainTagInvariantTest {
         // contract and a drift would break decryption between any two clients
         // computing the AAD differently.
         assertContainsTag(
-            file = "core/src/commonMain/kotlin/com/rumor/mesh/core/wire/CompressedPaddedExt.kt",
+            file = "core/src/main/kotlin/com/rumor/mesh/core/wire/CompressedPaddedExt.kt",
             tag = "rumor-o76:",
             purpose = "Canonical AAD prefix bound into the AEAD tag, binding " +
                 "the `_ext.cl` originalLength field so a relay can't tamper " +

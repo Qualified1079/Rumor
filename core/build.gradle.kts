@@ -36,6 +36,9 @@ dependencies {
     implementation("commons-codec:commons-codec:1.22.0")
 
     // Testing
+    // kotlin.test — the archimedes-era tests (ported from KMP commonTest) assert
+    // through it; runs on the JUnit5 platform below.
+    testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("io.kotest:kotest-runner-junit5:5.8.0")
