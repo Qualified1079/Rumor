@@ -492,7 +492,90 @@ in §1 — genuinely new findings, not corroborations.
   branches, not just the basic path), and O92's suspend-call-site
   consistency — no issues found.
 
-## §11 — priority order if picking one thing at a time
+## §11 — round 2 (same session, continued): plugin lifecycle races, DeviceQuirks, UI ordering-bypass bugs
+
+Kept auditing after §0-§11 landed. Four more confirmed findings, plus
+several confirmed-clean areas worth recording so they aren't re-audited
+from scratch next time.
+
+- **`PluginRegistry` has the same two lifecycle races the sibling-branch
+  audit found, unfixed here too.** `plugins` is a bare
+  `CopyOnWriteArrayList` with no mutex coordinating `unregister()` against
+  `onMessageReceived`'s `forEach` (`PluginRegistry.kt:88`) — a plugin
+  snapshotted just before being disabled can still get a message delivered
+  after its own `onDetach()` already ran. Separately,
+  `PluginContextImpl.sendMessage` → `GossipEngine.injectFromPlugin` runs
+  on the **engine's** own persistent scope, not the plugin's
+  (`GossipEngine.kt:108,209`) — cancelling the plugin's scope on disable
+  has no effect on an in-flight `sendMessage()` call that already reached
+  the engine, so a "disabled" plugin can still get one more message onto
+  the wire if the timing lines up. Crash isolation itself is fine (every
+  dispatch point is `runCatching`-wrapped, nothing propagates to crash the
+  host) — matches O25's own backlog status, which already lists
+  auto-disable-on-crash and a user-facing notification as the missing
+  pieces; that part isn't new.
+- **`DeviceQuirks.isDeviceMediaTek()`/`isDeviceQualcomm()` are dead code,
+  same root cause and same bug as the sibling branch, independently
+  present here.** Both read `System.getProperty("ro.product.board")`
+  (`DeviceQuirks.kt:150-163`), which never exposes Android build props —
+  needs `Build.BOARD`/`Build.HARDWARE` instead. Manufacturer/model
+  detection (`Build.MANUFACTURER`/`Build.MODEL`) is correct here, so this
+  is narrower than the sibling branch's version of the bug, but the
+  effect is identical: `wifiDirectDualRoleRequired` silently collapses to
+  Samsung-only, and the documented MediaTek GO-negotiation workaround
+  never fires on real MediaTek hardware — the exact "4-year-old budget
+  phone" class O33 targets. Separately: of 15 documented quirk flags, 8
+  have zero call sites anywhere (`mustCheckAdvertiserSupport`,
+  `bleRequiresLocationPermission`, `bleMustUseFilter`,
+  `wifiDirectMustRemoveGroupOnStart`, `wifiDirectMayDisableWifi`,
+  `wifiDirectOperationsNeedQueue`, `wifiDirectRequiresNearbyWifiDevices`,
+  `wifiDirectRequiresLocationPermission`) — in most cases the *behavior*
+  they describe is implemented anyway, just inline at the call site
+  instead of gated through the registry (e.g. `removeGroup()` runs
+  unconditionally, `NEARBY_WIFI_DEVICES` is requested directly in
+  `MainActivity.kt`), so these are vestigial documentation rather than
+  silently-disabled logic — lower severity than the MediaTek/Qualcomm
+  case, but worth pruning or wiring for real the next time this file is
+  touched, so the "centralized registry" README promises actually holds.
+- **`MessagesViewModel` bypasses the DAO's own anti-spoofing thread-list
+  ordering.** `data/MessageDao.observeAllDirect` orders by
+  `MIN(sentAtMs, receivedAtMs) DESC` with an explicit comment that this
+  exists "so a malicious sender can't pin their DM to the top of the list
+  by forging a future sentAtMs." `MessagesViewModel.summarize`
+  (`MessagesViewModel.kt:72,81`) then re-derives both the per-thread
+  latest-message pick and the final list sort using raw `sentAtMs`
+  (`msgs.maxBy { it.sentAtMs }`, `.sortedByDescending { it.lastMessage.
+  sentAtMs }`), discarding the protection the DAO query was specifically
+  written to provide. A peer with a forged future `sentAtMs` still pins
+  its thread to the top of the Messages screen — the exact attack the
+  DAO's own comment says is defended against, reopened one layer up.
+- **Simulator `InMemoryMessageRepository.observeThread`/
+  `observeAllDirect` have no ordering at all** — worse than "wrong key,"
+  genuinely undefined (`ConcurrentHashMap` iteration order, no
+  `sortedBy` anywhere in either method, unlike sibling methods in the
+  same file that do sort). Simulator DM threads/thread-lists render in
+  essentially random order, diverging from the Room-backed app — the
+  four-impl-parity rule violated in a way that would also mask real
+  ordering regressions in scenario tests, since there's no deterministic
+  order to assert against in the first place.
+
+**Confirmed clean, no re-audit needed:** `MessageDao.observeThread`
+correctly uses `sentAtMs ASC, sequenceNumber ASC` (G21 holds); no direct
+unprotected `.sentAtMs` reads in any Compose screen (`ThreadScreen`,
+`FeedScreen`, `MessagesScreen` leaf rendering all correctly go through
+`formatElapsed`, only the ViewModel-level sort above bypasses protection);
+contact rename is genuinely wired end-to-end (`ContactsScreen` → dialog →
+`ContactsViewModel.setDisplayName` → DAO); no `GlobalScope` or ad-hoc
+`CoroutineScope` construction anywhere in `:app/ui` — all 11 ViewModels use
+`viewModelScope` consistently; `staticMode`'s settings toggle is genuinely
+wired (persisted + consumed by 4 real classes) in contrast to two other
+settings-screen elements confirmed dead this round: the duty-cycle scan-
+interval slider (`SettingsViewModel.setScanInterval` writes local state
+only, zero consumers anywhere) and the battery-optimization warning card
+(`showBatteryOptimisationWarning` defaults `false`, never set `true`
+anywhere in the ViewModel — permanently unreachable UI).
+
+## §12 — priority order if picking one thing at a time
 
 1. **§2 — the ingest dedup-before-sig-verify ordering bug.** Live
    censorship primitive, contained fix, highest severity in this
