@@ -13,7 +13,7 @@ import com.rumor.mesh.BuildConfig
  * transfers/chunks, scheduled messages, room subscriptions, keyword filters).
  *
  * `:simulator` parallels this surface with `InMemoryRepos.kt`; both target the
- * same `core/data/*Repository` contracts. When a repository contract gains a
+ * same `core/data/…Repository` contracts. When a repository contract gains a
  * method, both impls move together — see CLAUDE.md §DI wiring.
  *
  * **Versioning policy.** Every entity-shape change bumps [version] and gets a
