@@ -24,8 +24,11 @@ android {
         applicationId = "com.rumor.mesh"
         minSdk = 23
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // Bump BOTH on every flashed change so asymmetric installs across the
+        // test fleet are detectable via `dumpsys package … | grep version`
+        // (G7 also enforces monotonic versionCode at release-tag time).
+        versionCode = 2
+        versionName = "0.2.0-merge"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
