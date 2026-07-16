@@ -74,7 +74,7 @@ class SimNode(
 
     private val duplicateFilter = DuplicateFilter()
     private val messageStore    = MessageStore(messageRepo, contactRepo, duplicateFilter, clock = clock)
-    private val onlineTracker   = OnlineStatusTracker()
+    internal val onlineTracker  = OnlineStatusTracker()
     private val topoTracker     = TopologyTracker(routeRepo)
     internal val breadcrumbs    = BreadcrumbCache(breadcrumbRepo)
     /** O98 MeshView substrate — populated from inbound SELF_PRESENCE beacons. */

@@ -119,7 +119,12 @@ class SimTransport(
                 peerUserId       = nodeA.userId,
                 messagesReceived = deliveredA,
                 ackedByPeer      = emptyList(),
-                peerOnlineUsers  = mapOf(nodeA.userId to System.currentTimeMillis()),
+                // The real transport shares the sender's WHOLE online snapshot
+                // (onlineStatusTracker.currentSnapshot()), which includes everyone
+                // it has seen — the peer itself included. Model that faithfully so
+                // the receiver's self-filter is actually exercised.
+                peerOnlineUsers  = nodeA.onlineTracker.currentSnapshot()
+                    .ifEmpty { mapOf(nodeA.userId to System.currentTimeMillis()) },
                 durationMs       = System.currentTimeMillis() - start,
             ))
         }
@@ -131,7 +136,8 @@ class SimTransport(
                 peerUserId       = nodeB.userId,
                 messagesReceived = deliveredB,
                 ackedByPeer      = emptyList(),
-                peerOnlineUsers  = mapOf(nodeB.userId to System.currentTimeMillis()),
+                peerOnlineUsers  = nodeB.onlineTracker.currentSnapshot()
+                    .ifEmpty { mapOf(nodeB.userId to System.currentTimeMillis()) },
                 durationMs       = System.currentTimeMillis() - start,
             ))
         }

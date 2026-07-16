@@ -71,6 +71,30 @@ class MeshService : Service(), MeshController {
     private val NOTIFICATION_ID = 1
     /** Gossip-round cadence while a Rumor peer is BLE-visible. */
     private val GOSSIP_ROUND_INTERVAL_MS = 15_000L
+    /**
+     * O98: how often the coordinator recomputes the backbone from gossiped
+     * beacons. Fast enough to react to a peer joining within a couple of gossip
+     * rounds; the reconciler's hysteresis absorbs the churn.
+     */
+    private val BACKBONE_RECOMPUTE_INTERVAL_MS = 12_000L
+    /**
+     * O98: SELF_PRESENCE floor even in MOBILE. The ModeEnvelope leaves MOBILE at
+     * `presenceBeaconIntervalMs = null` ("mode-change pulses only" per O30/O57 to
+     * avoid advertising as an anchor), but the backbone planner needs every
+     * participating node visible in the view or its edges get dropped — a MOBILE
+     * phone that never beacons can't be spanned into the backbone at all. The
+     * beacon is a tiny CONTROL message that rides existing gossip rounds (no extra
+     * radio wake), so a conservative floor is cheap; it only sets adjacency
+     * freshness, well under MeshViewTracker's 6-min stale window.
+     */
+    private val MOBILE_BEACON_FLOOR_MS = 90_000L
+
+    /**
+     * O98 Phase 3 coordinator (brain). Built at [startMesh] from the unlocked
+     * identity; drives the backbone plan the transport's isPriorityPeer gate
+     * consults. Null until the mesh is running.
+     */
+    @Volatile private var persistenceCoordinator: com.rumor.mesh.core.routing.PersistenceCoordinator? = null
 
     private val bleDiscovery: BleDiscoveryManager by inject()
     private val wifiDirectTransport: WifiDirectTransport by inject()
@@ -79,6 +103,7 @@ class MeshService : Service(), MeshController {
     private val onlineStatusTracker: OnlineStatusTracker by inject()
     private val topologyTracker: TopologyTracker by inject()
     private val breadcrumbCache: BreadcrumbCache by inject()
+    private val meshViewTracker: com.rumor.mesh.core.routing.MeshViewTracker by inject()
     private val pluginRegistry: PluginRegistry by inject()
     private val pluginCatalog: PluginCatalog by inject()
     private val modeState: ModeState by inject()
@@ -143,6 +168,23 @@ class MeshService : Service(), MeshController {
         // next exchange (otherwise: "0 sent, 0 received" with a full repo).
         scope.launch { gossipEngine.reseedFromStore() }
 
+        // Invariant: a node's own identity is never a contact. An older build
+        // could persist one when a self-authored message echoed back through a
+        // relay and hit MessageStore.ingest → ensureContact(self) (the receive
+        // path now drops self-authored echoes before ingest). Purge any such row
+        // on every start so existing installs self-heal and the invariant holds.
+        scope.launch { contactRepo.delete(identity.userId) }
+
+        // O98 Phase 3: the coordinator turns inbound SELF_PRESENCE beacons (fed
+        // into meshViewTracker by the engine) into a stable backbone plan. Its
+        // backbonePeers set gates which links the transport holds persistent.
+        val coordinator = com.rumor.mesh.core.routing.PersistenceCoordinator(
+            selfId = identity.userId,
+            meshView = meshViewTracker,
+            selfMode = { modeState.mode.value },
+        )
+        persistenceCoordinator = coordinator
+
         // ── Wire transport → gossip engine ───────────────────────────────────
         // TransportConfig is immutable — no mutable vars on WifiDirectTransport.
         val transportConfig = WifiDirectTransport.TransportConfig(
@@ -153,7 +195,13 @@ class MeshService : Service(), MeshController {
             messagesByIds       = gossipEngine::messagesByIds,
             knownIdsProvider    = gossipEngine::knownMessageIds,
             onlineUsersProvider = onlineStatusTracker::currentSnapshot,
-            isPriorityPeer      = { userId -> contactRepo.getById(userId)?.isPriorityPeer == true },
+            // O98: a peer the backbone plan wants held counts as priority, in
+            // addition to any manually-pinned contact. This is the seam the
+            // planner uses to control persistent-link retention.
+            isPriorityPeer      = { userId ->
+                persistenceCoordinator?.backbonePeers?.contains(userId) == true ||
+                    contactRepo.getById(userId)?.isPriorityPeer == true
+            },
             onExchangeFailed    = gossipEngine::onExchangeFailed,
             isPeerNearby        = { bleDiscovery.peerNearbySignal.value },
             // O42 go-live: wiring this single provider both advertises rbsr-v1
@@ -174,6 +222,39 @@ class MeshService : Service(), MeshController {
         scope.launch {
             wifiDirectTransport.exchangeResults.collect { result ->
                 gossipEngine.onExchange(result)
+                // O98: a completed exchange is a realizable backbone edge — record
+                // it so we advertise it in our own beacon and budget our degree.
+                coordinator.onExchanged(result.peerUserId)
+            }
+        }
+
+        // ── O98: SELF_PRESENCE beacon loop ───────────────────────────────────
+        // Advertise our mode + recent-exchange adjacency so every node's view can
+        // span us into the backbone. See MOBILE_BEACON_FLOOR_MS for why MOBILE
+        // still beacons here despite the null envelope interval.
+        scope.launch {
+            while (isActive) {
+                gossipEngine.composeSelfPresence(modeState.mode.value, coordinator.beaconNeighbors())
+                delay(modeState.envelope.presenceBeaconIntervalMs ?: MOBILE_BEACON_FLOOR_MS)
+            }
+        }
+
+        // ── O98: backbone recompute loop ─────────────────────────────────────
+        // Fold the assembled view through planner + reconciler on a fixed tick.
+        // Logs every change so the coordinator-free convergence is observable in
+        // logcat during multi-device testing.
+        scope.launch {
+            while (isActive) {
+                delay(BACKBONE_RECOMPUTE_INTERVAL_MS)
+                val s = coordinator.recompute()
+                if (s.changed || s.backbonePeers.isNotEmpty()) {
+                    RumorLog.i(
+                        TAG,
+                        "O98 backbone: view=${s.viewNodes}n/${s.viewEdges}e planned=${s.plannedLinks} " +
+                            "held=${s.heldLinks} peers=${s.backbonePeers.map { it.take(8) }} " +
+                            "+${s.added.size}/-${s.removed.size}",
+                    )
+                }
             }
         }
 
@@ -204,10 +285,15 @@ class MeshService : Service(), MeshController {
         // Re-arm BLE on toggle so the new scan/advertise duty cycle takes effect
         // immediately. drop(1) skips the initial value emitted on collect.
         scope.launch {
-            modeState.mode.drop(1).collect {
+            modeState.mode.drop(1).collect { newMode ->
                 updateNotification(statusText(wifiDirectTransport.peerCount.value))
                 bleDiscovery.stop()
                 bleDiscovery.start()
+                // O57/G12 mode-change pulse: fire a fresh SELF_PRESENCE immediately
+                // so peers re-weight this node's routing role without waiting for
+                // the next beacon interval (entry AND exit — a MOBILE beacon is the
+                // demotion pulse).
+                gossipEngine.composeSelfPresence(newMode, coordinator.beaconNeighbors())
             }
         }
 
@@ -252,6 +338,7 @@ class MeshService : Service(), MeshController {
         pluginRegistry.unregisterAll()
         bleDiscovery.stop()
         wifiDirectTransport.stop()
+        persistenceCoordinator = null
     }
 
     // ── MeshController (exposed to UI via binder) ─────────────────────────────

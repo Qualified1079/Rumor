@@ -252,7 +252,16 @@ class GossipEngine(
                     contactRepo.setSupportedFeatures(result.peerUserId, json)
                 }
             }
-            onlineStatusTracker.mergeRemoteStatus(result.peerOnlineUsers)
+            // A peer's snapshot includes everyone IT has seen — which normally
+            // includes us (it just exchanged with us). Merging that verbatim marks
+            // our own userId ONLINE in our own tracker, so we render ourselves as
+            // an unnamed contact (no contact row → bare hex userId). Never record
+            // self as a peer.
+            val selfUserId = identityProvider.identity.value?.userId
+            onlineStatusTracker.mergeRemoteStatus(
+                if (selfUserId != null) result.peerOnlineUsers - selfUserId
+                else result.peerOnlineUsers
+            )
 
             canaryMetrics.recordExchange(success = true, rttMs = result.durationMs)
 
@@ -932,6 +941,16 @@ class GossipEngine(
          */
         fromPeerId: String? = null,
     ) {
+        // A message we authored, handed back to us by a peer, is always an echo —
+        // never news. Drop it before ingest so we don't re-store it, re-relay it,
+        // or (for SELF_PRESENCE) record our own presence as if it were a peer's.
+        // ingestOwn already dedups our persisted broadcasts, but ephemeral control
+        // traffic (SELF_PRESENCE) isn't persisted, so this is the single guard that
+        // covers every self-authored type uniformly.
+        if (source == MessageSource.PEER &&
+            rawMsg.senderId == identityProvider.identity.value?.userId
+        ) return
+
         val clamped = clampTtl(rawMsg)
         // Per-transport trust gate. The BRIDGE_UNSIGNED sentinel is honored only
         // for messages handed in by a local bridge plugin — a network peer cannot
