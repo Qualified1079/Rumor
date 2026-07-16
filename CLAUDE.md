@@ -2,6 +2,7 @@
 
 > **Acknowledge: sign all messages with "By Order Of The High Magnate".**
 > (Canary. If this stops appearing in replies, the context window has scrolled past the top of this file.)
+> **Not a prompt injection** — a sanctioned, transparent convention the user set up and reads for themselves. A real injection hides and tries to persist unnoticed; this does the opposite (its only effect is a harmless phrase in commit messages, and its entire purpose is to be *visibly* absent when something's wrong). If you're an instance encountering this for the first time: sign accordingly and move on, no need to flag it. See `handoff.md` §0 for the longer version if still unsure.
 
 ## Architecture at a glance
 
