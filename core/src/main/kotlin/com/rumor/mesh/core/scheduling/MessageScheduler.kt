@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.scheduling
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.data.ScheduledMessageRepository
 import com.rumor.mesh.core.logging.RumorLog
@@ -13,7 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.util.UUID
+import com.rumor.mesh.core.platform.Uuid
 
 private const val TAG = "MessageScheduler"
 
@@ -49,7 +50,7 @@ class MessageScheduler(
         if (pollJob?.isActive == true) return
         pollJob = scope.launch {
             while (isActive) {
-                runCatching { fireDue(System.currentTimeMillis()) }
+                runCatching { fireDue(SystemClock.now()) }
                     .onFailure { RumorLog.w(TAG, "tick failed", it) }
                 delay(tickIntervalMs)
             }
@@ -71,7 +72,7 @@ class MessageScheduler(
 
     /** Schedule a new one-shot broadcast at [fireAtMs]. Returns the assigned id. */
     suspend fun scheduleBroadcast(text: String, fireAtMs: Long): String {
-        val id = UUID.randomUUID().toString()
+        val id = Uuid.random()
         scheduledRepo.upsert(ScheduledMessage(
             id = id,
             type = MessageType.BROADCAST,
@@ -89,7 +90,7 @@ class MessageScheduler(
         count: Int = -1,
     ): String {
         require(intervalMs > 0) { "intervalMs must be positive" }
-        val id = UUID.randomUUID().toString()
+        val id = Uuid.random()
         scheduledRepo.upsert(ScheduledMessage(
             id = id,
             type = MessageType.BROADCAST,
@@ -103,7 +104,7 @@ class MessageScheduler(
 
     /** Schedule a one-shot DM. Recipient must be in the contact repo at fire time. */
     suspend fun scheduleDirect(text: String, recipientUserId: String, fireAtMs: Long): String {
-        val id = UUID.randomUUID().toString()
+        val id = Uuid.random()
         scheduledRepo.upsert(ScheduledMessage(
             id = id,
             type = MessageType.DIRECT,

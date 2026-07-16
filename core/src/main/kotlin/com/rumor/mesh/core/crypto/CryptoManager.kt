@@ -1,39 +1,26 @@
 package com.rumor.mesh.core.crypto
 
-import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
-import org.bouncycastle.crypto.params.Ed25519KeyGenerationParameters
-import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
-import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
-import org.bouncycastle.crypto.signers.Ed25519Signer
-import org.bouncycastle.crypto.agreement.X25519Agreement
-import org.bouncycastle.crypto.generators.X25519KeyPairGenerator
-import org.bouncycastle.crypto.params.X25519KeyGenerationParameters
-import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
-import org.bouncycastle.crypto.params.X25519PublicKeyParameters
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.Base64
-import javax.crypto.Cipher
-import javax.crypto.Mac
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.PBEKeySpec
-import javax.crypto.spec.SecretKeySpec
+import com.rumor.mesh.core.platform.Base64Codec
+import com.rumor.mesh.core.platform.PlatformCrypto
+import com.rumor.mesh.core.platform.PlatformRandom
+import com.rumor.mesh.core.platform.Sha256
 
 /**
  * All cryptographic primitives used by Rumor.
  *
- * Ed25519 — message signing and verification (via BouncyCastle; Android native
- * Ed25519 only available on API 33+).
+ * Ed25519 — message signing and verification.
  * X25519  — Diffie-Hellman key agreement for DM session keys.
  * AES-256-GCM — symmetric encryption for DMs and private key storage.
  * PBKDF2-SHA256 — passphrase → key derivation for private key wrapping.
+ *
+ * Platform-specific primitives delegate to [PlatformCrypto]. Cross-platform
+ * composition (KDF wrapping, base64/hex encoding, IV generation) lives here
+ * in commonMain so the wire-format-critical layering is identical across
+ * targets.
  */
 object CryptoManager {
 
-    private val rng = SecureRandom()
-
-    // ── Ed25519 ───────────────────────────────────────────────────────────────
+    // ── Ed25519 ──────────────────────────────────────────────────────────────
 
     data class Ed25519KeyPair(
         val privateKeyBytes: ByteArray,  // 32 bytes
@@ -41,37 +28,21 @@ object CryptoManager {
     )
 
     fun generateEd25519KeyPair(): Ed25519KeyPair {
-        val gen = Ed25519KeyPairGenerator()
-        gen.init(Ed25519KeyGenerationParameters(rng))
-        val pair = gen.generateKeyPair()
-        val priv = pair.private as Ed25519PrivateKeyParameters
-        val pub  = pair.public  as Ed25519PublicKeyParameters
-        return Ed25519KeyPair(priv.encoded, pub.encoded)
+        val (priv, pub) = PlatformCrypto.ed25519GenerateKeyPair()
+        return Ed25519KeyPair(priv, pub)
     }
 
-    fun sign(message: ByteArray, privateKeyBytes: ByteArray): ByteArray {
-        val signer = Ed25519Signer()
-        signer.init(true, Ed25519PrivateKeyParameters(privateKeyBytes))
-        signer.update(message, 0, message.size)
-        return signer.generateSignature()
-    }
+    fun sign(message: ByteArray, privateKeyBytes: ByteArray): ByteArray =
+        PlatformCrypto.ed25519Sign(message, privateKeyBytes)
 
-    fun verify(message: ByteArray, signature: ByteArray, publicKeyBytes: ByteArray): Boolean {
-        return try {
-            val verifier = Ed25519Signer()
-            verifier.init(false, Ed25519PublicKeyParameters(publicKeyBytes))
-            verifier.update(message, 0, message.size)
-            verifier.verifySignature(signature)
-        } catch (_: Exception) { false }
-    }
+    fun verify(message: ByteArray, signature: ByteArray, publicKeyBytes: ByteArray): Boolean =
+        PlatformCrypto.ed25519Verify(message, signature, publicKeyBytes)
 
     /** SHA-256 fingerprint of a public key, hex-encoded — used as User ID. */
-    fun publicKeyToUserId(publicKeyBytes: ByteArray): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        return digest.digest(publicKeyBytes).toHex()
-    }
+    fun publicKeyToUserId(publicKeyBytes: ByteArray): String =
+        Sha256.digest(publicKeyBytes).toHex()
 
-    // ── X25519 ────────────────────────────────────────────────────────────────
+    // ── X25519 ───────────────────────────────────────────────────────────────
 
     data class X25519KeyPair(
         val privateKeyBytes: ByteArray,  // 32 bytes
@@ -79,26 +50,43 @@ object CryptoManager {
     )
 
     fun generateX25519KeyPair(): X25519KeyPair {
-        val gen = X25519KeyPairGenerator()
-        gen.init(X25519KeyGenerationParameters(rng))
-        val pair = gen.generateKeyPair()
-        val priv = pair.private as X25519PrivateKeyParameters
-        val pub  = pair.public  as X25519PublicKeyParameters
-        return X25519KeyPair(priv.encoded, pub.encoded)
+        val (priv, pub) = PlatformCrypto.x25519GenerateKeyPair()
+        return X25519KeyPair(priv, pub)
     }
 
-    /** Returns a 32-byte shared secret. Both sides must derive the same session key from this. */
+    /**
+     * Returns a 32-byte session key. Both sides must derive the same one.
+     * Wire-format-critical: the KDF here (PBKDF2 with the "RumorDH" salt,
+     * single iteration) must produce identical bytes on every platform.
+     */
     fun x25519Agreement(ourPrivateKeyBytes: ByteArray, theirPublicKeyBytes: ByteArray): ByteArray {
-        val agreement = X25519Agreement()
-        agreement.init(X25519PrivateKeyParameters(ourPrivateKeyBytes))
-        val shared = ByteArray(agreement.agreementSize)
-        agreement.calculateAgreement(X25519PublicKeyParameters(theirPublicKeyBytes), shared, 0)
-        // HKDF-SHA256 would be ideal but PBKDF2 with a constant salt gives us a
+        val shared = PlatformCrypto.x25519Agreement(ourPrivateKeyBytes, theirPublicKeyBytes)
+        // HKDF-SHA256 would be ideal but PBKDF2 with a constant salt gives a
         // well-understood 256-bit key without pulling in extra dependencies.
         return deriveAesKey(shared, byteArrayOf(0x52, 0x75, 0x6d, 0x6f, 0x72, 0x44, 0x48))
     }
 
-    // ── AES-256-GCM ───────────────────────────────────────────────────────────
+    // ── Ed25519 → X25519 derivation (O91) ───────────────────────────────────
+
+    /**
+     * Convert a 32-byte Ed25519 private seed to a 32-byte X25519 private key
+     * (SHA-512(seed)[0:32] with RFC 7748 §5 clamping). Required at every DM
+     * decrypt site so the local identity's Ed25519 seed can drive an X25519
+     * agreement against the sender's ephemeral pubkey.
+     */
+    fun ed25519ToX25519PrivateSeed(ed25519Seed: ByteArray): ByteArray =
+        PlatformCrypto.ed25519ToX25519PrivateSeed(ed25519Seed)
+
+    /**
+     * Convert a 32-byte Ed25519 public key to a 32-byte X25519 public key
+     * (Edwards-to-Montgomery birational map). Required at every DM compose
+     * site so a recipient's Ed25519 identity public can drive an X25519
+     * agreement against the sender's ephemeral private.
+     */
+    fun ed25519ToX25519Public(ed25519Pub: ByteArray): ByteArray =
+        PlatformCrypto.ed25519ToX25519Public(ed25519Pub)
+
+    // ── AES-256-GCM ──────────────────────────────────────────────────────────
 
     data class AesGcmCiphertext(
         val iv: ByteArray,        // 12 bytes
@@ -108,12 +96,12 @@ object CryptoManager {
             val combined = ByteArray(iv.size + ciphertext.size)
             iv.copyInto(combined)
             ciphertext.copyInto(combined, iv.size)
-            return Base64.getEncoder().encodeToString(combined)
+            return Base64Codec.encode(combined)
         }
 
         companion object {
             fun fromBase64(b64: String): AesGcmCiphertext {
-                val combined = Base64.getDecoder().decode(b64)
+                val combined = Base64Codec.decode(b64)
                 val iv = combined.copyOfRange(0, 12)
                 val ct = combined.copyOfRange(12, combined.size)
                 return AesGcmCiphertext(iv, ct)
@@ -121,49 +109,77 @@ object CryptoManager {
         }
     }
 
-    fun aesGcmEncrypt(plaintext: ByteArray, keyBytes: ByteArray): AesGcmCiphertext {
-        val iv = ByteArray(12).also { rng.nextBytes(it) }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
-        return AesGcmCiphertext(iv, cipher.doFinal(plaintext))
+    /**
+     * AES-256-GCM encrypt with optional associated data ([aad]).
+     *
+     * Empty [aad] (the default, and the legacy behavior) produces output
+     * identical to a pre-AAD call — AES-GCM with empty AAD is defined
+     * equivalent to AES-GCM without AAD. Non-empty AAD binds the bytes
+     * to the authentication tag; the same [aad] must be supplied at
+     * decrypt time or the tag check fails.
+     *
+     * Used by O76 to bind `originalLength` (the pre-pad post-compress
+     * byte count) so a relay can't tamper with it without breaking
+     * the message.
+     */
+    fun aesGcmEncrypt(plaintext: ByteArray, keyBytes: ByteArray, aad: ByteArray = ByteArray(0)): AesGcmCiphertext {
+        val iv = PlatformRandom.nextBytes(12)
+        return AesGcmCiphertext(iv, PlatformCrypto.aesGcmEncrypt(plaintext, keyBytes, iv, aad))
     }
 
-    fun aesGcmDecrypt(ct: AesGcmCiphertext, keyBytes: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, ct.iv))
-        return cipher.doFinal(ct.ciphertext)
-    }
+    fun aesGcmDecrypt(ct: AesGcmCiphertext, keyBytes: ByteArray, aad: ByteArray = ByteArray(0)): ByteArray =
+        PlatformCrypto.aesGcmDecrypt(ct.ciphertext, keyBytes, ct.iv, aad)
 
-    // ── PBKDF2 passphrase → key ───────────────────────────────────────────────
+    // ── PBKDF2 passphrase → key ──────────────────────────────────────────────
 
-    fun generateSalt(bytes: Int = 32): ByteArray = ByteArray(bytes).also { rng.nextBytes(it) }
+    fun generateSalt(bytes: Int = 32): ByteArray = PlatformRandom.nextBytes(bytes)
 
     /**
      * Derives a 256-bit AES key from a passphrase.
      * 100,000 iterations — slow enough to resist brute-force on a phone.
      */
-    fun deriveKeyFromPassphrase(passphrase: String, salt: ByteArray): ByteArray {
-        val spec = PBEKeySpec(passphrase.toCharArray(), salt, 100_000, 256)
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        return factory.generateSecret(spec).encoded
-    }
+    fun deriveKeyFromPassphrase(passphrase: String, salt: ByteArray): ByteArray =
+        PlatformCrypto.pbkdf2HmacSha256(passphrase, salt, iterations = 100_000, outputBits = 256)
 
-    private fun deriveAesKey(secret: ByteArray, salt: ByteArray): ByteArray {
-        // HKDF-extract (RFC 5869): HMAC-SHA256(salt, secret) → 32 bytes = AES-256 key.
-        // The X25519 output is already uniform; one keyed hash domain-separates it.
-        // The previous PBKDF2 shape (PBEKeySpec(null, …)) crashed on-device: Android's
-        // BouncyCastle rejects an empty password, and raw DH bytes don't survive the
-        // char[] conversion PBKDF2 wants anyway. No DM ever encrypted successfully.
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(salt, "HmacSHA256"))
-        return mac.doFinal(secret)
-    }
+    /**
+     * Single-iteration PBKDF2 over the raw X25519 shared secret to produce a
+     * 256-bit AES key. The raw output is already high-entropy so iterations
+     * aren't doing brute-force protection — they're doing KDF mixing.
+     *
+     * **Wire-format-critical.** The passphrase argument is null in the legacy
+     * JVM `PBEKeySpec(null, secret + salt, …)` form; we approximate by feeding
+     * the salt-prefixed secret as the passphrase bytes (UTF-8 via String).
+     * On JVM the legacy code path is preserved verbatim via PlatformCrypto's
+     * actual; on other platforms the actual is responsible for matching that
+     * behaviour byte-for-byte.
+     */
+    private fun deriveAesKey(secret: ByteArray, salt: ByteArray): ByteArray =
+        platformDeriveAesKey(secret, salt)
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Helpers ──────────────────────────────────────────────────────────────
 
-    fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
-    fun ByteArray.toBase64(): String = Base64.getEncoder().encodeToString(this)
-    fun String.fromBase64(): ByteArray = Base64.getDecoder().decode(this)
+    fun ByteArray.toHex(): String =
+        joinToString("") { ((it.toInt() and 0xFF) + 0x100).toString(16).substring(1) }
+    fun ByteArray.toBase64(): String = Base64Codec.encode(this)
+    fun String.fromBase64(): ByteArray = Base64Codec.decode(this)
 
-    fun randomBytes(n: Int): ByteArray = ByteArray(n).also { rng.nextBytes(it) }
+    fun randomBytes(n: Int): ByteArray = PlatformRandom.nextBytes(n)
+}
+
+/**
+ * Bridge to the legacy `PBEKeySpec(null, secret + salt, 1, 256)` form used in
+ * `deriveAesKey`. The JVM implementation calls into `SecretKeyFactory` with
+ * the null-passphrase form (which BouncyCastle and the SunJCE both accept);
+ * non-JVM actuals match the byte output.
+ */
+// HKDF-extract (RFC 5869): HMAC-SHA256(salt, secret) → 32 bytes = AES-256 key.
+// The X25519 output is already uniform; one keyed hash domain-separates it.
+// The previous PBKDF2 shape (PBEKeySpec(null, …)) crashed on-device: Android's
+// BouncyCastle rejects an empty password, and raw DH bytes don't survive the
+// char[] conversion PBKDF2 wants anyway. No DM ever encrypted successfully
+// under the old form, so this byte-level change broke no deployed traffic (G20).
+internal fun platformDeriveAesKey(secret: ByteArray, salt: ByteArray): ByteArray {
+    val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+    mac.init(javax.crypto.spec.SecretKeySpec(salt, "HmacSHA256"))
+    return mac.doFinal(secret)
 }

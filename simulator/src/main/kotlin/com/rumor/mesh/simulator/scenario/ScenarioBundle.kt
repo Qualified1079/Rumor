@@ -100,8 +100,14 @@ object ScenarioBundle {
                         errors = listOf("${e::class.simpleName}: ${e.message}"),
                     )
                 }
-            RumorLog.i(TAG, "${scenario.name}: ${if (result.passed) "PASS" else "FAIL"} " +
-                "(${result.assertions.count { it.passed }}/${result.assertions.size} assertions)")
+            val verdict = when {
+                result.passedWithCaveat -> "PASS*"
+                result.passed           -> "PASS"
+                else                    -> "FAIL"
+            }
+            RumorLog.i(TAG, "${scenario.name}: $verdict " +
+                "(${result.assertions.count { it.passed }}/${result.assertions.size} assertions)" +
+                if (result.passedWithCaveat) " — ${result.errors.firstOrNull()}" else "")
             results.add(RunRecord(
                 name = scenario.name,
                 sourceFile = file.name,

@@ -29,6 +29,9 @@ private const val TICK_MS = 100L   // wall-clock ms per sim tick
  * 10× longer, reducing CPU/memory pressure and allowing more nodes to be run.
  */
 class SimWorld(val params: SimParamRegistry) {
+    /** Shared O12 clock — all SimNodes built by this world read from this. */
+    val clock = SimClock(0L)
+
 
     private val mutex  = Mutex()
     private val scope  = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -128,6 +131,7 @@ class SimWorld(val params: SimParamRegistry) {
     suspend fun reset() {
         stop()
         _simTimeMs.value = 0
+        clock.nowMs = 0
         _metrics.value = WorldMetrics()
         clearTrace()
         start()
@@ -158,7 +162,7 @@ class SimWorld(val params: SimParamRegistry) {
         val useBreadcrumbs = params.useBreadcrumbs.value == 1
         val useRbsr = params.useRbsr.value == 1
         val nodeScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-        val newNodes = (0 until count).map { SimNode(it, nodeScope, useBreadcrumbs = useBreadcrumbs) }
+        val newNodes = (0 until count).map { SimNode(it, nodeScope, useBreadcrumbs = useBreadcrumbs, clock = clock) }
         _nodes.value = newNodes
 
         val k = params.connectionsPerNode.value
@@ -196,7 +200,7 @@ class SimWorld(val params: SimParamRegistry) {
      * node's identity — in real Rumor this comes from ContactRepository after
      * a HELLO exchange; the sim has the luxury of direct access.
      */
-    private fun emitDm(src: SimNode, aliveNodes: List<SimNode>, rng: Random) {
+    private fun emitDm(src: SimNode, aliveNodes: List<SimNode>, profile: TrafficProfile, rng: Random) {
         val candidates = aliveNodes.filter { it.index != src.index }
         if (candidates.isEmpty()) return
         val recipient = candidates[rng.nextInt(candidates.size)]
@@ -205,6 +209,7 @@ class SimWorld(val params: SimParamRegistry) {
             recipientId         = recipient.userId,
             recipientPublicKey  = recipientIdentity.publicKeyBytes,
             text                = "sim-dm-${rng.nextInt(100_000)}",
+            hopsToLive          = profile.hopsToLive,
         ) ?: return
         src.recordProcessed()
     }
@@ -256,6 +261,7 @@ class SimWorld(val params: SimParamRegistry) {
     private suspend fun tick() {
         val tickDurationMs = (TICK_MS * params.speedMultiplier.value).toLong()
         _simTimeMs.value += tickDurationMs
+        clock.nowMs = _simTimeMs.value
 
         val nodes = _nodes.value
         val edges = _edges.value
@@ -295,7 +301,7 @@ class SimWorld(val params: SimParamRegistry) {
             val burstMult = if (rng.nextDouble() < profile.burstProbability) profile.burstMultiplier else 1
             for (i in 0 until base * burstMult) {
                 when {
-                    dmFraction > 0 && rng.nextDouble() < dmFraction -> emitDm(node, aliveNodes, rng)
+                    dmFraction > 0 && rng.nextDouble() < dmFraction -> emitDm(node, aliveNodes, profile, rng)
                     largeFraction > 0 && rng.nextDouble() < largeFraction -> emitLarge(node, profile, rng)
                     else -> {
                         val msg = gen.generate(rng)
@@ -314,6 +320,9 @@ class SimWorld(val params: SimParamRegistry) {
         // 2. Run gossip exchanges on each edge (skip if either endpoint is killed).
         var totalMsgs = 0L
         var totalDropped = 0L
+        var rbsrRoundsSum = 0L
+        var rbsrRoundsMax = 0
+        var rbsrExchangeCount = 0
         for (edge in edges) {
             if (edge.nodeA.index in killedNodes || edge.nodeB.index in killedNodes) continue
             // Probabilistic partition.
@@ -327,6 +336,11 @@ class SimWorld(val params: SimParamRegistry) {
             val m = edge.exchange(rng)
             totalMsgs    += m.totalMessages
             totalDropped += m.dropped
+            if (m.rbsrRoundsUsed > 0) {
+                rbsrRoundsSum += m.rbsrRoundsUsed
+                if (m.rbsrRoundsUsed > rbsrRoundsMax) rbsrRoundsMax = m.rbsrRoundsUsed
+                rbsrExchangeCount++
+            }
             if (m.hasTraffic) _edgeActivity[edge.edgeKey] = _simTimeMs.value
         }
 
@@ -341,6 +355,9 @@ class SimWorld(val params: SimParamRegistry) {
             simTimeMs         = _simTimeMs.value,
             heapUsedMb        = (runtime.totalMemory() - runtime.freeMemory()) / 1_048_576,
             heapMaxMb         = runtime.maxMemory() / 1_048_576,
+            rbsrRoundsAvgThisTick = if (rbsrExchangeCount > 0) (rbsrRoundsSum.toDouble() / rbsrExchangeCount) else 0.0,
+            rbsrRoundsMaxThisTick = rbsrRoundsMax,
+            rbsrExchangeCountThisTick = rbsrExchangeCount,
         )
         recordTraceIfDue()
     }
@@ -380,6 +397,12 @@ class SimWorld(val params: SimParamRegistry) {
     }
 }
 
+/**
+ * Aggregate per-tick health snapshot of the entire simulated world.
+ * Consumed by the dashboard for live charts and by assertion runners
+ * that fail-on-bound (e.g. heap stays under X MB during a long-uptime
+ * scenario per CLAUDE.md O77).
+ */
 data class WorldMetrics(
     val nodeCount: Int          = 0,
     val edgeCount: Int          = 0,
@@ -389,8 +412,20 @@ data class WorldMetrics(
     val simTimeMs: Long         = 0,
     val heapUsedMb: Long        = 0,
     val heapMaxMb: Long         = 0,
+    /** O42/G17: average RBSR rounds across edges this tick (0.0 if useRbsr is off). */
+    val rbsrRoundsAvgThisTick: Double = 0.0,
+    /** O42/G17: worst-case RBSR rounds on any edge this tick. Approaching MAX_RBSR_ROUNDS=12 means convergence is failing. */
+    val rbsrRoundsMaxThisTick: Int = 0,
+    /** How many edges actually ran RBSR this tick (denominator for the avg). */
+    val rbsrExchangeCountThisTick: Int = 0,
 )
 
+/**
+ * Snapshot of one edge between two SimNodes — its conditioner
+ * parameters at this moment plus when it was last actively used
+ * for an exchange. Consumed by the dashboard's per-edge view and
+ * by partition/heal scenarios that assert on edge state.
+ */
 data class EdgeSnapshot(
     val from: Int,
     val to: Int,
@@ -400,6 +435,11 @@ data class EdgeSnapshot(
     val lastActiveAtMs: Long = -1L,
 )
 
+/**
+ * Snapshot of one SimNode's per-tick operational counters. Consumed by
+ * the dashboard's per-node view and by scenario assertions on node-
+ * level convergence (e.g. all nodes hold messages X+ after N ticks).
+ */
 data class NodeSnapshot(
     val index: Int,
     val userId: String,

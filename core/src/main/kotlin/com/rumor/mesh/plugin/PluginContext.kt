@@ -25,6 +25,34 @@ interface PluginContext {
     /** Base64-encoded Ed25519 public key of the local node. */
     val localPublicKey: String?
 
+    /**
+     * Sign [bytes] with the local Ed25519 identity key. Returns the
+     * raw 64-byte detached signature.
+     *
+     * **Use case:** prove "this plugin-produced artifact belongs to
+     * userId X" cryptographically — Cashu wallet ownership, Lightning
+     * gateway attestation, generic credential challenges. The
+     * companion app calls this to anchor an artifact to the local
+     * Rumor identity without needing its own keypair.
+     *
+     * **Hard rule (documented contract, not enforced):** plugins may
+     * pass ONLY their own bytes (a challenge nonce the plugin
+     * generated, a wallet token the plugin produced, etc.). Passing
+     * host-controlled bytes (e.g. an inbound message, a transcript
+     * the host built) could let a malicious plugin forge a sig over
+     * arbitrary content. A malicious plugin can already do worse
+     * with the existing API surface (read every inbound message,
+     * compose outbound messages with arbitrary content), so the rule
+     * is "documented contract, not enforced." A future Keystore
+     * migration (O20 / O44) makes the surface this small for a
+     * reason — when signing moves into the TEE, this is the only
+     * Kotlin-side call site that needs to change.
+     *
+     * **Throws** [IllegalStateException] if the local identity is
+     * locked (no keypair available to sign with).
+     */
+    fun signWithLocalKey(bytes: ByteArray): ByteArray
+
     // ── Messaging ─────────────────────────────────────────────────────────────
 
     /**

@@ -1,23 +1,39 @@
 package com.rumor.mesh.core.logging
 
+import com.rumor.mesh.core.SystemClock
+import com.rumor.mesh.core.platform.RwLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.ArrayDeque
-import java.util.concurrent.locks.ReentrantReadWriteLock
-import kotlin.concurrent.read
-import kotlin.concurrent.write
 
+/**
+ * Standard severity levels, ordered from chattiest (VERBOSE) to most
+ * severe (ERROR). Below INFO is gated by `RumorLog.debugMode` — keeps
+ * release builds quiet without requiring scattered `if (BuildConfig
+ * .DEBUG)` checks.
+ */
 enum class LogLevel { VERBOSE, DEBUG, INFO, WARN, ERROR }
 
+/**
+ * One structured log line. Held in the in-memory ring buffer for the
+ * UI log viewer; also fed to the sink at emit time. `timestampMs`
+ * comes from `SystemClock.now()` so simulator scenarios with a
+ * fake clock produce reproducible log timing.
+ */
 data class LogEntry(
     val level: LogLevel,
     val tag: String,
     val message: String,
     val throwable: Throwable? = null,
-    val timestampMs: Long = System.currentTimeMillis(),
+    val timestampMs: Long = SystemClock.now(),
 )
 
+/**
+ * Pluggable output: where each emitted log line goes. The Android
+ * app installs an `AndroidLogSink` (wraps `android.util.Log`); the
+ * simulator and unit tests use [ConsoleSink]; tests that don't want
+ * any output set a null-sink.
+ */
 fun interface LogSink {
     fun emit(level: LogLevel, tag: String, message: String, throwable: Throwable?)
 }
@@ -26,7 +42,7 @@ fun interface LogSink {
 object ConsoleSink : LogSink {
     override fun emit(level: LogLevel, tag: String, message: String, throwable: Throwable?) {
         println("[${level.name}] $tag: $message")
-        throwable?.printStackTrace(System.out)
+        throwable?.let { println(it.stackTraceToString()) }
     }
 }
 
@@ -39,11 +55,11 @@ object ConsoleSink : LogSink {
 object RumorLog {
     private const val RING_CAPACITY = 1000
 
-    @Volatile var debugMode: Boolean = false
-    @Volatile var sink: LogSink = ConsoleSink
+    @kotlin.concurrent.Volatile var debugMode: Boolean = false
+    @kotlin.concurrent.Volatile var sink: LogSink = ConsoleSink
 
-    private val ring = ArrayDeque<LogEntry>(RING_CAPACITY)
-    private val lock = ReentrantReadWriteLock()
+    private val ring = ArrayDeque<LogEntry>()
+    private val lock = RwLock()
 
     private val _entries = MutableStateFlow<List<LogEntry>>(emptyList())
     val entries: StateFlow<List<LogEntry>> = _entries.asStateFlow()
@@ -60,8 +76,8 @@ object RumorLog {
         val entry = LogEntry(level, tag, message, throwable)
 
         lock.write {
-            if (ring.size >= RING_CAPACITY) ring.poll()
-            ring.offer(entry)
+            if (ring.size >= RING_CAPACITY) ring.removeFirstOrNull()
+            ring.addLast(entry)
             _entries.value = ring.toList()
         }
 

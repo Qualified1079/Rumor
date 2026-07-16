@@ -7,6 +7,26 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.rumor.mesh.BuildConfig
 
+/**
+ * The single SQLite database backing the Android app. Owns every persisted
+ * repository the engine reaches (messages, contacts, routes, blocklists,
+ * transfers/chunks, scheduled messages, room subscriptions, keyword filters).
+ *
+ * `:simulator` parallels this surface with `InMemoryRepos.kt`; both target the
+ * same `core/data/*Repository` contracts. When a repository contract gains a
+ * method, both impls move together — see CLAUDE.md §DI wiring.
+ *
+ * **Versioning policy.** Every entity-shape change bumps [version] and gets a
+ * one-line history note above. Debug builds use `fallbackToDestructiveMigration`
+ * so contributors aren't blocked by a hand-written migration during iteration;
+ * **release builds run without it** — a release build hitting a missing
+ * migration crashes rather than silently wiping the user's messages.
+ *
+ * **TypeConverter compatibility.** Enums round-trip through their `.name`
+ * (see [Converters]). Renaming a `MessageType` / `ContentType` / `BlocklistMode`
+ * / `TransferStatus` / `TransferDirection` value breaks `valueOf` on existing
+ * rows — the names are part of the on-disk schema, not just the source.
+ */
 @Database(
     entities = [
         MessageEntity::class,
@@ -18,10 +38,23 @@ import com.rumor.mesh.BuildConfig
         BlocklistEntryEntity::class,
         TransferEntity::class,
         ChunkEntity::class,
+        KeywordFilterListEntity::class,
+        FilterSubscriptionEntity::class,
+        ScheduledMessageEntity::class,
+        RoomSubscriptionEntity::class,
     ],
     // v5: added RouteEntity.failureCount for O3 reliability-aware ranking.
+    // v6: added KeywordFilterListEntity + FilterSubscriptionEntity for O67
+    //     keyword-filter persistence (JSON-blob storage shape — see
+    //     KeywordFilterEntities.kt for rationale).
+    // v7: added ScheduledMessageEntity for O22 / G15 schedule persistence.
+    // v8: added ContactEntity.lastKnownSupportedFeatures (JSON string)
+    //     for O76 capability-negotiation cache.
+    // v9: added RoomSubscriptionEntity for O79 room-subscription
+    //     persistence (flat field shape — routing material only;
+    //     decryption material stays in IdentityManager).
     // Dev uses fallbackToDestructiveMigration so no migration code needed.
-    version = 5,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -35,6 +68,10 @@ abstract class RumorDatabase : RoomDatabase() {
     abstract fun blocklistEntryDao(): BlocklistEntryDao
     abstract fun transferDao(): TransferDao
     abstract fun chunkDao(): ChunkDao
+    abstract fun keywordFilterListDao(): KeywordFilterListDao
+    abstract fun filterSubscriptionDao(): FilterSubscriptionDao
+    abstract fun scheduledMessageDao(): ScheduledMessageDao
+    abstract fun roomSubscriptionDao(): RoomSubscriptionDao
 
     companion object {
         private const val DB_NAME = "rumor.db"

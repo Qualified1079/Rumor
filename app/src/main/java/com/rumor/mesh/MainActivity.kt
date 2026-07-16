@@ -52,6 +52,25 @@ import com.rumor.mesh.ui.theme.RumorTheme
 import org.koin.android.ext.android.inject
 import kotlinx.coroutines.launch
 
+/**
+ * The only Activity in the app. Owns the Compose nav host and the binding to
+ * [MeshService] (the foreground service that actually runs the mesh).
+ *
+ * Lifecycle wiring
+ * ----------------
+ * - **onCreate**: requests runtime permissions, eagerly resolves the Koin
+ *   singletons it needs so a misconfiguration shows a friendly error screen
+ *   instead of an opaque composition-time crash, then sets the Compose root.
+ * - **onStart**: if identity is already unlocked, starts + binds [MeshService]
+ *   as a foreground service. The bind installs the live `MeshController` into
+ *   [MeshControllerHolder] for ViewModels to read.
+ * - **onStop**: unbinds and clears the holder so a backgrounded UI doesn't
+ *   hold a stale controller reference.
+ *
+ * Identity is unlocked separately via the onboarding flow; the service is
+ * deliberately *not* started until then so a locked-identity launch doesn't
+ * spin up the radio.
+ */
 class MainActivity : ComponentActivity() {
 
     private val identityManager: IdentityManager by inject()

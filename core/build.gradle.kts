@@ -22,6 +22,10 @@ dependencies {
     // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
 
+    // Atomics for AtomicCounter (kept from the KMP era; JVM transform is
+    // compile-time, no runtime dep weight concern)
+    implementation("org.jetbrains.kotlinx:atomicfu:0.23.1")
+
     // Crypto — BouncyCastle for Ed25519 / X25519. jdk18on is the maintained
     // line — jdk15on ended at 1.70 (2021) with CVEs fixed only in jdk18on.
     // Same org.bouncycastle packages; keep :app in lockstep.

@@ -52,6 +52,11 @@ class InMemoryMessageRepository : MessageRepository {
     override suspend fun markRelayed(id: String) {
         messages[id]?.let { messages[id] = it.copy(wasRelayed = true) }
     }
+    override suspend fun deleteById(id: String) {
+        messages.remove(id)
+        _flow.value = messages.values.toList()
+    }
+
     override suspend fun offerable(limit: Int): List<RumorMessage> =
         messages.values
             .filter { (it.type.name == "BROADCAST" || it.type.name == "DIRECT") && it.hopsToLive > 0 }
@@ -118,20 +123,8 @@ class InMemoryContactRepository : ContactRepository {
         contacts[userId]?.let { contacts[userId] = it.copy(isPriorityPeer = enabled) }
     }
     override suspend fun getPriorityPeers(): List<Contact> = contacts.values.filter { it.isPriorityPeer }
-
-    override suspend fun rebindIdentity(
-        oldUserId: String,
-        newUserId: String,
-        newPublicKey: String,
-    ): Boolean {
-        val existing = contacts.remove(oldUserId) ?: return false
-        contacts[newUserId] = existing.copy(
-            userId = newUserId,
-            publicKey = newPublicKey,
-            lastSeenMs = System.currentTimeMillis(),
-        )
-        _flow.value = contacts.values.toList()
-        return true
+    override suspend fun setSupportedFeatures(userId: String, jsonEncodedFeatures: String) {
+        contacts[userId]?.let { contacts[userId] = it.copy(lastKnownSupportedFeatures = jsonEncodedFeatures) }
     }
 }
 
@@ -234,6 +227,34 @@ class InMemoryBlocklistEntryRepository : BlocklistEntryRepository {
     override suspend fun getBlockedIdsForPublisher(publisherId: String) = synchronized(lock) {
         entries.filter { it.publisherId == publisherId }.map { it.blockedUserId }
     }
+}
+
+// ── KeywordFilterRepository (O67) ─────────────────────────────────────────────
+
+class InMemoryKeywordFilterListRepository : com.rumor.mesh.core.data.KeywordFilterListRepository {
+    private val lists = ConcurrentHashMap<String, com.rumor.mesh.core.model.KeywordFilterList>()
+    override suspend fun upsert(list: com.rumor.mesh.core.model.KeywordFilterList) { lists[list.publisherId] = list }
+    override suspend fun get(publisherId: String) = lists[publisherId]
+    override suspend fun getAll() = lists.values.toList()
+    override suspend fun delete(publisherId: String) { lists.remove(publisherId) }
+}
+
+class InMemoryFilterSubscriptionRepository : com.rumor.mesh.core.data.FilterSubscriptionRepository {
+    private val subs = ConcurrentHashMap<String, com.rumor.mesh.core.model.FilterSubscription>()
+    override suspend fun upsert(sub: com.rumor.mesh.core.model.FilterSubscription) { subs[sub.listPublisherId] = sub }
+    override suspend fun get(publisherId: String) = subs[publisherId]
+    override suspend fun getAll() = subs.values.toList()
+    override suspend fun delete(publisherId: String) { subs.remove(publisherId) }
+}
+
+class InMemoryRoomSubscriptionRepository : com.rumor.mesh.core.data.RoomSubscriptionRepository {
+    private val subs = ConcurrentHashMap<String, com.rumor.mesh.core.data.RoomSubscription>()
+    override suspend fun upsert(subscription: com.rumor.mesh.core.data.RoomSubscription) {
+        subs[subscription.roomId] = subscription
+    }
+    override suspend fun delete(roomId: String) { subs.remove(roomId) }
+    override suspend fun get(roomId: String) = subs[roomId]
+    override suspend fun getAll() = subs.values.toList()
 }
 
 // ── TransferRepository ────────────────────────────────────────────────────────

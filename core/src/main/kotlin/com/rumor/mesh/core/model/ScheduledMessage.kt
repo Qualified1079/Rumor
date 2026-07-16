@@ -1,5 +1,7 @@
 package com.rumor.mesh.core.model
 
+import com.rumor.mesh.core.SystemClock
+
 /**
  * A user-scheduled message that fires at a specific local clock time and
  * optionally recurs at a fixed interval (O22). Stored locally — never
@@ -36,5 +38,5 @@ data class ScheduledMessage(
     /** Set for DM scheduling; null for broadcast. */
     val recipientUserId: String? = null,
     /** Wall-clock epoch ms when the user created the schedule. Diagnostic only. */
-    val createdAtMs: Long = System.currentTimeMillis(),
+    val createdAtMs: Long = SystemClock.now(),
 )

@@ -103,6 +103,22 @@ class GossipSession(
         /** Range-Based Set Reconciliation capability flag (O42). */
         const val RBSR_FEATURE: String = "rbsr-v1"
         /**
+         * Per-message compression + padding capability flag (O76). Advisory for
+         * v1: every build decodes `_ext.c` payloads unconditionally, so the
+         * compose path needs no per-recipient gate; the flag exists so future
+         * versions can negotiate breaking changes to the codec.
+         */
+        const val COMPRESSION_FEATURE: String = "compression-v1"
+        /**
+         * Route advertisements in HELLO (O31). When BOTH peers advertise this
+         * flag, the HelloProof signs the v2 challenge bytes
+         * ([com.rumor.mesh.core.model.helloChallengeBytesV2]) including the
+         * sender's `recentlyExchangedWith` list. Dormant: stays out of
+         * [LOCAL_SUPPORTED_FEATURES] until the per-handshake negotiation +
+         * recent-exchange tracker + per-contact opt-out are wired through.
+         */
+        const val ROUTE_ADV_FEATURE: String = "route-adv-v1"
+        /**
          * Baseline capability flags for a session constructed without an RBSR
          * snapshot provider. [WifiDirectTransport] derives the real value per
          * session: `rbsr-v1` is advertised **iff** `rbsrItemsProvider` is wired
@@ -110,7 +126,7 @@ class GossipSession(
          * peers agree on a method one of them can't run. The empty default
          * keeps any other construction site on the canonical bloom path.
          */
-        val LOCAL_SUPPORTED_FEATURES: List<String> = emptyList()
+        val LOCAL_SUPPORTED_FEATURES: List<String> = listOf(COMPRESSION_FEATURE)
     }
 
     data class SessionResult(
@@ -130,6 +146,13 @@ class GossipSession(
          * for diversity-aware relay selection.
          */
         val peerOverlapFraction: Float = 0.5f,
+        /**
+         * O76 / capability cache. The peer's HELLO `supportedFeatures` as
+         * received in this session. Caller writes this into the contact record
+         * so future compose paths can gate on per-feature support without a
+         * fresh handshake.
+         */
+        val peerSupportedFeatures: List<String> = emptyList(),
     )
 
     suspend fun run(): SessionResult? = withTimeout(SESSION_TIMEOUT_MS) {
@@ -353,6 +376,7 @@ class GossipSession(
                 durationMs          = duration,
                 bytesTransferred    = bytesTransferred,
                 peerOverlapFraction = overlapFraction,
+                peerSupportedFeatures = hello.supportedFeatures,
             )
         } catch (e: Exception) {
             RumorLog.w(TAG, "Session error", e)

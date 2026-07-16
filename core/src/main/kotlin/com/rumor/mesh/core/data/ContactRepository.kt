@@ -3,6 +3,34 @@ package com.rumor.mesh.core.data
 import com.rumor.mesh.core.model.Contact
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * The persisted directory of known [Contact]s — every userId the
+ * local node has seen and chosen to remember, with the metadata
+ * (Ed25519 publicKey, displayName, verification status, per-contact
+ * UX toggles) that govern UI rendering and per-peer behavior.
+ *
+ * **Identity binding lives here.** `userId = SHA-256(publicKey)` is a
+ * cryptographic identity; this repo holds the (userId, publicKey)
+ * pair recipients verify outbound DMs against and senders verify
+ * inbound signatures against. A contact's `publicKey` is what
+ * [com.rumor.mesh.core.protocol.GossipEngine.composeDirect] consumes
+ * when wrapping a DM body to that recipient.
+ *
+ * **Per-contact behavioural toggles** ([setAutoRelay], [setAlwaysSave],
+ * [setWillingToCache], [setPriorityPeer]) configure how aggressively
+ * the local node carries that contact's traffic. None of these affect
+ * the relay path for someone else's messages (per the "relay never
+ * sees blocklist" rule); they only govern this node's own behavior.
+ *
+ * **Capability cache** ([setSupportedFeatures]) is the substrate for
+ * O76 compression-v1 and future per-peer feature gates: store what
+ * the peer advertised in HELLO so [GossipEngine.composeDirect] can
+ * decide per-recipient whether to use a new wire feature without
+ * triggering an extra handshake.
+ *
+ * Three impls in tree, one contract — same pattern as
+ * [MessageRepository].
+ */
 interface ContactRepository {
     suspend fun upsert(contact: Contact)
     fun observeAll(): Flow<List<Contact>>
@@ -20,11 +48,10 @@ interface ContactRepository {
     suspend fun setPriorityPeer(userId: String, enabled: Boolean)
     suspend fun getPriorityPeers(): List<Contact>
     /**
-     * Atomically rebind a contact's identity to a new userId / publicKey pair
-     * after an [com.rumor.mesh.core.model.MessageType.IDENTITY_ROTATION] has
-     * verified. Preserves all per-contact state (display name, autorelay,
-     * priority-peer, etc.). Returns true if the contact existed and was
-     * rebound; false if no contact with [oldUserId] was on file. See O41.
+     * O76 / capability cache — store the peer's HELLO supportedFeatures
+     * (JSON-encoded list) for this userId. Called by `GossipSession` on
+     * every completed handshake. No-op if the contact isn't on file
+     * (the cache is meaningful only for known contacts).
      */
-    suspend fun rebindIdentity(oldUserId: String, newUserId: String, newPublicKey: String): Boolean
+    suspend fun setSupportedFeatures(userId: String, jsonEncodedFeatures: String)
 }

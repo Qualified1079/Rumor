@@ -46,6 +46,15 @@ When adding a new core class that needs to reach the app:
 
 ## Unimplemented — living backlog
 
+> **MERGE NOTE (2026-07-16):** the `practical-archimedes` branch was merged in
+> (see `docs/ARCHIMEDES_MERGE_CATALOG.md` for every keep/drop decision, incl.
+> the O36 reversal — public Rooms now IN — and the G9/O41 identity-rotation
+> REMOVAL). Rows below are being reconciled with the ported work (sealed-sender
+> O53, prekeys O38, MESSAGE_DELETE O40, ModeProfile O80, keyword filters O67,
+> compression+padding O76, thread/mention O90, Rooms O79, two-tier dedup,
+> sentAtMs-untrusted, HELLO route-ad machinery). Until that pass lands, the
+> catalog + `handoff.md` are more current than individual rows here.
+
 Update this list whenever something is completed or newly identified.
 
 ### Critical bug history

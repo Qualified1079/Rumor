@@ -16,6 +16,22 @@ import kotlinx.serialization.encodeToString
 
 private const val TAG = "BlocklistGossipBridge"
 
+/**
+ * Glue layer between [GossipEngine]'s message flow and the
+ * blocklist publisher/subscriber machinery. Subscribes to
+ * [GossipEngine.incomingMessages] at construction time and routes
+ * BLOCKLIST_PUBLISH / BLOCKLIST_DIFF messages into the subscriber;
+ * exposes [publishSnapshot] / [publishDiff] for the local user to
+ * publish their own list.
+ *
+ * Same pattern as `KeywordFilterGossipBridge` (O67) — sit between
+ * the engine's content flow and a self-contained pub/sub module, so
+ * neither side knows about the other.
+ *
+ * Tag prefixing on `publisherId.take(16)` in logs is deliberate —
+ * full 64-char userIds blow up log lines and we already have the
+ * full prefix in `RumorMessage.senderId` for the relevant message.
+ */
 class BlocklistGossipBridge(
     private val gossipEngine: GossipEngine,
     private val publisher: BlocklistPublisher,

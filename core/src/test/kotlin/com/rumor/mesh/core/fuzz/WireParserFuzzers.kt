@@ -8,7 +8,8 @@ import com.rumor.mesh.core.model.BridgeVouchedPayload
 import com.rumor.mesh.core.model.Chunk
 import com.rumor.mesh.core.model.ChunkRequest
 import com.rumor.mesh.core.model.GossipPacket
-import com.rumor.mesh.core.model.IdentityRotationPayload
+import com.rumor.mesh.core.model.KeywordFilterList
+import com.rumor.mesh.core.model.MessageDeletePayload
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.SelfPresencePayload
 import com.rumor.mesh.core.model.TransferCancel
@@ -97,12 +98,6 @@ class WireParserFuzzers {
     }
 
     @FuzzTest
-    fun fuzzIdentityRotationPayload(data: FuzzedDataProvider) {
-        val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<IdentityRotationPayload>(json) }
-    }
-
-    @FuzzTest
     fun fuzzSelfPresencePayload(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
         runCatching { WireJson.decodeFromString<SelfPresencePayload>(json) }
@@ -112,6 +107,54 @@ class WireParserFuzzers {
     fun fuzzRbsrFrameWire(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
         runCatching { WireJson.decodeFromString<RbsrFrameWire>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzKeywordFilterList(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<KeywordFilterList>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzMessageDeletePayload(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<MessageDeletePayload>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzPrekeyPublish(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.PrekeyPublish>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzRoomCreate(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.RoomCreate>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzRoomInvite(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.RoomInvite>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzRoomAction(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.RoomAction>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzMultiRecipientEnvelope(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.MultiRecipientEnvelope>(json) }
+    }
+
+    @FuzzTest
+    fun fuzzKeyWrap(data: FuzzedDataProvider) {
+        val json = data.consumeRemainingAsString()
+        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.KeyWrap>(json) }
     }
 
     /**

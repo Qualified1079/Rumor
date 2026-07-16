@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.transfer
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.data.ChunkRecord
 import com.rumor.mesh.core.data.ChunkRepository
 import com.rumor.mesh.core.data.TransferRecord
@@ -19,7 +20,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
-import java.util.Base64
+import com.rumor.mesh.core.platform.Base64Codec
+import com.rumor.mesh.core.platform.ConcurrentSet
 import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "TransferSender"
@@ -44,7 +46,7 @@ class TransferSender(
      * and marks the transfer ABANDONED on the next chunk-request that
      * would otherwise have fired.
      */
-    private val cancelledByReceiver = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val cancelledByReceiver = ConcurrentSet<String>()
 
     init {
         scope.launch {
@@ -83,7 +85,7 @@ class TransferSender(
         if (existing.status == com.rumor.mesh.core.model.TransferStatus.IN_PROGRESS) {
             transferRepo.upsert(existing.copy(
                 status = com.rumor.mesh.core.model.TransferStatus.ABANDONED,
-                completedAtMs = System.currentTimeMillis(),
+                completedAtMs = SystemClock.now(),
             ))
         }
     }
@@ -113,7 +115,7 @@ class TransferSender(
                 contentHash = metadata.contentHash,
                 recipientId = recipientId,
                 senderId = identity.userId,
-                startedAtMs = System.currentTimeMillis(),
+                startedAtMs = SystemClock.now(),
                 completedAtMs = null,
                 status = TransferStatus.IN_PROGRESS,
             )
@@ -122,7 +124,7 @@ class TransferSender(
             ChunkRecord(
                 transferId = metadata.transferId,
                 chunkIndex = c.chunkIndex,
-                data = Base64.getDecoder().decode(c.data),
+                data = Base64Codec.decode(c.data),
                 receivedAtMs = null,
                 ackedAtMs = null,
             )
@@ -160,7 +162,7 @@ class TransferSender(
                 transferId = req.transferId,
                 chunkIndex = index,
                 totalChunks = transfer.totalChunks,
-                data = Base64.getEncoder().encodeToString(entity.data),
+                data = Base64Codec.encode(entity.data),
             )
             gossipEngine.composeOutbound(
                 type = MessageType.CHUNK,

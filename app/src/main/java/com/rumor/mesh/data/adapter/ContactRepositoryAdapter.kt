@@ -24,32 +24,16 @@ class ContactRepositoryAdapter(private val dao: ContactDao) : ContactRepository 
     override suspend fun getAutoRelayContacts(): List<Contact> = dao.getAutoRelayContacts().map(ContactEntity::toModel)
     override suspend fun setPriorityPeer(userId: String, enabled: Boolean) = dao.setPriorityPeer(userId, enabled)
     override suspend fun getPriorityPeers(): List<Contact> = dao.getPriorityPeers().map(ContactEntity::toModel)
-
-    override suspend fun rebindIdentity(
-        oldUserId: String,
-        newUserId: String,
-        newPublicKey: String,
-    ): Boolean {
-        val existing = dao.getById(oldUserId)?.toModel() ?: return false
-        // Atomic via delete-then-insert: ContactEntity is keyed on userId.
-        dao.delete(oldUserId)
-        dao.upsert(
-            existing.copy(
-                userId = newUserId,
-                publicKey = newPublicKey,
-                lastSeenMs = System.currentTimeMillis(),
-            ).toEntity()
-        )
-        return true
-    }
+    override suspend fun setSupportedFeatures(userId: String, jsonEncodedFeatures: String) =
+        dao.setSupportedFeatures(userId, jsonEncodedFeatures)
 }
 
 private fun Contact.toEntity() = ContactEntity(
     userId, publicKey, displayName, isVerified, autoRelay, alwaysSave, willingToCache, firstSeenMs, lastSeenMs,
-    isPriorityPeer,
+    isPriorityPeer, lastKnownSupportedFeatures,
 )
 
 private fun ContactEntity.toModel() = Contact(
     userId, publicKey, displayName, isVerified, autoRelay, alwaysSave, willingToCache, firstSeenMs, lastSeenMs,
-    isPriorityPeer,
+    isPriorityPeer, lastKnownSupportedFeatures,
 )

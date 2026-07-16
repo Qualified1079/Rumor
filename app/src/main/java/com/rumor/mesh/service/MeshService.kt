@@ -87,6 +87,7 @@ class MeshService : Service(), MeshController {
     // Injected for side effect — its constructor subscribes to incoming gossip.
     @Suppress("unused")
     private val transferAssembler: TransferAssembler by inject()
+    private val messageScheduler: com.rumor.mesh.core.scheduling.MessageScheduler by inject()
     @Suppress("unused")
     private val blocklistGossipBridge: BlocklistGossipBridge by inject()
 
@@ -236,11 +237,17 @@ class MeshService : Service(), MeshController {
         bleDiscovery.start()
         wifiDirectTransport.start(transportConfig)
 
+        // O22 / G15: kick off the scheduled-message poll loop. Fires
+        // due schedules through composeBroadcast / composeDirect on its
+        // own tick.
+        messageScheduler.start()
+
         updateNotification("Mesh active")
         RumorLog.i(TAG, "Mesh started for ${identity.userId.take(16)}…")
     }
 
     private fun stopMesh() {
+        messageScheduler.stop()
         pluginRegistry.unregisterAll()
         bleDiscovery.stop()
         wifiDirectTransport.stop()

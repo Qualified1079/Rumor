@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
-import com.rumor.mesh.core.crypto.Ed25519ToX25519
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.identity.LocalIdentity
 import com.rumor.mesh.core.model.MessageType
@@ -12,6 +11,11 @@ import com.rumor.mesh.core.model.PeerPresence
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.MessageStore
 import com.rumor.mesh.core.routing.OnlineStatusTracker
+import com.rumor.mesh.core.wire.CompressedPaddedCodec
+import com.rumor.mesh.core.wire.PaddingBuckets
+import com.rumor.mesh.core.wire.compressionAad
+import com.rumor.mesh.core.wire.compressionOriginalLength
+import com.rumor.mesh.core.wire.isCompressed
 import com.rumor.mesh.data.ContactDao
 import com.rumor.mesh.data.ContactEntity
 import com.rumor.mesh.service.MeshControllerHolder
@@ -111,12 +115,12 @@ class ThreadViewModel(
 
     private fun RumorMessage.toDisplay(identity: LocalIdentity): DisplayMessage {
         val isFromMe = senderId == identity.userId
-        val encrypted = encryptedPayload
+        val ct = encryptedPayload
         val body = when {
             type == MessageType.TRANSFER_METADATA -> "[transfer]"
-            encrypted == null -> payload?.content ?: ""
+            ct == null -> payload?.content ?: ""
             isFromMe -> controllerHolder.controller().sentPlaintextFor(id) ?: "[sent]"
-            else -> decryptPayload(encrypted, identity.privateKeyBytes)
+            else -> decryptPayload(this, ct, identity.privateKeyBytes)
         }
         return DisplayMessage(raw = this, body = body, isFromMe = isFromMe)
     }
@@ -124,22 +128,49 @@ class ThreadViewModel(
     /**
      * Wire format: "{ephemeralPubKeyBase64}.{ivAndCiphertextBase64}"
      * Shared secret = X25519(localPrivKey, ephemeralPub).
+     *
+     * O76 path: when `_ext.c = true`, the plaintext bytes coming out of
+     * AES-GCM are a padded deflate stream — unpad with originalLength
+     * (recovered from `_ext.cl`, integrity-bound via AAD) then inflate.
+     * The AAD must be `compressionAad(originalLength)` or the GCM tag
+     * check fails.
      */
-    private fun decryptPayload(encryptedPayload: String, localPrivKey: ByteArray): String =
+    private fun decryptPayload(msg: RumorMessage, encryptedPayload: String, localPrivKey: ByteArray): String =
         runCatching {
             val dotIdx = encryptedPayload.indexOf('.')
             require(dotIdx > 0) { "malformed payload" }
             val ephemeralPub = encryptedPayload.substring(0, dotIdx).fromBase64()
-            // Local identity is an Ed25519 seed; derive the X25519 scalar (O91) and
-            // zero it after use — it's a long-term-key derivative, unlike the
-            // per-message ephemeral on the compose side.
-            val xPriv = Ed25519ToX25519.ed25519PrivToX25519Priv(localPrivKey)
+            // O91: localPrivKey is the Ed25519 identity seed; derive the X25519
+            // private (SHA-512(seed)[0:32], RFC 7748 clamped) before DH. Mirrors
+            // the conversion in GossipEngine.composeDirect on the sender's
+            // recipientPublicKey — both sides MUST apply the matching map or
+            // the agreement secrets disagree (per Ed25519AsX25519RoundtripTest).
+            val localX25519Priv = CryptoManager.ed25519ToX25519PrivateSeed(localPrivKey)
             val sharedKey = try {
-                CryptoManager.x25519Agreement(xPriv, ephemeralPub)
+                CryptoManager.x25519Agreement(localX25519Priv, ephemeralPub)
             } finally {
-                xPriv.fill(0)
+                // The derived X25519 private is as sensitive as the seed it came from;
+                // zero it as soon as the agreement is done with it.
+                localX25519Priv.fill(0)
             }
-            val ct = CryptoManager.AesGcmCiphertext.fromBase64(encryptedPayload.substring(dotIdx + 1))
-            CryptoManager.aesGcmDecrypt(ct, sharedKey).toString(Charsets.UTF_8)
+            try {
+                val ct = CryptoManager.AesGcmCiphertext.fromBase64(encryptedPayload.substring(dotIdx + 1))
+                val aad = if (msg.isCompressed) compressionAad(msg.compressionOriginalLength) else ByteArray(0)
+                val decrypted = CryptoManager.aesGcmDecrypt(ct, sharedKey, aad)
+                if (msg.isCompressed) {
+                    val inflated = CompressedPaddedCodec.decodeFromWire(
+                        bytes = decrypted,
+                        originalLength = msg.compressionOriginalLength,
+                        maxOutputBytes = PaddingBuckets.MAX_SINGLE_MESSAGE,
+                    ) ?: return "[decompression failed]"
+                    inflated.decodeToString()
+                } else {
+                    decrypted.toString(Charsets.UTF_8)
+                }
+            } finally {
+                // O39: zero the derived AES key on the way out. localPrivKey is the
+                // long-term static — caller owns its lifecycle; we don't touch it.
+                sharedKey.fill(0)
+            }
         }.getOrElse { "[decryption failed]" }
 }

@@ -1,6 +1,6 @@
 package com.rumor.mesh.core.sync
 
-import java.security.MessageDigest
+import com.rumor.mesh.core.platform.Sha256
 
 /**
  * Range-Based Set Reconciliation (O42).
@@ -261,11 +261,9 @@ class Rbsr(
          * fingerprints for equality, so the constant is immaterial.
          */
         fun fingerprint(items: List<RbsrItem>): ByteArray {
-            val md = MessageDigest.getInstance("SHA-256")
             val sum = ByteArray(32)
             for (item in items) {
-                md.reset()
-                val hash = md.digest("rumor-rbsr-v1:${item.timestamp}:${item.id}".toByteArray(Charsets.UTF_8))
+                val hash = Sha256.digest("rumor-rbsr-v1:${item.timestamp}:${item.id}".toByteArray(Charsets.UTF_8))
                 var carry = 0
                 for (i in 31 downTo 0) {
                     val s = (sum[i].toInt() and 0xFF) + (hash[i].toInt() and 0xFF) + carry
@@ -273,13 +271,9 @@ class Rbsr(
                     carry = s ushr 8   // final carry out of byte 0 is dropped → mod 2^256
                 }
             }
-            md.reset()
-            md.update("rumor-rbsr-fp-v1:".toByteArray(Charsets.UTF_8))
-            md.update(sum)
             val count = items.size.toLong()
             val countBytes = ByteArray(8) { i -> (count ushr (8 * (7 - i))).toByte() }
-            md.update(countBytes)
-            return md.digest()
+            return Sha256.digest("rumor-rbsr-fp-v1:".toByteArray(Charsets.UTF_8) + sum + countBytes)
         }
     }
 }

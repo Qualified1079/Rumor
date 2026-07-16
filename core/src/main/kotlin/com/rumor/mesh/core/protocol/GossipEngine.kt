@@ -4,12 +4,9 @@ import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
-import com.rumor.mesh.core.crypto.Ed25519ToX25519
-import com.rumor.mesh.core.model.IdentityRotationPayload
 import com.rumor.mesh.core.model.BridgeVouchedPayload
 import com.rumor.mesh.core.model.SelfPresencePayload
 import com.rumor.mesh.core.model.UserMode
-import com.rumor.mesh.core.model.identityRotationSignableBytes
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.identity.IdentityProvider
 import com.rumor.mesh.core.identity.LocalIdentity
@@ -19,8 +16,10 @@ import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.MAX_TOTAL_HOPS
+import com.rumor.mesh.core.model.MultiRecipientEnvelope
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.TrustLevel
+import com.rumor.mesh.core.platform.Base64Codec
 import com.rumor.mesh.core.model.floodedHops
 import com.rumor.mesh.core.model.routedHops
 import com.rumor.mesh.core.model.withTtlSplit
@@ -38,10 +37,16 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
+import com.rumor.mesh.core.platform.Uuid
+import com.rumor.mesh.core.platform.ConcurrentMap
+import com.rumor.mesh.core.platform.AtomicCounter
 import com.rumor.mesh.core.wire.WireJson
+import com.rumor.mesh.core.wire.withCompressionMetadata
+import com.rumor.mesh.core.wire.withMentions
+import com.rumor.mesh.core.wire.withReplyTo
+import com.rumor.mesh.core.wire.roomRoutingTag
+import com.rumor.mesh.core.wire.withRoomRoutingTag
+import com.rumor.mesh.core.wire.withSealedSenderTag
 
 private const val TAG = "GossipEngine"
 private const val DEFAULT_BROADCAST_HOPS = 7
@@ -56,7 +61,6 @@ private const val DEDUP_RESEED_LIMIT = 50_000
 private const val RBSR_SNAPSHOT_LIMIT = 50_000
 /** Deeper O92: per-exchange ceiling on fetch-by-id so a hostile Request can't scan the store. */
 private const val MAX_BY_ID_FETCH = 500
-
 /**
  * Core protocol logic. No radio code. No transport types.
  *
@@ -115,17 +119,65 @@ class GossipEngine(
      */
     private val relayBatchMinWindowMs: Long = RelayBatcher.MIN_WINDOW_MS,
     private val relayBatchSpreadMs: Long = RelayBatcher.SPREAD_MS,
+    /** O12: injectable clock for deterministic replay. Defaults to wall-clock. */
+    private val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
+    /**
+     * O79 — optional subscription provider for ROOM_MESSAGE receive
+     * dispatch. When non-null, the engine consults this on every
+     * inbound ROOM_MESSAGE: the returned lists feed
+     * [com.rumor.mesh.core.protocol.RoomTagMatcher] for tag → roomId
+     * resolution, and on match the engine attempts
+     * [com.rumor.mesh.core.protocol.MultiRecipientEnvelopeCodec.decrypt]
+     * (for ENCRYPTED rooms) or pass-through to inbox (for OPEN).
+     *
+     * Null disables room-message receive dispatch — relay still
+     * happens (rooms are broadcast-tier traffic and propagate
+     * regardless of local subscription), the local inbox just won't
+     * see anything from rooms this node is in. Useful for nodes that
+     * are purely relay infrastructure with no local UI to display
+     * room messages.
+     *
+     * The provider returns a snapshot — caller may freely cache and
+     * refresh on subscription mutation. The receive path is itself
+     * synchronous in the dispatch step (matcher + decode); only the
+     * tag computation is meaningful CPU.
+     */
+    private val roomSubscriptionProvider: RoomSubscriptionProvider? = null,
 ) {
-    private val sequenceCounter = AtomicLong(System.currentTimeMillis())
+    /** O79 receive-side subscription snapshot consumed by ROOM_MESSAGE dispatch. */
+    interface RoomSubscriptionProvider {
+        /** OPEN-mode roomIds the local user is subscribed to. */
+        fun openRoomIds(): List<String>
+        /** ENCRYPTED-mode subscriptions with their routing keys. */
+        fun encryptedRoomSubscriptions(): List<RoomTagMatcher.EncryptedRoomSubscription>
+        /**
+         * The local user's X25519 static private key for ENCRYPTED-room
+         * decryption. Returning null means decryption is not possible
+         * (identity locked, or this engine instance doesn't support
+         * receive-side room decryption). On null, ENCRYPTED room
+         * messages still match for routing purposes but the engine
+         * skips the decrypt step.
+         *
+         * **Implementations should return a FRESH buffer each call** —
+         * the engine zeroes the returned bytes in a finally block after
+         * decryption to satisfy the O39 sender/receiver-FS contract.
+         * Returning a long-lived shared buffer would let the engine
+         * scribble over the long-term key. Per O91 the natural
+         * implementation derives the X25519 private from the Ed25519
+         * seed (SHA-512(seed)[0:32] with RFC 7748 clamping) on each
+         * call, which is cheap and produces a fresh buffer by
+         * construction.
+         */
+        fun localX25519StaticPrivate(): ByteArray?
+    }
+    private val sequenceCounter = AtomicCounter(clock.now())
 
     /**
      * Plaintext for outbound DMs keyed by message ID. The ephemeral X25519 private
      * key is discarded after encryption so the sender cannot re-derive the text.
-     * Bounded to 500 entries; oldest are evicted by insertion order via LinkedHashMap.
+     * Bounded to 500 entries; oldest are evicted by insertion order.
      */
-    private val sentDmPlaintext: MutableMap<String, String> = object : LinkedHashMap<String, String>(64, 0.75f, false) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 500
-    }.let { java.util.Collections.synchronizedMap(it) }
+    private val sentDmPlaintext = com.rumor.mesh.core.platform.BoundedFifoMap<String, String>(500)
 
     fun sentPlaintextFor(messageId: String): String? = sentDmPlaintext[messageId]
 
@@ -146,7 +198,7 @@ class GossipEngine(
      * bridge plugin. See CLAUDE.md A4 — proper handling needs a re-verification
      * UI flow; until then we fail closed.
      */
-    private val bridgedSenderPins = ConcurrentHashMap<String, ByteArray>()
+    private val bridgedSenderPins = ConcurrentMap<String, ByteArray>()
 
     /** Relayed messages are buffered here before being committed to the scheduler. */
     private val relayBatcher = RelayBatcher(
@@ -177,6 +229,19 @@ class GossipEngine(
                     overlapFraction  = result.peerOverlapFraction,
                 )
                 onlineStatusTracker.recordDirectContact(result.peerUserId)
+                // O76 capability cache — store the peer's advertised features
+                // for use by future compose-side feature gating. JSON-encoded
+                // list; setSupportedFeatures is a no-op if the contact isn't
+                // on file yet.
+                if (result.source == ExchangeSource.WIFI_DIRECT) {
+                    val json = WireJson.encodeToString(
+                        kotlinx.serialization.builtins.ListSerializer(
+                            kotlinx.serialization.serializer<String>()
+                        ),
+                        result.peerSupportedFeatures,
+                    )
+                    contactRepo.setSupportedFeatures(result.peerUserId, json)
+                }
             }
             onlineStatusTracker.mergeRemoteStatus(result.peerOnlineUsers)
 
@@ -187,7 +252,7 @@ class GossipEngine(
             val autoRelayIds = contactRepo.getAutoRelayContacts().map { it.userId }.toSet()
 
             for (msg in result.messagesReceived) {
-                val adjusted = msg.copy(receivedAtMs = System.currentTimeMillis())
+                val adjusted = msg.copy(receivedAtMs = clock.now())
                 processIncoming(adjusted, MessageSource.PEER, autoRelayIds, fromPeerId = result.peerUserId)
             }
         }
@@ -209,7 +274,7 @@ class GossipEngine(
     fun injectFromPlugin(message: RumorMessage, sourcePluginId: String) {
         scope.launch {
             RumorLog.d(TAG, "Injecting from plugin $sourcePluginId: ${message.id.take(8)}…")
-            val adjusted = message.copy(receivedAtMs = System.currentTimeMillis())
+            val adjusted = message.copy(receivedAtMs = clock.now())
             processIncoming(adjusted, MessageSource.LOCAL_BRIDGE, emptySet())
         }
     }
@@ -266,11 +331,11 @@ class GossipEngine(
         }
         val encPayload = "${envelope.envelopeId}:${ciphertext.toBase64()}"
         val msg = RumorMessage(
-            id               = UUID.randomUUID().toString().replace("-", ""),
+            id               = Uuid.randomHex32(),
             senderId         = senderUserId,
             senderPublicKey  = senderPubKey.toBase64(),
-            sequenceNumber   = System.currentTimeMillis(),
-            sentAtMs         = System.currentTimeMillis(),
+            sequenceNumber   = clock.now(),
+            sentAtMs         = clock.now(),
             type             = MessageType.DIRECT,
             hopsToLive              = 1,  // BRIDGED trust prevents relay; hopsToLive=1 is belt-and-suspenders
             encryptedPayload = encPayload,
@@ -285,47 +350,134 @@ class GossipEngine(
 
     // ── Compose ───────────────────────────────────────────────────────────────
 
-    fun composeBroadcast(text: String): RumorMessage? {
+    /**
+     * @param replyTo Optional parent messageId for thread reconstruction
+     *   (O90). Carried in `_ext.replyTo`; unsigned (local-display only).
+     * @param mentions Optional userIds explicitly @-mentioned by the
+     *   sender (O90). Carried in `_ext.mentions`; unsigned (UI uses for
+     *   notification feeds + cross-room mention aggregators).
+     */
+    fun composeBroadcast(
+        text: String,
+        replyTo: String? = null,
+        mentions: List<String> = emptyList(),
+    ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
-        val msg = buildMessage(
+        val base = buildMessage(
             identity = identity,
             type = MessageType.BROADCAST,
             hopsToLive = DEFAULT_BROADCAST_HOPS,
             payload = MessagePayload(ContentType.TEXT, text),
         )
+        val msg = base.applyThreadAndMentionExt(replyTo, mentions)
         enqueueImmediate(msg)
         scope.launch { messageStore.ingestOwn(msg) }
         return msg
     }
 
-    fun composeDirect(recipientId: String, recipientPublicKey: ByteArray, text: String): RumorMessage? {
+    private fun RumorMessage.applyThreadAndMentionExt(
+        replyTo: String?,
+        mentions: List<String>,
+    ): RumorMessage {
+        var result = this
+        if (replyTo != null) result = result.withReplyTo(replyTo)
+        if (mentions.isNotEmpty()) result = result.withMentions(mentions)
+        return result
+    }
+
+    /**
+     * @param replyTo Optional parent messageId for thread reconstruction
+     *   (O90). Carried in `_ext.replyTo`; unsigned (local-display only).
+     * @param mentions Optional userIds explicitly @-mentioned by the
+     *   sender (O90). Carried in `_ext.mentions`; unsigned.
+     */
+    fun composeDirect(
+        recipientId: String,
+        recipientPublicKey: ByteArray,
+        text: String,
+        replyTo: String? = null,
+        mentions: List<String> = emptyList(),
+        hopsToLive: Int? = null,
+    ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
         val envelope = dmEnvelopeRegistry.forRecipient(recipientId)
         val encryptedPayload: String
         val rawCiphertext: ByteArray?
+        // O76 — set only on the native-envelope path when compression succeeded.
+        var compressionMeta: Pair<Int, Int>? = null
         if (envelope != null) {
             val ct = envelope.encrypt(recipientId, recipientPublicKey, text.toByteArray(Charsets.UTF_8))
             encryptedPayload = "${envelope.envelopeId}:${ct.toBase64()}"
             rawCiphertext = ct
         } else {
+            // O76 compose-side flip: compress + pad TEXT plaintext, AEAD with
+            // compressionAad as associated data so a relay cannot tamper with
+            // originalLength. compression-v1 is in LOCAL_SUPPORTED_FEATURES so
+            // every Rumor build can decode; no per-recipient gate needed for v1.
+            val plaintextBytes = text.toByteArray(Charsets.UTF_8)
+            val encoded = com.rumor.mesh.core.wire.CompressedPaddedCodec.encodeForWire(plaintextBytes)
             val ephemeral = CryptoManager.generateX25519KeyPair()
-            // Contacts carry Ed25519 identity keys; X25519 DH needs the Montgomery
-            // form (O91). Feeding Edwards bytes straight in "works" but derives a
-            // secret the recipient can never match.
-            val recipientX25519 = Ed25519ToX25519.ed25519PubToX25519Pub(recipientPublicKey)
-            val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientX25519)
-            val ct = CryptoManager.aesGcmEncrypt(text.toByteArray(Charsets.UTF_8), sharedKey)
-            encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
+            // O91: recipientPublicKey is an Ed25519 identity pubkey; convert to
+            // X25519 via the birational map before DH. Without this, the agreement
+            // silently produces a wrong-but-stable secret on the sender side and a
+            // different wrong-but-stable secret on the receiver side — pinned by
+            // Ed25519AsX25519RoundtripTest. The matching conversion lives in
+            // ThreadViewModel.decryptPayload (Ed25519 seed → X25519 priv).
+            val recipientX25519Pub = CryptoManager.ed25519ToX25519Public(recipientPublicKey)
+            val sharedKey = CryptoManager.x25519Agreement(ephemeral.privateKeyBytes, recipientX25519Pub)
+            if (encoded != null) {
+                val aad = com.rumor.mesh.core.wire.compressionAad(encoded.originalLength)
+                val ct = CryptoManager.aesGcmEncrypt(encoded.bytes, sharedKey, aad)
+                encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
+                compressionMeta = Pair(encoded.bucketIndex, encoded.originalLength)
+            } else {
+                // Plaintext exceeded MAX_SINGLE_MESSAGE post-compress; fall back to
+                // uncompressed-and-unpadded path. Chunker fallback for >64 KB
+                // compressed text is the open follow-up.
+                val ct = CryptoManager.aesGcmEncrypt(plaintextBytes, sharedKey)
+                encryptedPayload = ephemeral.publicKeyBytes.toBase64() + "." + ct.toBase64()
+                compressionMeta = null
+            }
             rawCiphertext = null
+            // O39 sender-side FS: actively zero the ephemeral private and the derived
+            // AES key before they wait for GC. Bytes that live in the heap until GC
+            // remain readable by a process-memory dump up to that point; zero-fill
+            // makes the FS-after-send guarantee a property of the code, not luck.
+            ephemeral.privateKeyBytes.fill(0)
+            sharedKey.fill(0)
         }
-        val msg = buildMessage(
+        val baseMsg = buildMessage(
             identity = identity,
             type = MessageType.DIRECT,
-            hopsToLive = DEFAULT_DIRECT_HOPS,
+            hopsToLive = (hopsToLive ?: DEFAULT_DIRECT_HOPS).coerceIn(1, MAX_DIRECT_HOPS),
             encryptedPayload = encryptedPayload,
             recipientId = recipientId,
         )
-        sentDmPlaintext[msg.id] = text
+        val withMeta = (compressionMeta?.let { (bucket, origLen) ->
+            baseMsg.withCompressionMetadata(bucket, origLen)
+        } ?: baseMsg).applyThreadAndMentionExt(replyTo, mentions)
+        // O53 sealed-sender: stamp _ext.t with HMAC(perContactKey, "rumor-dm-v1:" || id)
+        // alongside the existing plaintext recipientId (coexistence phase). Recipient
+        // can pre-match the tag against per-contact keys without learning recipientId
+        // from the wire once the plaintext field is dropped. _ext is not in
+        // signableBytes, so the outer Ed25519 sig stays valid. Skipped for bridged DMs
+        // — recipientPublicKey is a foreign-network key, not Rumor Ed25519, so the
+        // Ed25519→X25519 derivation isn't applicable.
+        val msg = if (envelope == null) {
+            val tagKey = SealedSenderKey.derive(
+                myUserId = identity.userId,
+                myEd25519Priv = identity.privateKeyBytes,
+                theirUserId = recipientId,
+                theirEd25519Pub = recipientPublicKey,
+            )
+            try {
+                val tag = SealedSenderTag.tagFor(tagKey, withMeta.id)
+                withMeta.withSealedSenderTag(tag.toBase64())
+            } finally {
+                tagKey.fill(0)
+            }
+        } else withMeta
+        sentDmPlaintext.put(msg.id, text)
         if (envelope != null && rawCiphertext != null) {
             // Bridged DM: the bridge plugin picks this up via outboundBridgedDm and
             // forwards the raw ciphertext to the external network. Do not enqueue in the
@@ -450,45 +602,6 @@ class GossipEngine(
     }
 
     /**
-     * Compose and broadcast an [MessageType.IDENTITY_ROTATION] migrating the
-     * local identity from [oldUserId] (proven via [oldKeySign]) to the current
-     * identity. The outer message is signed by the current (new) key in the
-     * usual way; [oldKeySign] produces the inner continuity signature with the
-     * old key, which contacts holding [oldUserId] verify before rebinding.
-     * See O41.
-     */
-    suspend fun composeIdentityRotation(
-        oldUserId: String,
-        oldKeySign: (ByteArray) -> ByteArray,
-    ): RumorMessage? {
-        val identity = identityProvider.identity.value ?: return null
-        val newPublicKeyB64 = identity.publicKeyBytes.toBase64()
-        val authorizedAtMs = System.currentTimeMillis()
-        val continuityBytes = identityRotationSignableBytes(
-            oldUserId = oldUserId,
-            newUserId = identity.userId,
-            newPublicKey = newPublicKeyB64,
-            authorizedAtMs = authorizedAtMs,
-        )
-        val continuitySig = oldKeySign(continuityBytes).toBase64()
-        val payload = IdentityRotationPayload(
-            oldUserId = oldUserId,
-            newUserId = identity.userId,
-            newPublicKey = newPublicKeyB64,
-            authorizedAtMs = authorizedAtMs,
-            continuitySignature = continuitySig,
-        )
-        val msg = buildMessage(
-            identity = identity,
-            type = MessageType.IDENTITY_ROTATION,
-            hopsToLive = DEFAULT_BROADCAST_HOPS,
-            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(payload)),
-        )
-        enqueueImmediate(msg)
-        return msg
-    }
-
-    /**
      * Compose and broadcast a [MessageType.SELF_PRESENCE] beacon (O30 + O57).
      * The sender declares its current [mode] to the mesh. Used both as the
      * entry pulse when going Static or Free, and as the symmetric exit pulse
@@ -502,6 +615,119 @@ class GossipEngine(
      * mode). The receiver decides how to weight this list given its own
      * O58 visibility settings.
      */
+    /**
+     * Compose a signed delete-on-ACK request for a DIRECT message you
+     * either authored or were the recipient of (O40).
+     *
+     * Returns null if (a) identity is locked, (b) the target message
+     * isn't in the local store, or (c) the local userId doesn't match
+     * either the target's senderId or recipientId. Anything else is
+     * the caller broadcasting a delete they aren't authorized to issue
+     * — relays would reject it anyway, so we don't compose.
+     */
+    suspend fun composeMessageDelete(messageId: String): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val target = messageStore.getById(messageId) ?: return null
+        if (identity.userId != target.senderId && identity.userId != target.recipientId) return null
+
+        val issuerPubKeyB64 = com.rumor.mesh.core.platform.Base64Codec.encode(identity.publicKeyBytes)
+        val signed = com.rumor.mesh.core.model.messageDeleteSignableBytes(messageId, issuerPubKeyB64)
+        val sigBytes = com.rumor.mesh.core.crypto.CryptoManager.sign(signed, identity.privateKeyBytes)
+        val payload = com.rumor.mesh.core.model.MessageDeletePayload(
+            messageId = messageId,
+            issuerPublicKey = issuerPubKeyB64,
+            signature = com.rumor.mesh.core.platform.Base64Codec.encode(sigBytes),
+        )
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.MESSAGE_DELETE,
+            hopsToLive = DEFAULT_BROADCAST_HOPS,
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(payload)),
+        )
+        // Purge locally first — the relayed broadcast will purge it
+        // everywhere else as it propagates.
+        messageStore.deleteById(messageId)
+        enqueueImmediate(msg)
+        return msg
+    }
+
+    /**
+     * Compose a Room-addressed message (O79).
+     *
+     * **Caller provides:**
+     *  - [routingTag] — opaque 16-byte routing identifier from
+     *    [com.rumor.mesh.core.protocol.RoomRoutingTag.openRoomTag]
+     *    (OPEN rooms) or [com.rumor.mesh.core.protocol.RoomRoutingTag.encryptedRoomTag]
+     *    (ENCRYPTED rooms). The plaintext roomId stays off the wire.
+     *  - [recipients] — for ENCRYPTED rooms, the list of authorized
+     *    receivers with their X25519 static public keys. Empty list
+     *    is treated as OPEN-mode (plaintext signed broadcast).
+     *  - [plaintext] — the message body to encrypt (or carry signed
+     *    plaintext for OPEN).
+     *
+     * **Why the caller provides recipients:** the events-derived
+     * membership projection is a separate concern from compose. UI
+     * code (or test fixtures) enumerates the current room membership
+     * and passes the recipient list explicitly. This keeps
+     * [GossipEngine] decoupled from room-membership storage.
+     *
+     * For ENCRYPTED rooms uses
+     * [com.rumor.mesh.core.protocol.MultiRecipientEnvelopeCodec.encrypt]
+     * under the hood with the sender's Ed25519 identity. The
+     * resulting [com.rumor.mesh.core.model.MultiRecipientEnvelope]
+     * is JSON-serialised into the message's `encryptedPayload`.
+     * For OPEN rooms the plaintext goes into `payload.content`.
+     *
+     * The 16-byte [routingTag] is Base64-encoded and stored in
+     * `_ext.rt`; the receiver's
+     * [com.rumor.mesh.core.protocol.RoomTagMatcher] consumes it.
+     *
+     * Returns null if identity is locked. Otherwise returns the
+     * outgoing [RumorMessage] (already enqueued for transport).
+     */
+    fun composeRoomMessage(
+        routingTag: ByteArray,
+        plaintext: String,
+        recipients: List<MultiRecipientEnvelopeCodec.Recipient> = emptyList(),
+        replyTo: String? = null,
+        mentions: List<String> = emptyList(),
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+
+        val baseMsg: RumorMessage = if (recipients.isEmpty()) {
+            // OPEN room — signed plaintext broadcast.
+            buildMessage(
+                identity = identity,
+                type = MessageType.ROOM_MESSAGE,
+                hopsToLive = DEFAULT_BROADCAST_HOPS,
+                payload = MessagePayload(ContentType.TEXT, plaintext),
+            )
+        } else {
+            // ENCRYPTED room — multi-recipient envelope.
+            val envelope = MultiRecipientEnvelopeCodec.encrypt(
+                plaintext = plaintext.toByteArray(Charsets.UTF_8),
+                senderEd25519Private = identity.privateKeyBytes,
+                senderId = identity.userId,
+                senderEd25519Public = identity.publicKeyBytes,
+                recipients = recipients,
+                roomRoutingTag = Base64Codec.encode(routingTag),
+            )
+            buildMessage(
+                identity = identity,
+                type = MessageType.ROOM_MESSAGE,
+                hopsToLive = DEFAULT_BROADCAST_HOPS,
+                encryptedPayload = WireJson.encodeToString(envelope),
+            )
+        }
+
+        // Stamp the routing tag into _ext.rt + apply O90 thread/mention metadata.
+        val routedMsg = baseMsg.withRoomRoutingTag(Base64Codec.encode(routingTag))
+            .applyThreadAndMentionExt(replyTo, mentions)
+
+        enqueueImmediate(routedMsg)
+        return routedMsg
+    }
+
     fun composeSelfPresence(
         mode: UserMode,
         recentlyExchangedWith: List<String> = emptyList(),
@@ -509,7 +735,7 @@ class GossipEngine(
         val identity = identityProvider.identity.value ?: return null
         val payload = SelfPresencePayload(
             mode = mode,
-            authorizedAtMs = System.currentTimeMillis(),
+            authorizedAtMs = clock.now(),
             recentlyExchangedWith = recentlyExchangedWith,
         )
         val msg = buildMessage(
@@ -542,7 +768,7 @@ class GossipEngine(
         originContentType: ContentType,
         payload: String,
         originSignatureIfAny: String? = null,
-        receivedAtMs: Long = System.currentTimeMillis(),
+        receivedAtMs: Long = clock.now(),
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
         val body = BridgeVouchedPayload(
@@ -745,59 +971,132 @@ class GossipEngine(
             scope.launch { contactRepo.setPriorityPeer(msg.senderId, true) }
         }
 
-        // O41: identity rotation. The outer signature on `msg` is by the *new*
-        // key (already verified above). We additionally check the *inner*
-        // continuity signature against the existing contact's old public key —
-        // proves the rotation is authorized by the old-key holder. Only then
-        // do we rebind the contact record so display-name pinning (O21) and
-        // routing breadcrumbs (O29) follow the same human across the rotation.
-        if (msg.type == MessageType.IDENTITY_ROTATION) {
-            scope.launch { applyIdentityRotation(msg) }
+        // O40: signed delete-on-ACK request. Verify the issuer is the
+        // sender or recipient of the targeted message, then purge from
+        // the local store. The relay path below still propagates the
+        // MESSAGE_DELETE itself so downstream nodes also purge.
+        if (msg.type == MessageType.MESSAGE_DELETE) {
+            scope.launch { handleMessageDelete(msg) }
         }
 
-        emitToInbox(msg)
+        // O38: PREKEY_PUBLISH — verify the publisher binding + sig and
+        // cache the freshest valid prekey for that publisher so a future
+        // composeDirect to them can DH against the short-lived prekey
+        // (receiver-side FS) instead of the long-term static identity.
+        if (msg.type == MessageType.PREKEY_PUBLISH) {
+            handlePrekeyPublish(msg)
+        }
+
+        // O79: room message dispatch. Match the routing tag against the
+        // local subscription cache; on match, decrypt (ENCRYPTED) or
+        // pass through (OPEN), emit the resulting plaintext-bearing
+        // message to inbox. Relay still happens below regardless — room
+        // messages are broadcast-tier and propagate through the mesh
+        // even if this node isn't subscribed.
+        if (msg.type == MessageType.ROOM_MESSAGE) {
+            scope.launch { handleRoomMessage(msg) }
+        }
+
+        // O79: ROOM_MESSAGE inbox emission is handled by handleRoomMessage above
+        // ONLY on subscription match. Skip the unconditional emit here so that
+        // non-subscribed nodes (relay-only) don't surface the message in their
+        // local inbox. Relay still happens unconditionally below.
+        if (msg.type != MessageType.ROOM_MESSAGE) {
+            // O41: identity rotation. The outer signature on `msg` is by the *new*
+            // key (already verified above). We additionally check the *inner*
+            // continuity signature against the existing contact's old public key —
+            // proves the rotation is authorized by the old-key holder. Only then
+            emitToInbox(msg)
+        }
         relay(msg, autoRelayIds)
     }
 
-    private suspend fun applyIdentityRotation(msg: RumorMessage) {
-        val payloadJson = msg.payload?.content ?: return
-        val rotation = runCatching {
-            WireJson.decodeFromString<IdentityRotationPayload>(payloadJson)
-        }.getOrNull() ?: return
+    /**
+     * O79 receive-side handler. No-op when [roomSubscriptionProvider]
+     * is null. On match:
+     *  - OPEN: emit the carrier message to inbox (its payload.content
+     *    is the plaintext already).
+     *  - ENCRYPTED: decrypt the inner envelope via
+     *    [MultiRecipientEnvelopeCodec.decrypt]; on success, emit a
+     *    synthetic message with the decrypted plaintext as
+     *    `payload.content`.
+     *  - No match: drop (the message was addressed to a room we're not
+     *    in; relay still happens elsewhere).
+     */
+    private suspend fun handleRoomMessage(msg: RumorMessage) {
+        val provider = roomSubscriptionProvider ?: return
+        val tagB64 = msg.roomRoutingTag ?: return
+        val tag = runCatching { Base64Codec.decode(tagB64) }.getOrNull() ?: return
 
-        // Outer-signature pubkey must equal claimed new pubkey, otherwise an
-        // attacker could broadcast someone else's rotation with their own
-        // outer key. The userId↔pubkey binding is cryptographic
-        // (userId = SHA-256(pubkey)) so a simple equality on the new userId is
-        // sufficient: if senderId != newUserId, drop.
-        if (msg.senderId != rotation.newUserId) return
-        if (msg.senderPublicKey != rotation.newPublicKey) return
+        val match = RoomTagMatcher.match(
+            inboundTag = tag,
+            messageId = msg.id,
+            openSubscriptions = provider.openRoomIds(),
+            encryptedSubscriptions = provider.encryptedRoomSubscriptions(),
+        ) ?: return  // not subscribed; drop receive-side (relay still happened)
 
-        // Old key on file determines whether we accept this rotation. If we
-        // don't have the old contact, there is nothing to rebind — drop
-        // silently. (Relaying the message is fine; rebinding requires prior
-        // knowledge of the old key.)
-        val existing = contactRepo.getById(rotation.oldUserId) ?: return
-        val oldPubKeyBytes = runCatching { existing.publicKey.fromBase64() }.getOrNull() ?: return
-        val continuityBytes = runCatching { rotation.continuitySignature.fromBase64() }.getOrNull() ?: return
-        val signable = identityRotationSignableBytes(
-            oldUserId = rotation.oldUserId,
-            newUserId = rotation.newUserId,
-            newPublicKey = rotation.newPublicKey,
-            authorizedAtMs = rotation.authorizedAtMs,
-        )
-        if (!CryptoManager.verify(signable, continuityBytes, oldPubKeyBytes)) {
-            RumorLog.w(TAG, "Identity rotation from ${rotation.oldUserId.take(16)}… failed continuity check")
-            return
+        when (match) {
+            is RoomTagMatcher.MatchResult.OpenMatch -> {
+                // OPEN rooms — payload.content is plaintext, signed by sender,
+                // verified at outer-sig check earlier in processIncoming.
+                emitToInbox(msg)
+            }
+            is RoomTagMatcher.MatchResult.EncryptedMatch -> {
+                val xPriv = provider.localX25519StaticPrivate() ?: return
+                try {
+                    val envelopeJson = msg.encryptedPayload ?: return
+                    val envelope = runCatching {
+                        WireJson.decodeFromString<MultiRecipientEnvelope>(envelopeJson)
+                    }.getOrNull() ?: return
+                    val localId = identityProvider.identity.value?.userId ?: return
+                    val plaintext = MultiRecipientEnvelopeCodec.decrypt(envelope, localId, xPriv) ?: return
+                    // Synthesize a plaintext-bearing carrier for inbox emission.
+                    val synthetic = msg.copy(
+                        payload = MessagePayload(ContentType.TEXT, plaintext.decodeToString()),
+                        encryptedPayload = null,
+                    )
+                    emitToInbox(synthetic)
+                } finally {
+                    // O39 / O91: the provider returns a freshly derived X25519
+                    // private each call (from the Ed25519 identity seed); zero
+                    // it once the codec is done so a heap dump can't recover it.
+                    xPriv.fill(0)
+                }
+            }
         }
+    }
 
-        val rebound = contactRepo.rebindIdentity(
-            oldUserId = rotation.oldUserId,
-            newUserId = rotation.newUserId,
-            newPublicKey = rotation.newPublicKey,
-        )
-        if (rebound) {
-            RumorLog.i(TAG, "Identity rotation: ${rotation.oldUserId.take(16)}… → ${rotation.newUserId.take(16)}…")
+    /** O38 — exposed for sender-side consultation in composeDirect (follow-up). */
+    val prekeyCache: PrekeyCache = PrekeyCache()
+
+    private fun handlePrekeyPublish(msg: RumorMessage) {
+        val json = msg.payload?.content ?: return
+        val payload = runCatching {
+            WireJson.decodeFromString<com.rumor.mesh.core.model.PrekeyPublish>(json)
+        }.getOrNull() ?: return
+        when (val r = PrekeyVerifier.verify(payload)) {
+            is PrekeyVerifier.Result.Accepted -> prekeyCache.put(payload)
+            is PrekeyVerifier.Result.Rejected ->
+                RumorLog.w("GossipEngine", "O38 prekey rejected: ${r.reason}")
+        }
+    }
+
+    private suspend fun handleMessageDelete(msg: RumorMessage) {
+        val json = msg.payload?.content ?: return
+        val payload = runCatching {
+            WireJson.decodeFromString<com.rumor.mesh.core.model.MessageDeletePayload>(json)
+        }.getOrNull() ?: return
+        val result = MessageDeleteVerifier.verify(payload) { id -> messageStore.getById(id) }
+        when (result) {
+            is MessageDeleteVerifier.Result.Authorized -> {
+                if (result.target != null) {
+                    messageStore.deleteById(payload.messageId)
+                    RumorLog.i("GossipEngine", "O40 delete applied for ${payload.messageId}")
+                }
+            }
+            is MessageDeleteVerifier.Result.Rejected -> {
+                RumorLog.w("GossipEngine", "O40 delete rejected: ${result.reason}")
+            }
         }
     }
 
@@ -827,7 +1126,14 @@ class GossipEngine(
         if (msg.trustLevel == TrustLevel.BRIDGED) return
         when (msg.type) {
             MessageType.BROADCAST,
-            MessageType.BRIDGE_VOUCHED -> {
+            MessageType.BRIDGE_VOUCHED,
+            MessageType.ROOM_MESSAGE -> {
+                // Room messages relay like broadcasts: every honest relay
+                // forwards regardless of subscription state. Routing is via
+                // the opaque tag in _ext.rt — only subscribed receivers
+                // recognize their own room's tag and emit to inbox; everyone
+                // else just propagates. autoRelay boost applies the same way
+                // as BROADCAST for room messages from priority-peer senders.
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 val boosted = if (msg.senderId in autoRelayIds) {
                     messageStore.boostHopsForManualRelay(forwarded)
@@ -889,8 +1195,10 @@ class GossipEngine(
                 enqueueRelayed(forwarded)
             }
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
-            MessageType.IDENTITY_ROTATION,
-            MessageType.SELF_PRESENCE -> {
+            MessageType.KEYWORD_FILTER_PUBLISH,
+            MessageType.SELF_PRESENCE,
+            MessageType.MESSAGE_DELETE,
+            MessageType.PREKEY_PUBLISH -> {
                 val forwarded = messageStore.decrementHops(msg) ?: return
                 enqueueRelayed(forwarded)
             }
@@ -907,8 +1215,12 @@ class GossipEngine(
         val ceiling = when (msg.type) {
             MessageType.BROADCAST, MessageType.PING, MessageType.PONG,
             MessageType.BLOCKLIST_PUBLISH, MessageType.BLOCKLIST_DIFF,
-            MessageType.IDENTITY_ROTATION, MessageType.SELF_PRESENCE,
-            MessageType.BRIDGE_VOUCHED -> MAX_BROADCAST_HOPS
+            MessageType.KEYWORD_FILTER_PUBLISH,
+            MessageType.SELF_PRESENCE,
+            MessageType.MESSAGE_DELETE,
+            MessageType.PREKEY_PUBLISH,
+            MessageType.BRIDGE_VOUCHED,
+            MessageType.ROOM_MESSAGE -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,
             MessageType.TRANSFER_CANCEL,
@@ -939,11 +1251,11 @@ class GossipEngine(
         recipientId: String? = null,
     ): RumorMessage {
         val unsigned = RumorMessage(
-            id = UUID.randomUUID().toString().replace("-", ""),
+            id = Uuid.randomHex32(),
             senderId = identity.userId,
             senderPublicKey = identity.publicKeyBytes.toBase64(),
             sequenceNumber = sequenceCounter.getAndIncrement(),
-            sentAtMs = System.currentTimeMillis(),
+            sentAtMs = clock.now(),
             type = type,
             hopsToLive = hopsToLive,
             payload = payload,

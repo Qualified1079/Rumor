@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.block
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.data.BlocklistEntryRepository
 import com.rumor.mesh.core.data.SubscribedBlocklistRepository
@@ -10,6 +11,32 @@ import com.rumor.mesh.core.model.BlocklistEntry
 import com.rumor.mesh.core.model.BlocklistMode
 import com.rumor.mesh.core.model.SubscribedBlocklist
 
+/**
+ * Consumer side of the blocklist publish/subscribe machinery. Holds
+ * the local user's subscription decisions (which publishers, what
+ * mode) and applies inbound snapshots / diffs to the persisted
+ * entry table.
+ *
+ * Mode semantics (per [BlocklistMode]):
+ *  - **ONE_TIME** — apply the first signed snapshot received from
+ *    [subscribe] time forward, then ignore everything else from
+ *    that publisher. UI-driven "copy this list once and freeze."
+ *  - **CONTINUOUS** — apply every signed update (snapshot or diff)
+ *    monotonically. The publisher's curation flows through into this
+ *    user's filter forever (until [unsubscribe]).
+ *
+ * Both [applySnapshot] and [applyDiff] are guarded by:
+ *   (a) monotonic version checks — stale versions can't roll back
+ *       the local state;
+ *   (b) signature verification via [BlocklistVerifier] — a relay or
+ *       MITM can't slip in a forged list;
+ *   (c) mode enforcement — ONE_TIME subscriptions reject post-init
+ *       updates, CONTINUOUS subscriptions reject diffs from the
+ *       wrong fromVersion.
+ *
+ * Returns boolean for accepted-vs-rejected so callers (the gossip
+ * bridge) can log without surfacing rejection as an error.
+ */
 class BlocklistSubscriber(
     private val subscribedBlocklistRepo: SubscribedBlocklistRepository,
     private val blocklistEntryRepo: BlocklistEntryRepository,
@@ -20,10 +47,10 @@ class BlocklistSubscriber(
         subscribedBlocklistRepo.upsert(
             SubscribedBlocklist(
                 publisherId = publisherId,
-                publisherPublicKey = java.util.Base64.getEncoder().encodeToString(publisherPublicKey),
+                publisherPublicKey = com.rumor.mesh.core.platform.Base64Codec.encode(publisherPublicKey),
                 mode = mode,
                 currentVersion = 0,
-                subscribedAtMs = System.currentTimeMillis(),
+                subscribedAtMs = SystemClock.now(),
                 lastAppliedAtMs = 0,
             )
         )
@@ -49,7 +76,7 @@ class BlocklistSubscriber(
             BlocklistEntry(snapshot.publisherId, it)
         })
         subscribedBlocklistRepo.upsert(
-            sub.copy(currentVersion = snapshot.version, lastAppliedAtMs = System.currentTimeMillis())
+            sub.copy(currentVersion = snapshot.version, lastAppliedAtMs = SystemClock.now())
         )
         return true
     }
@@ -70,7 +97,7 @@ class BlocklistSubscriber(
             blocklistEntryRepo.deleteEntries(diff.publisherId, diff.removed)
         }
         subscribedBlocklistRepo.upsert(
-            sub.copy(currentVersion = diff.toVersion, lastAppliedAtMs = System.currentTimeMillis())
+            sub.copy(currentVersion = diff.toVersion, lastAppliedAtMs = SystemClock.now())
         )
         return true
     }

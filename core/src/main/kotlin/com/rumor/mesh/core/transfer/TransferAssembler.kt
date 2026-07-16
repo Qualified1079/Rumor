@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.transfer
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.data.ChunkRecord
 import com.rumor.mesh.core.data.ChunkRepository
 import com.rumor.mesh.core.data.TransferRecord
@@ -19,8 +20,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
-import java.util.Base64
-import java.util.concurrent.ConcurrentHashMap
+import com.rumor.mesh.core.platform.Base64Codec
+import com.rumor.mesh.core.platform.ConcurrentMap
+import com.rumor.mesh.core.platform.ConcurrentSet
 import com.rumor.mesh.core.wire.WireJson
 
 private const val TAG = "TransferAssembler"
@@ -39,14 +41,14 @@ class TransferAssembler(
     private val chunkRepo: ChunkRepository,
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val watchdogs = ConcurrentHashMap<String, Job>()
+    private val watchdogs = ConcurrentMap<String, Job>()
 
     /**
      * O18: transferIds the user paused locally. Incoming CHUNKs for these are
      * dropped at ingest; the watchdog is left running so a pending transfer
      * doesn't time out while paused. Resume re-enables ingest.
      */
-    private val paused: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val paused = ConcurrentSet<String>()
 
     private val _assembledTransfers = MutableSharedFlow<AssembledTransfer>(extraBufferCapacity = 32)
     val assembledTransfers: SharedFlow<AssembledTransfer> = _assembledTransfers
@@ -70,7 +72,7 @@ class TransferAssembler(
         transfer.senderId?.let { gossipEngine.composeTransferCancel(transferId, it) }
         transferRepo.upsert(transfer.copy(
             status = TransferStatus.ABANDONED,
-            completedAtMs = System.currentTimeMillis(),
+            completedAtMs = SystemClock.now(),
         ))
         chunkRepo.deleteAllForTransfer(transferId)
     }
@@ -115,7 +117,7 @@ class TransferAssembler(
                 contentHash = meta.contentHash,
                 recipientId = meta.recipientId,
                 senderId = senderUserId,
-                startedAtMs = System.currentTimeMillis(),
+                startedAtMs = SystemClock.now(),
                 completedAtMs = null,
                 status = TransferStatus.IN_PROGRESS,
             )
@@ -131,8 +133,8 @@ class TransferAssembler(
             ChunkRecord(
                 transferId = chunk.transferId,
                 chunkIndex = chunk.chunkIndex,
-                data = Base64.getDecoder().decode(chunk.data),
-                receivedAtMs = System.currentTimeMillis(),
+                data = Base64Codec.decode(chunk.data),
+                receivedAtMs = SystemClock.now(),
                 ackedAtMs = null,
             )
         )
@@ -144,7 +146,7 @@ class TransferAssembler(
         val transfer = transferRepo.getById(transferId) ?: return
         val rawChunks = chunkRepo.getByTransfer(transferId)
         val chunks = rawChunks.map { e ->
-            Chunk(e.transferId, e.chunkIndex, transfer.totalChunks, Base64.getEncoder().encodeToString(e.data))
+            Chunk(e.transferId, e.chunkIndex, transfer.totalChunks, Base64Codec.encode(e.data))
         }
         val meta = TransferMetadata(
             transferId = transfer.transferId,
@@ -162,7 +164,7 @@ class TransferAssembler(
             return
         }
         watchdogs.remove(transferId)?.cancel()
-        transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, System.currentTimeMillis())
+        transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, SystemClock.now())
         RumorLog.i(TAG, "Transfer ${transferId.take(8)}… complete (${data.size}B)")
         _assembledTransfers.emit(AssembledTransfer(meta, data))
     }
@@ -184,7 +186,7 @@ class TransferAssembler(
             val transfer = transferRepo.getById(transferId)
             if (transfer?.status == TransferStatus.IN_PROGRESS) {
                 RumorLog.w(TAG, "Transfer ${transferId.take(8)}… abandoned after $NACK_MAX_RETRIES retries")
-                transferRepo.updateStatus(transferId, TransferStatus.ABANDONED, System.currentTimeMillis())
+                transferRepo.updateStatus(transferId, TransferStatus.ABANDONED, SystemClock.now())
             }
             watchdogs.remove(transferId)
         }
@@ -192,6 +194,15 @@ class TransferAssembler(
     }
 }
 
+/**
+ * The output of a completed transfer: the verified metadata envelope plus the
+ * reassembled raw bytes. Emitted on [TransferAssembler.assembledTransfers] once
+ * every chunk for a given transferId has arrived and the SHA-256 hash matches.
+ *
+ * [data] is *unverified by content*; only the byte-level integrity is checked.
+ * App-layer extraction (e.g. compressed archives, image decoding) still has to
+ * validate the payload before using it — see O14 / O28 / O83.
+ */
 data class AssembledTransfer(
     val metadata: TransferMetadata,
     val data: ByteArray,

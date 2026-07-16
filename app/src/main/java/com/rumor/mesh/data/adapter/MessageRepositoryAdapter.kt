@@ -18,6 +18,7 @@ class MessageRepositoryAdapter(private val dao: MessageDao) : MessageRepository 
     override suspend fun evictOldest(count: Int) = dao.evictOldest(count)
     override suspend fun markRead(id: String) = dao.markRead(id)
     override suspend fun markRelayed(id: String) = dao.markRelayed(id)
+    override suspend fun deleteById(id: String) = dao.deleteById(id)
 
     override suspend fun offerable(limit: Int): List<RumorMessage> =
         dao.offerable(limit).map(MessageEntity::toMessage)

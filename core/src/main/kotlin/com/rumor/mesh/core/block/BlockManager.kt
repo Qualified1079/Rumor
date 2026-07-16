@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.block
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
@@ -32,7 +33,7 @@ class BlockManager(
     private val TAG = "BlockManager"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    @Volatile private var blockedSet: Set<String> = emptySet()
+    @kotlin.concurrent.Volatile private var blockedSet: Set<String> = emptySet()
 
     private val _blockedFlow = MutableStateFlow<Set<String>>(emptySet())
     val blocked: StateFlow<Set<String>> = _blockedFlow.asStateFlow()
@@ -51,7 +52,7 @@ class BlockManager(
     fun isBlocked(userId: String): Boolean = userId in blockedSet
 
     suspend fun block(userId: String, durationMs: Long? = null, reason: String? = null) {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.now()
         blockEntryRepo.upsert(
             BlockEntry(
                 userId = userId,
@@ -76,7 +77,7 @@ class BlockManager(
     suspend fun exportEncrypted(passphrase: String): String {
         val entries = blockEntryRepo.getActive()
         val plaintext = encodeEntries(entries)
-        val salt = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+        val salt = com.rumor.mesh.core.platform.PlatformRandom.nextBytes(16)
         val key = CryptoManager.deriveKeyFromPassphrase(passphrase, salt)
         val ct = CryptoManager.aesGcmEncrypt(plaintext, key)
         return salt.toBase64() + ":" + ct.toBase64()
@@ -114,7 +115,7 @@ class BlockManager(
     }.toByteArray(Charsets.UTF_8)
 
     private fun decodeEntries(bytes: ByteArray): List<BlockEntry> =
-        String(bytes, Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.map { line ->
+        bytes.decodeToString().lineSequence().filter { it.isNotBlank() }.map { line ->
             val f = line.split('\t')
             BlockEntry(
                 userId = f[0],

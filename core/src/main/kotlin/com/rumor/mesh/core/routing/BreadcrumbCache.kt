@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.routing
 
+import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.data.BreadcrumbRepository
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.Breadcrumb
@@ -7,7 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import java.util.concurrent.ConcurrentHashMap
+import com.rumor.mesh.core.platform.ConcurrentMap
 
 /**
  * Tier-1 routing substrate (O29). Records "I received a message from
@@ -34,7 +35,7 @@ class BreadcrumbCache(
      * the lifetime of this process. Cold-start after app launch: empty until
      * something arrives.
      */
-    private val snapshot = ConcurrentHashMap<String, List<String>>()
+    private val snapshot = ConcurrentMap<String, List<String>>()
     private val SNAPSHOT_LIMIT = 5
 
     fun record(targetUserId: String, fromPeerId: String, hopCount: Int = 1) {
@@ -49,7 +50,7 @@ class BreadcrumbCache(
                 targetUserId = targetUserId,
                 arrivedFromPeerId = fromPeerId,
                 hopCount = hopCount,
-                recordedAtMs = System.currentTimeMillis(),
+                recordedAtMs = SystemClock.now(),
             )
             breadcrumbRepo.upsert(crumb)
             breadcrumbRepo.pruneForTarget(targetUserId)
@@ -82,7 +83,7 @@ class BreadcrumbCache(
 
     fun pruneOld() {
         scope.launch {
-            breadcrumbRepo.pruneOld(System.currentTimeMillis() - 24 * 60 * 60 * 1000L)
+            breadcrumbRepo.pruneOld(SystemClock.now() - 24 * 60 * 60 * 1000L)
         }
     }
 }

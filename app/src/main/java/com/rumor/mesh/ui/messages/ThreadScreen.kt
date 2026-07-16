@@ -143,7 +143,7 @@ private fun MessageBubble(message: DisplayMessage) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    text = formatElapsed(System.currentTimeMillis() - message.raw.sentAtMs),
+                    text = formatElapsed(System.currentTimeMillis() - message.raw.receivedAtMs),
                     color = textColor.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.align(Alignment.End),

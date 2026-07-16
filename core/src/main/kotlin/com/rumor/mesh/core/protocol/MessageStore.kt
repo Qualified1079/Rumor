@@ -9,7 +9,8 @@ import com.rumor.mesh.core.model.Contact
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.policy.StaticMode
 import kotlinx.coroutines.flow.Flow
-import java.util.concurrent.atomic.AtomicLong
+import com.rumor.mesh.core.platform.AtomicCounter
+import com.rumor.mesh.core.platform.ConcurrentMap
 
 private const val TAG = "MessageStore"
 private const val DEFAULT_BROADCAST_HOPS = 7
@@ -19,14 +20,52 @@ private const val EVICT_BATCH = 500
 /** A static node holds a far deeper backlog so it can serve peers that were offline longer. */
 private const val STATIC_CACHE_BOOST = 4
 
+/**
+ * Persistence + ingest gateway between the wire and the application
+ * layer. Three jobs:
+ *
+ *  1. **Dedup-gated ingest.** Inbound messages pass through
+ *     [DuplicateFilter] before signature verification or persistence
+ *     happens — saves the most expensive work on already-seen ids.
+ *  2. **Signature verification.** Every non-bridge message gets its
+ *     Ed25519 signature verified against the embedded
+ *     `senderPublicKey` before storage. Failures bump
+ *     [sigFailureCount] and the message is dropped — never persisted.
+ *  3. **Size-capped persistence + eviction.** Holds up to
+ *     [MAX_MESSAGES] (boosted by [STATIC_CACHE_BOOST] for static
+ *     nodes that serve longer-offline peers); on overflow,
+ *     [evictOldest] drops [EVICT_BATCH] of the oldest non-always-save
+ *     records.
+ *
+ * Also exposes a per-sender [INGEST_BUDGET_PER_SEC] token bucket (O16)
+ * so a single sender can't burn unbounded CPU + storage at this node.
+ * The relay path NEVER goes through this rate gate — only ingest.
+ *
+ * Relay path uses [decrementHops] which is rate-unconstrained: relays
+ * are shared infrastructure; we propagate everything, just trim the
+ * TTL by one.
+ */
 class MessageStore(
     private val messageRepo: MessageRepository,
     private val contactRepo: ContactRepository,
     private val duplicateFilter: DuplicateFilter,
     private val staticMode: StaticMode? = null,
+    private val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
-    private val _sigFailures = AtomicLong()
-    private val _rateLimited = AtomicLong()
+    /**
+     * O40 — purge a specific id from the local store. The id stays in
+     * the dedup set so the same ciphertext can't be re-ingested via
+     * gossip exchange. No-op if the id isn't present.
+     */
+    suspend fun deleteById(id: String) {
+        messageRepo.deleteById(id)
+        // Dedup set already records the id (it was previously ingested).
+    }
+
+    /** Read access for callers that compose by id (O40 delete-on-ACK authorization check). */
+    suspend fun getById(id: String): RumorMessage? = messageRepo.getById(id)
+    private val _sigFailures = AtomicCounter()
+    private val _rateLimited = AtomicCounter()
     /** Count of messages dropped due to invalid Ed25519 signatures. */
     val sigFailureCount: Long get() = _sigFailures.get()
     /** Count of messages dropped at ingest because the sender exceeded the per-sender token bucket (O16). */
@@ -42,21 +81,27 @@ class MessageStore(
      * we rate-limit at ingest still has their messages relayed by others; this
      * only stops them consuming OUR local resources.
      */
-    private data class Bucket(@Volatile var windowStartMs: Long, @Volatile var count: Int)
-    private val buckets = java.util.concurrent.ConcurrentHashMap<String, Bucket>()
+    // SynchronizedObject so each Bucket can act as its own atomicfu monitor on
+    // every platform. Mutations of windowStartMs / count are under that monitor;
+    // happens-before via synchronized makes @Volatile redundant.
+    private class Bucket(var windowStartMs: Long, var count: Int) : kotlinx.atomicfu.locks.SynchronizedObject()
+    private val buckets = ConcurrentMap<String, Bucket>()
     private val INGEST_BUDGET_PER_SEC = 100
     private val INGEST_WINDOW_MS = 1_000L
 
     private fun acceptForRate(senderId: String, nowMs: Long): Boolean {
-        val b = buckets.computeIfAbsent(senderId) { Bucket(nowMs, 0) }
-        synchronized(b) {
+        val b = buckets.getOrPut(senderId) { Bucket(nowMs, 0) }
+        return kotlinx.atomicfu.locks.synchronized(b) {
             if (nowMs - b.windowStartMs >= INGEST_WINDOW_MS) {
                 b.windowStartMs = nowMs
                 b.count = 0
             }
-            if (b.count >= INGEST_BUDGET_PER_SEC) return false
-            b.count++
-            return true
+            if (b.count >= INGEST_BUDGET_PER_SEC) {
+                false
+            } else {
+                b.count++
+                true
+            }
         }
     }
 
@@ -70,7 +115,7 @@ class MessageStore(
         // O16: per-sender token bucket gate. Skip ingest entirely for senders
         // exceeding INGEST_BUDGET_PER_SEC. Caller treats the return as a duplicate;
         // the relay path is unaffected so other peers still propagate.
-        if (!acceptForRate(msg.senderId, System.currentTimeMillis())) {
+        if (!acceptForRate(msg.senderId, clock.now())) {
             _rateLimited.incrementAndGet()
             RumorLog.d(TAG, "Rate-limit drop from ${msg.senderId.take(8)}… (>$INGEST_BUDGET_PER_SEC/s)")
             return false
@@ -143,7 +188,6 @@ class MessageStore(
     /** O42 RBSR snapshot — whole-store (sentAtMs, id), mirrors dedup-summary semantics. */
     suspend fun rbsrItems(limit: Int): List<com.rumor.mesh.core.sync.RbsrItem> =
         messageRepo.rbsrItems(limit)
-    suspend fun getById(id: String): RumorMessage? = messageRepo.getById(id)
 
     /**
      * Public because the engine also creates contacts from completed gossip
@@ -163,12 +207,12 @@ class MessageStore(
                     autoRelay = false,
                     alwaysSave = false,
                     willingToCache = false,
-                    firstSeenMs = System.currentTimeMillis(),
-                    lastSeenMs = System.currentTimeMillis(),
+                    firstSeenMs = clock.now(),
+                    lastSeenMs = clock.now(),
                 )
             )
         } else {
-            contactRepo.updateLastSeen(userId, System.currentTimeMillis())
+            contactRepo.updateLastSeen(userId, clock.now())
         }
     }
 

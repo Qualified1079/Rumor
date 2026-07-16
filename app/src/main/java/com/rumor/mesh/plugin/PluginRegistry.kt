@@ -132,6 +132,12 @@ private class PluginContextImpl(
         get() = identityManager.identity.value?.publicKeyBytes
             ?.let { java.util.Base64.getEncoder().encodeToString(it) }
 
+    override fun signWithLocalKey(bytes: ByteArray): ByteArray {
+        val identity = identityManager.identity.value
+            ?: throw IllegalStateException("Cannot sign: local identity is locked")
+        return com.rumor.mesh.core.crypto.CryptoManager.sign(bytes, identity.privateKeyBytes)
+    }
+
     override fun sendMessage(message: RumorMessage, sourceDescription: String) {
         RumorLog.d(TAG, "Plugin $pluginId injecting message from $sourceDescription")
         gossipEngine.injectFromPlugin(message, pluginId)

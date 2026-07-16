@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.model.PeerPresence
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.model.displayTimeMs
 import com.rumor.mesh.core.protocol.MessageStore
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.data.ContactDao
@@ -69,7 +70,7 @@ class MessagesViewModel(
             byPeer.getOrPut(peerId) { mutableListOf() }.add(msg)
         }
         return byPeer.map { (peerId, msgs) ->
-            val latest = msgs.maxBy { it.sentAtMs }
+            val latest = msgs.maxBy { it.displayTimeMs }
             val unread = msgs.count { it.recipientId == localUserId && !it.isRead }
             ThreadSummary(
                 peerId = peerId,
@@ -78,6 +79,6 @@ class MessagesViewModel(
                 lastMessage = latest,
                 unreadCount = unread,
             )
-        }.sortedByDescending { it.lastMessage.sentAtMs }
+        }.sortedByDescending { it.lastMessage.displayTimeMs }
     }
 }

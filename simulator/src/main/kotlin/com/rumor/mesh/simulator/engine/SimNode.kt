@@ -41,6 +41,14 @@ class SimNode(
      * baseline pure-flood behaviour for comparison runs.
      */
     private val useBreadcrumbs: Boolean = true,
+    /**
+     * O12: shared sim-time clock. All SimNodes built by the same scenario
+     * share one clock so the entire mesh sees the same `now()` value — what
+     * a real-world wall-clock would offer if it were perfectly synced. Sim
+     * advances this from SimWorld.tick(). Default to wall-clock for ad-hoc
+     * one-off tests.
+     */
+    val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
     val identityProvider = SimIdentityProvider(index)
     val userId: String get() = identityProvider.identity.value!!.userId
@@ -52,17 +60,43 @@ class SimNode(
     private val transferRepo    = InMemoryTransferRepository()
     private val chunkRepo       = InMemoryChunkRepository()
     private val blockEntryRepo  = InMemoryBlockEntryRepository()
+    /** O79 — per-node room-subscription store, in-memory. Exposed so scenarios can add subscriptions. */
+    val roomSubscriptionRepo    = com.rumor.mesh.simulator.data.InMemoryRoomSubscriptionRepository()
     private val subscribedRepo  = InMemorySubscribedBlocklistRepository()
     private val blocklistRepo   = InMemoryBlocklistEntryRepository()
 
     private val duplicateFilter = DuplicateFilter()
-    private val messageStore    = MessageStore(messageRepo, contactRepo, duplicateFilter)
+    private val messageStore    = MessageStore(messageRepo, contactRepo, duplicateFilter, clock = clock)
     private val onlineTracker   = OnlineStatusTracker()
     private val topoTracker     = TopologyTracker(routeRepo)
     internal val breadcrumbs    = BreadcrumbCache(breadcrumbRepo)
     private val scheduler       = Scheduler()
     private val blockManager    = BlockManager(blockEntryRepo, subscribedRepo, blocklistRepo)
     private val inboxFilter     = PermissiveInboxFilter()
+
+    /**
+     * O79 receive-side subscription provider for ROOM_MESSAGE dispatch.
+     * Reads from [roomSubscriptionRepo] on every inbound room message;
+     * O91 (closed): localX25519StaticPrivate now derives the X25519 static
+     * from the sim identity's Ed25519 seed so ENCRYPTED rooms decrypt
+     * end-to-end in scenarios. Engine zeros the returned bytes after use.
+     */
+    private val roomSubscriptionProvider = object : GossipEngine.RoomSubscriptionProvider {
+        override fun openRoomIds(): List<String> = kotlinx.coroutines.runBlocking {
+            roomSubscriptionRepo.getAll()
+                .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.OPEN }
+                .map { it.roomId }
+        }
+        override fun encryptedRoomSubscriptions(): List<com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription> = kotlinx.coroutines.runBlocking {
+            roomSubscriptionRepo.getAll()
+                .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.ENCRYPTED }
+                .map { com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription(it.roomId, it.routingKey) }
+        }
+        override fun localX25519StaticPrivate(): ByteArray? {
+            val seed = identityProvider.identity.value?.privateKeyBytes ?: return null
+            return com.rumor.mesh.core.crypto.CryptoManager.ed25519ToX25519PrivateSeed(seed)
+        }
+    }
 
     val gossipEngine = GossipEngine(
         messageStore    = messageStore,
@@ -80,6 +114,8 @@ class SimNode(
         // would equal 1–5 sim-seconds at speedMult=10, breaking multi-hop propagation.
         relayBatchMinWindowMs = 1L,
         relayBatchSpreadMs    = 1L,
+        clock           = clock,
+        roomSubscriptionProvider = roomSubscriptionProvider,
     )
 
     val transferSender = TransferSender(gossipEngine, identityProvider, transferRepo, chunkRepo)
@@ -145,8 +181,11 @@ class SimNode(
         gossipEngine.messagesForExchange(peerUserId).take(max)
     fun knownIds(): Set<String> = gossipEngine.knownMessageIds()
 
-    /** All messages currently stored on this node, with full metadata. Sim assertions only. */
-    fun knownMessages(): List<com.rumor.mesh.core.model.RumorMessage> = messageRepo.snapshot()
+    /** All messages currently stored on this node, with full metadata. Sim assertions only.
+     *  Sorted by id so ConcurrentHashMap iteration order doesn't seed the network
+     *  conditioner's RNG differently across replays (O12 escalation). */
+    fun knownMessages(): List<com.rumor.mesh.core.model.RumorMessage> =
+        messageRepo.snapshot().sortedBy { it.id }
 
     /**
      * Drain the scheduler (outbound queue for locally composed messages: DMs, chunks)
@@ -157,6 +196,15 @@ class SimNode(
      * for broadcast relay). This bridge makes locally composed messages visible to the
      * exchange mechanism without disturbing the relay-path duplicate-filter logic.
      */
+    /** Test seed: populate both the repo and the duplicate filter, mirroring
+     * what MessageStore.ingest would do for an incoming message. Without
+     * the duplicate-filter populate, knownIds() returns empty and SimTransport
+     * falls into the "no bloom needed, send everything" branch. */
+    suspend fun seedKnown(msg: com.rumor.mesh.core.model.RumorMessage) {
+        messageRepo.insert(msg)
+        duplicateFilter.recordAndCheck(msg.id)
+    }
+
     suspend fun flushSchedulerToRepo() {
         val msgs = scheduler.take(500)
         for (msg in msgs) {

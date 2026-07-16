@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.model
 
+import com.rumor.mesh.core.SystemClock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -45,7 +46,7 @@ data class RumorMessage(
     val trustLevel: TrustLevel = TrustLevel.VERIFIED,
     /** Unix epoch millis when this node first saw the message. Not propagated. */
     @kotlinx.serialization.Transient
-    val receivedAtMs: Long = System.currentTimeMillis(),
+    val receivedAtMs: Long = SystemClock.now(),
     /** Whether the local user has read this message. Not propagated. */
     @kotlinx.serialization.Transient
     val isRead: Boolean = false,
@@ -64,6 +65,25 @@ data class RumorMessage(
     @kotlinx.serialization.Transient
     val intendedPeers: Set<String>? = null,
 )
+
+/**
+ * O64: ordering / "X ago" timestamp that callers should use instead of [RumorMessage.sentAtMs].
+ *
+ * `sentAtMs` is sender-asserted and trivially forgeable. A malicious sender forging a
+ * far-future timestamp pins their message to the top of any list ordered by sentAtMs;
+ * a forged past timestamp hides their message from sorted views. `receivedAtMs` is what
+ * this node actually witnessed and cannot be forged by the sender. Taking the min gives:
+ *  - honest senders unaffected (sentAtMs ≤ receivedAtMs in the normal case)
+ *  - future-forging senders capped at receive time (no pinning attack)
+ *  - past-forging senders ordered by their own claim, which is what they wanted (a
+ *    sender hiding their own message is not a security problem worth defending against)
+ *
+ * This is the value UI sort orders and "X ago" labels should consume. Protocol behaviour
+ * (eviction, dedup TTL, retry timers) MUST use `receivedAtMs` or monotonic deltas — never
+ * `sentAtMs` and never `displayTimeMs`.
+ */
+val RumorMessage.displayTimeMs: Long
+    get() = minOf(sentAtMs, receivedAtMs)
 
 /**
  * O32 split-TTL helpers. `floodedHops` decrements only when the relay falls
@@ -142,17 +162,6 @@ enum class MessageType {
     /** Accept an incoming priority link request. Routed as DM back to originator. */
     @SerialName("priority_link_accept")  PRIORITY_LINK_ACCEPT,
     /**
-     * Signed announcement that the sender is migrating from an old identity
-     * (userId / Ed25519 key) to a new one. The outer [RumorMessage.signature]
-     * is by the *new* key (so existing relay-layer signature checks still
-     * verify against [RumorMessage.senderPublicKey]); the inner
-     * [IdentityRotationPayload.continuitySignature] is by the *old* key and
-     * proves the rotation is authorized (old-key holder consents). Recipients
-     * holding [IdentityRotationPayload.oldUserId] as a contact rebind to the
-     * new userId locally. See O41.
-     */
-    @SerialName("identity_rotation") IDENTITY_ROTATION,
-    /**
      * Self-presence beacon (O30 + O57). Sender declares its current [UserMode]
      * to the mesh — entry-pulse on mode-up (going Static/Free), exit-pulse on
      * mode-down (back to Mobile). Mesh peers consume this to weight the sender
@@ -176,6 +185,66 @@ enum class MessageType {
      * transfer record is marked ABANDONED on both sides.
      */
     @SerialName("transfer_cancel") TRANSFER_CANCEL,
+    /**
+     * Signed full keyword-filter list snapshot from a publisher (O67).
+     * Subscribers verify the publisher's Ed25519 signature, apply
+     * monotonic version check, store. Display-layer filter — relay path
+     * is unaffected. Snapshot-only in v1 (no diff variant); list churn
+     * is expected to be low so the bandwidth cost of full snapshots is
+     * acceptable. Payload is a JSON-serialized [KeywordFilterList].
+     */
+    @SerialName("keyword_filter_publish") KEYWORD_FILTER_PUBLISH,
+    /**
+     * Signed delete-on-ACK request (O40). Recipient (or original sender)
+     * of a DIRECT message authorizes relays to purge the named messageId
+     * from their stores, tightening the forward-secrecy exposure window
+     * for stored ciphertext. Relays honor the request if (a) the signing
+     * sender matches the original DM's `senderId` OR matches its
+     * `recipientId`, AND (b) the signature verifies against the
+     * stated `senderPublicKey`. Payload is a JSON-serialized
+     * [com.rumor.mesh.core.model.MessageDeletePayload]. The deleted
+     * messageId is kept in the dedup set so a future replay can't
+     * re-ingest it.
+     */
+    @SerialName("message_delete") MESSAGE_DELETE,
+    /**
+     * Signed short-lived X25519 prekey broadcast (O38). Receiver
+     * publishes fresh prekeys for receiver-side forward secrecy.
+     * Senders cache the freshest valid prekey for each known
+     * contact and DH against it instead of the long-term static —
+     * a relay holding stored ciphertext for an expired prekey can
+     * no longer decrypt even if the recipient's long-term key
+     * later leaks. Payload is a JSON-serialized
+     * [com.rumor.mesh.core.model.PrekeyPublish].
+     */
+    @SerialName("prekey_publish") PREKEY_PUBLISH,
+    /**
+     * Message addressed to a Room (O79). The wire wrapper carries no
+     * plaintext roomId — addressing is via an opaque routing tag in
+     * `_ext.rt` (computed by `RoomRoutingTag.openRoomTag` for OPEN
+     * rooms, or `RoomRoutingTag.encryptedRoomTag` for ENCRYPTED rooms).
+     * Observers without the appropriate key cannot enumerate roomIds.
+     *
+     * **Payload shape:**
+     *  - OPEN rooms: `payload.content` carries plaintext (signed but
+     *    not encrypted — OPEN rooms are publicly readable by
+     *    definition).
+     *  - ENCRYPTED rooms: `encryptedPayload` carries a JSON-serialized
+     *    [com.rumor.mesh.core.model.MultiRecipientEnvelope] — one
+     *    AES-encrypted body + N per-recipient key wraps. Decrypted via
+     *    [com.rumor.mesh.core.protocol.MultiRecipientEnvelopeCodec.decrypt].
+     *
+     * **Trust + routing:** the outer `RumorMessage.signature` is the
+     * sender's Ed25519 over the standard signableBytes. For ENCRYPTED
+     * rooms, the inner envelope ALSO has its own Ed25519 signature
+     * covering the recipient list — relays cannot extend/trim/permute
+     * recipients without breaking the inner signature even if they
+     * could somehow re-sign the outer.
+     *
+     * trafficClass routing follows BROADCAST/DIRECT (TEXT → REALTIME,
+     * media → BULK, CONTROL → INFRASTRUCTURE).
+     */
+    @SerialName("room_message") ROOM_MESSAGE,
 }
 
 @Serializable
@@ -259,16 +328,19 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.BLOCKLIST_DIFF,
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT,
-            MessageType.IDENTITY_ROTATION,
-            MessageType.SELF_PRESENCE -> TrafficClass.INFRASTRUCTURE
+            MessageType.SELF_PRESENCE,
+            MessageType.MESSAGE_DELETE -> TrafficClass.INFRASTRUCTURE
             // A full blocklist snapshot is bulky sync data, not handshake-tier
             // traffic — only the small incremental diff stays INFRASTRUCTURE.
             MessageType.TRANSFER_METADATA,
-            MessageType.BLOCKLIST_PUBLISH -> TrafficClass.TRANSFER_SETUP
+            MessageType.BLOCKLIST_PUBLISH,
+            MessageType.KEYWORD_FILTER_PUBLISH,
+            MessageType.PREKEY_PUBLISH -> TrafficClass.TRANSFER_SETUP
             MessageType.CHUNK             -> TrafficClass.BULK
             MessageType.BROADCAST,
             MessageType.DIRECT,
-            MessageType.BRIDGE_VOUCHED -> when (payload?.contentType) {
+            MessageType.BRIDGE_VOUCHED,
+            MessageType.ROOM_MESSAGE -> when (payload?.contentType) {
                 ContentType.IMAGE, ContentType.VOICE, ContentType.FILE -> TrafficClass.BULK
                 ContentType.CONTROL                                    -> TrafficClass.INFRASTRUCTURE
                 ContentType.TEXT, null                                 -> TrafficClass.REALTIME

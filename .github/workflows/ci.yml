@@ -19,10 +19,8 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v3
 
-      # gradlew is not committed yet; use system gradle.
-      # Once gradle wrapper is regenerated and committed, switch to ./gradlew.
       - name: Run unit tests
-        run: gradle :app:testDebugUnitTest --no-daemon --stacktrace
+        run: ./gradlew :core:test :app:testDebugUnitTest :simulator:test --no-daemon --stacktrace
 
       - name: Assemble debug APK
-        run: gradle :app:assembleDebug --no-daemon
+        run: ./gradlew :app:assembleDebug --no-daemon

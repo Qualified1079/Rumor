@@ -32,10 +32,35 @@ Policy summary (see `CLAUDE.md` O37 invariant 6):
 
 ---
 
+## Reserved-forward names
+
+Names reserved before a feature ships, so a future contributor can't
+accidentally claim them for a different purpose. When the feature lands,
+the reservation here is what guarantees the field name matches the
+backlog row that justified it.
+
+| Name | Reserved for | Notes |
+|------|---------------|-------|
+| `_ext.replyTo` (RumorMessage `_ext` field, `String`) | O90 thread metadata | Carries the parent messageId for thread-tree reconstruction in the UI. Unsigned (in `_ext`); local-display impact only. |
+| `_ext.mentions` (RumorMessage `_ext` field, `List<String>`) | O90 mention metadata | Carries userIds explicitly mentioned by the sender for notification-feed + cross-room mention aggregators. Unsigned. |
+| `_ext.rt` (RumorMessage `_ext` field, `String`) | O79 room routing tag | Carries the Base64-encoded 16-byte routing tag (`RoomRoutingTag.openRoomTag` for OPEN rooms, `RoomRoutingTag.encryptedRoomTag` for ENCRYPTED). Receivers consume via `RoomTagMatcher`. Unsigned — relay tampering only causes the message to be dropped at every honest peer, no useful attack. |
+| `rumor-project-default-lists-v1` (project signing key kind-id) | O67 default-lists publisher | See `docs/PROJECT_KEYS.md` policy — key not generated yet. |
+| `rumor-room-envelope-v1:` (signable-bytes domain tag) | O79 multi-recipient envelope sig scope | Set in `multiRecipientEnvelopeSignableBytes`. Bumping requires `-v2:` and forces every envelope signature scheme to be regenerated. |
+| `rumor-room-wrap-v1:` (HKDF info prefix for per-recipient wrap keys) | O79 multi-recipient envelope wrap-key derivation | Used in `MultiRecipientEnvelopeCodec` as `info = "rumor-room-wrap-v1:" \|\| recipientId`. Domain-separates wrap keys from any other key derived from the same X25519 shared secret. |
+| `rumor-room-route-v1:` (SHA-256 prefix for OPEN room routing tags) | O79 OPEN room routing | Used in `RoomRoutingTag.openRoomTag`. |
+| `rumor-room-msg-tag-v1:` (HMAC prefix for ENCRYPTED room per-message routing tags) | O79 ENCRYPTED room routing | Used in `RoomRoutingTag.encryptedRoomTag`. |
+| `rumor-room-routing-key-v1` (HKDF info string for per-room routing key derivation) | O79 ENCRYPTED room routing-key derivation | Used in `RoomRoutingTag.deriveEncryptedRoomRoutingKey`. Domain-separates the routing key from any future content-encryption key derived from the same room shared secret. |
+| `rumor-dm-recipient-tag-v1:` (HKDF info prefix for per-contact tag key) | O53 sealed-sender per-contact tag-key derivation | Used in `SealedSenderKey.derive` with sorted userIds appended (`info = prefix + lo + "\|" + hi`) so Alice→Bob and Bob→Alice derive the same key. Bumping requires `-v2:` and re-derives every contact's cached tag key. |
+| `rumor-room-posting-cert-v1:` (signable-bytes domain tag) | O89 posting cert sig scope | Set in `roomPostingCertSignableBytes`. Bumping requires `-v2:` and forces every issued cert to be re-signed. |
+| `"room_posting_cert"` (SerialName for `RoomPostingCert`) | O89 | Wire payload type name. Reserved forever. |
+| `_ext.t` (sealed-sender tag carrier on RumorMessage) | O53 | Base64-encoded 32-byte HMAC tag from `SealedSenderTag.tagFor`. Reserved forever — do NOT reuse this key for any other `_ext` payload. |
+
 ## Retired names
 
 *(Empty as of v0.1. Add entries below as `| name | retired in | replaced by | notes |`.)*
 
 | Name | Retired in | Replaced by | Notes |
 |------|------------|-------------|-------|
-| _    | _          | _           | _     |
+| `"identity_rotation"` (MessageType serial name) | pre-v0.1 (no wire-format release) | (nothing) | Originally O41 — a signed announcement that the sender's userId/Ed25519 key migrated, with contacts auto-rebinding on receipt. Removed before any release because auto-rebind turns a stolen old key into permanent impersonation (attacker rotates to their own key, all contacts auto-rebind). Wire type name and the `rumor-identity-rotation-v1:` domain tag are reserved forever. Deletion-announcement use case moved to O69 (`IDENTITY_RETIRED`, no successor key, safe). |
+| `rumor-identity-rotation-v1:` (domain tag) | pre-v0.1 | (nothing) | See `"identity_rotation"` above. |
+| `ContactRepository.rebindIdentity()` (not on the wire but reserved for symmetry) | pre-v0.1 | (nothing) | Same — never re-add this method under this name. |

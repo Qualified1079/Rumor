@@ -144,9 +144,12 @@ dependencies {
     // MeshCore protobuf paths live in :app because the codec objects are
     // internal to this module. Same Jazzer setup as in :core.
     testImplementation("com.code-intelligence:jazzer-junit:0.22.1")
-    // JUnit4 tests (e.g. RbsrTest) run on the JUnit5 platform via the vintage
-    // engine. Without this the platform starts with no engine for them and they
-    // silently never execute. Mirrors :core.
+    // JUnit 5 engine + JUnit-4-on-5 bridge. The android.testOptions block below
+    // enables `useJUnitPlatform()` so Jazzer @FuzzTest methods register as JUnit
+    // 5 tests; without an engine on the classpath the platform fails to start
+    // ("Cannot create Launcher without at least one TestEngine"). vintage-engine
+    // lets the existing JUnit-4 tests keep running unchanged.
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.10.2")
     testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.10.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")

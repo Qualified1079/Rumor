@@ -257,6 +257,14 @@ class SimTransport(
     val edgeKey: String = edgeKey(nodeA.index, nodeB.index)
 }
 
+/**
+ * Per-exchange diagnostics emitted by [SimTransport.exchange]. Captures
+ * the bytes and counts moved in each direction plus the bloom or RBSR
+ * bandwidth-saving signal a scenario asserts against. Used by both
+ * simulator scenarios (correctness regressions) and the perf
+ * characterization in CLAUDE.md O42 / O66 (round-count distributions
+ * across realistic heal traces).
+ */
 data class ExchangeMetrics(
     val messagesAtoB: Int,
     val messagesBtoA: Int,

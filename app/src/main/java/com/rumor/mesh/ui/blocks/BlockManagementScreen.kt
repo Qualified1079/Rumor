@@ -19,7 +19,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.rumor.mesh.core.model.BlocklistMode
 import com.rumor.mesh.core.model.BlockEntry
-import com.rumor.mesh.data.SubscribedBlocklistEntity
+import com.rumor.mesh.core.model.SubscribedBlocklist
 import org.koin.androidx.compose.koinViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -184,7 +184,7 @@ private fun LocalBlockRow(entry: BlockEntry, onUnblock: () -> Unit) {
 }
 
 @Composable
-private fun SubscriptionRow(sub: SubscribedBlocklistEntity, onUnsubscribe: () -> Unit) {
+private fun SubscriptionRow(sub: SubscribedBlocklist, onUnsubscribe: () -> Unit) {
     ListItem(
         headlineContent = {
             Text(
