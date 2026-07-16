@@ -148,6 +148,7 @@ class MeshService : Service(), MeshController {
             localPublicKey      = Base64.getEncoder().encodeToString(identity.publicKeyBytes),
             signer              = identityManager::sign,
             messageProvider     = gossipEngine::messagesForExchange,
+            messagesByIds       = gossipEngine::messagesByIds,
             knownIdsProvider    = gossipEngine::knownMessageIds,
             onlineUsersProvider = onlineStatusTracker::currentSnapshot,
             isPriorityPeer      = { userId -> contactRepo.getById(userId)?.isPriorityPeer == true },

@@ -143,6 +143,7 @@ class MessageStore(
     /** O42 RBSR snapshot — whole-store (sentAtMs, id), mirrors dedup-summary semantics. */
     suspend fun rbsrItems(limit: Int): List<com.rumor.mesh.core.sync.RbsrItem> =
         messageRepo.rbsrItems(limit)
+    suspend fun getById(id: String): RumorMessage? = messageRepo.getById(id)
 
     /**
      * Public because the engine also creates contacts from completed gossip

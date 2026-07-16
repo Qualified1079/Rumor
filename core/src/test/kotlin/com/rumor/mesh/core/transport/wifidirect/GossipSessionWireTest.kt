@@ -177,6 +177,58 @@ class GossipSessionWireTest {
     }
 
     @Test
+    fun `rbsr peer receives a message outside the capped offer batch via store fetch`() {
+        val alice = Side("alice")
+        val bob = Side("bob")
+
+        // Alice holds 3,500 shared + one OLD message that is NOT in her offer
+        // batch (deeper O92: offers are capped/freshest-first; the store isn't).
+        val sharedIds = (0 until 3_500).map { "shared-$it" }
+        val oldId = "ancient-1"
+        val tsOf = { id: String -> 1_000L + id.hashCode().mod(100_000) }
+        val oldMsg = msg(oldId, 5L, alice)
+
+        val aliceItems = sharedIds.map { RbsrItem(tsOf(it), it) } + RbsrItem(5L, oldId)
+        val bobItems = sharedIds.map { RbsrItem(tsOf(it), it) }
+
+        val (aliceResult, bobResult) = runPair(
+            buildServer = { sock ->
+                GossipSession(
+                    socket = sock,
+                    localUserId = alice.userId, localPublicKey = alice.pubB64, signer = alice.signer,
+                    knownMessageIds = sharedIds.toSet() + oldId,
+                    messagesProvider = { emptyList() },   // offer batch does NOT contain the old message
+                    messagesByIds = { ids -> ids.mapNotNull { if (it == oldId) oldMsg else null } },
+                    recentOnlineUsers = emptyMap(),
+                    isInbound = true,
+                    sessionGate = { _, _ -> true },
+                    rbsrItemsProvider = { aliceItems },
+                    supportedFeatures = listOf(GossipSession.RBSR_FEATURE),
+                )
+            },
+            buildClient = { sock ->
+                GossipSession(
+                    socket = sock,
+                    localUserId = bob.userId, localPublicKey = bob.pubB64, signer = bob.signer,
+                    knownMessageIds = sharedIds.toSet(),
+                    messagesProvider = { emptyList() },
+                    recentOnlineUsers = emptyMap(),
+                    isInbound = false,
+                    sessionGate = { _, _ -> true },
+                    rbsrItemsProvider = { bobItems },
+                    supportedFeatures = listOf(GossipSession.RBSR_FEATURE),
+                )
+            },
+        )
+
+        assertNotNull(aliceResult); assertNotNull(bobResult)
+        assertEquals(
+            "bob receives the old message despite it being outside alice's offer",
+            listOf(oldId), bobResult!!.messagesReceived.map { it.id },
+        )
+    }
+
+    @Test
     fun `mixed version pair falls back to bloom with no mode split`() {
         val alice = Side("alice")   // new build: provider wired, advertises rbsr-v1
         val bob = Side("bob")       // pre-O42 build: no provider, no feature flag

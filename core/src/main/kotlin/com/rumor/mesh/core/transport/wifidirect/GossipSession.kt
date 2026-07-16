@@ -45,7 +45,15 @@ class GossipSession(
      * Called after HELLO completes so the engine can shape the offer using
      * the peer's historical overlap (see [NeighborStore]).
      */
-    private val messagesProvider: (peerUserId: String) -> List<RumorMessage>,
+    private val messagesProvider: suspend (peerUserId: String) -> List<RumorMessage>,
+    /**
+     * Deeper O92: fetch specific messages by id from the durable store. Used
+     * when the peer requests something outside the capped offer batch — an
+     * RBSR peer's Request names exactly what it lacks per our whole-store
+     * snapshot, which can be older than anything in the offer. Null falls
+     * back to serving only from the offer batch (pre-O92 behaviour).
+     */
+    private val messagesByIds: (suspend (List<String>) -> List<RumorMessage>)? = null,
     private val recentOnlineUsers: Map<String, Long>,
     /** True when this session was accepted server-side; false when initiated as client. */
     private val isInbound: Boolean,
@@ -292,8 +300,16 @@ class GossipSession(
             // missing, then the MESSAGES_DONE terminator (see its KDoc: without it
             // both receive loops deadlock waiting for a frame the other side only
             // sends after its own loop exits).
-            val toSend = (theyNeed + messagesToOffer.filter { it.id in theirRequest.messageIds })
-                .distinctBy { it.id }
+            // Deeper O92: requested ids absent from the capped offer batch are
+            // fetched from the durable store — an RBSR peer asks for exactly
+            // what it lacks, which may be older than anything in the offer.
+            val fromOffer = theyNeed + messagesToOffer.filter { it.id in theirRequest.messageIds }
+            val offeredIds = fromOffer.mapTo(HashSet()) { it.id }
+            val missingRequested = theirRequest.messageIds.filter { it !in offeredIds }
+            val fromStore =
+                if (missingRequested.isEmpty()) emptyList()
+                else messagesByIds?.invoke(missingRequested) ?: emptyList()
+            val toSend = (fromOffer + fromStore).distinctBy { it.id }
             for (msg in toSend) {
                 send(out, GossipPacket.Message(msg))
             }

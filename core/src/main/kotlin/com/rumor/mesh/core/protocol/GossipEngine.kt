@@ -54,6 +54,8 @@ private const val OFFER_RESEED_LIMIT = 4_000
 private const val DEDUP_RESEED_LIMIT = 50_000
 /** O42: RBSR snapshot cap — matches the store cap (50k, 200k static) order of magnitude. */
 private const val RBSR_SNAPSHOT_LIMIT = 50_000
+/** Deeper O92: per-exchange ceiling on fetch-by-id so a hostile Request can't scan the store. */
+private const val MAX_BY_ID_FETCH = 500
 
 /**
  * Core protocol logic. No radio code. No transport types.
@@ -571,14 +573,24 @@ class GossipEngine(
      * routing — see [NeighborStore]. Peer identity comes from the post-HELLO
      * Ed25519 fingerprint, never from MAC or pre-handshake hints.
      */
-    fun messagesForExchange(peerUserId: String): List<RumorMessage> {
+    suspend fun messagesForExchange(peerUserId: String): List<RumorMessage> {
         val overlap = topologyTracker.overlapFor(peerUserId)
         val cap = when {
             overlap >= 0.8f -> 50    // peer is well-informed; send just the freshest
             overlap >= 0.5f -> 100
             else            -> 200   // novel peer or unknown — send the full batch
         }
-        val batch = scheduler.take(cap)
+        // Deeper O92: the scheduler is the priority-shaped head (class priority +
+        // DRR fairness for fresh/contended traffic), but its take() is destructive
+        // — whatever the previous peer drained would never be offered again this
+        // run. Backfill from the durable store so every exchange offers what we
+        // hold, not what happens to still sit in a volatile queue. The peer's
+        // summary (bloom/RBSR) dedups on the wire, so re-offering is free.
+        val head = scheduler.take(cap)
+        val batch = if (head.size >= cap) head else {
+            val seen = head.mapTo(HashSet()) { it.id }
+            head + messageStore.offerable(cap).filter { it.id !in seen }.take(cap - head.size)
+        }
 
         // O29 per-peer routing filter. A relayed DM marked with intendedPeers
         // (set at relay time when breadcrumbs named candidates) is only
@@ -587,9 +599,31 @@ class GossipEngine(
         // are offered to everyone. This is hard exclusion, not bias: the
         // hard ceiling on routedHops+floodedHops in relay() bounds worst-case
         // loops if a breadcrumb is stale.
-        val routedFiltered = batch.filter { msg ->
-            val intended = msg.intendedPeers ?: return@filter true
-            peerUserId in intended
+        val localUserId = identityProvider.identity.value?.userId
+        val routedFiltered = ArrayList<RumorMessage>(batch.size)
+        for (msg in batch) {
+            val intended = msg.intendedPeers
+            if (intended != null) {
+                if (peerUserId in intended) routedFiltered.add(msg)
+                continue
+            }
+            // Deeper O92: a backfilled relayed DM has lost its relay-time
+            // intendedPeers mark (that lives on the scheduler copy; the repo
+            // copy predates the relay decision). Re-derive the same O29
+            // restriction statelessly: offer a relayed DM only to its
+            // recipient or a current breadcrumb candidate; flood when no
+            // breadcrumbs exist (same fallback as relay()). Uses the
+            // authoritative (repo-backed) suspend lookup, NOT the sync
+            // snapshot — the snapshot can be stale by offer time, and this
+            // filter must see the same view relay() saw when it decided.
+            if (breadcrumbs != null && msg.type == MessageType.DIRECT &&
+                msg.recipientId != null && msg.senderId != localUserId &&
+                msg.recipientId != peerUserId
+            ) {
+                val candidates = breadcrumbs.candidatePeers(msg.recipientId)
+                if (candidates.isNotEmpty() && peerUserId !in candidates) continue
+            }
+            routedFiltered.add(msg)
         }
         if (breadcrumbs == null) return routedFiltered
 
@@ -615,6 +649,15 @@ class GossipEngine(
      */
     suspend fun rbsrSnapshot(): List<com.rumor.mesh.core.sync.RbsrItem> =
         messageStore.rbsrItems(RBSR_SNAPSHOT_LIMIT)
+
+    /**
+     * Deeper O92: fetch specific messages from the durable store by id, for the
+     * session's exact-diff paths (an RBSR peer requests precisely what it lacks,
+     * which may be older than anything in the capped offer batch). Bounded so a
+     * malicious Request frame can't turn into an unbounded store scan.
+     */
+    suspend fun messagesByIds(ids: List<String>): List<RumorMessage> =
+        ids.take(MAX_BY_ID_FETCH).mapNotNull { messageStore.getById(it) }
 
     /**
      * O92: rebuild the volatile outbound state from the durable store on mesh

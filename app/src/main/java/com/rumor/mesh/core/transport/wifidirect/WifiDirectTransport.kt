@@ -85,7 +85,9 @@ class WifiDirectTransport(
         /** Signs arbitrary bytes with the local Ed25519 private key. Used for HELLO challenge-response. */
         val signer: (ByteArray) -> ByteArray?,
         /** Returns messages to offer to a specific peer (called post-HELLO). */
-        val messageProvider: (peerUserId: String) -> List<RumorMessage>,
+        val messageProvider: suspend (peerUserId: String) -> List<RumorMessage>,
+        /** Deeper O92: fetch by id from the durable store for exact-diff requests. */
+        val messagesByIds: (suspend (List<String>) -> List<RumorMessage>)? = null,
         /** Returns the set of message IDs this node already knows. */
         val knownIdsProvider: () -> Set<String>,
         /** Returns online-status elapsed-ms map to share with peers. */
@@ -443,6 +445,7 @@ class WifiDirectTransport(
             signer          = cfg.signer,
             knownMessageIds = cfg.knownIdsProvider(),
             messagesProvider = cfg.messageProvider,
+            messagesByIds   = cfg.messagesByIds,
             recentOnlineUsers = cfg.onlineUsersProvider(),
             isInbound       = isInbound,
             sessionGate     = { peerUserId, inbound ->

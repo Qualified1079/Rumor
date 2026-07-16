@@ -141,7 +141,7 @@ class SimNode(
         gossipEngine.onExchange(result)
     }
 
-    fun takeOutbound(peerUserId: String, max: Int = 50) =
+    suspend fun takeOutbound(peerUserId: String, max: Int = 50) =
         gossipEngine.messagesForExchange(peerUserId).take(max)
     fun knownIds(): Set<String> = gossipEngine.knownMessageIds()
 

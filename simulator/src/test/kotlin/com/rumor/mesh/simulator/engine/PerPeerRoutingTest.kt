@@ -42,9 +42,13 @@ class PerPeerRoutingTest {
         a.flushSchedulerToRepo()
         SimTransport(c, b).exchange(kotlin.random.Random(0))  // no-op, but warms B
         SimTransport(a, b).exchange(kotlin.random.Random(1))  // B sees A's seed via A
+        // Deeper-O92 postmortem: the two lines above never laid a crumb —
+        // record() skips fromPeerId == senderId, and awaitUntil times out
+        // SOFTLY. This test used to pass only because the destructive
+        // scheduler drain hid the DM from the second offer. Lay the crumb
+        // explicitly so the test exercises the filter it claims to test.
+        b.breadcrumbs.record(targetUserId = a.userId, fromPeerId = a.userId)
         awaitUntil { b.breadcrumbs.candidatePeersSync(a.userId).isNotEmpty() }
-        // B's breadcrumb for A points to A itself (1-hop). That's fine — the
-        // filter logic treats it as "messages for A are intended for peer A."
 
         registerContact(c, a)
         val dm = c.gossipEngine.composeDirect(

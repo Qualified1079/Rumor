@@ -90,11 +90,10 @@ class SchedulerReseedTest {
 
         val engine = engineOver(repo, scope)
 
-        // The bug: without reseed a restarted engine offers nothing though the store is full.
-        assertTrue(
-            "pre-reseed offer must be empty (volatile scheduler starts clean)",
-            engine.messagesForExchange(peer).isEmpty(),
-        )
+        // Deeper O92 note: the offer path now backfills from the durable store,
+        // so even pre-reseed the offer is non-empty — the original "0 sent"
+        // restart bug is dead twice over. The dedup summary, however, is still
+        // volatile and only reseedFromStore repopulates it.
         assertTrue("pre-reseed summary must be empty", engine.knownMessageIds().isEmpty())
 
         engine.reseedFromStore()
@@ -112,5 +111,33 @@ class SchedulerReseedTest {
             setOf("b0", "b1", "d0", "expired", "presence"),
             summary,
         )
+    }
+
+    /**
+     * Deeper O92: scheduler.take() is destructive, so before the repo backfill
+     * the first peer drained the queue and the second peer was offered nothing.
+     * Now every exchange serves the durable store — both sequential peers see
+     * the same locally-composed broadcast.
+     */
+    @Test
+    fun `sequential peers are both offered a locally-composed broadcast`() = runBlocking {
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val repo = InMemoryMessageRepository()
+        val engine = engineOver(repo, scope)
+        val peerA = SimIdentityProvider(1).identity.value!!.userId
+        val peerB = SimIdentityProvider(2).identity.value!!.userId
+
+        val composed = engine.composeBroadcast("hello both")
+            ?: error("composeBroadcast returned null")
+        // ingestOwn runs async on the engine scope — wait for the durable copy.
+        var tries = 0
+        while (repo.getById(composed.id) == null && tries++ < 100) kotlinx.coroutines.delay(10)
+
+        val offerA = engine.messagesForExchange(peerA).map { it.id }
+        assertTrue("first peer sees the broadcast", composed.id in offerA)
+
+        // Pre-backfill this was empty: the take() above drained the scheduler.
+        val offerB = engine.messagesForExchange(peerB).map { it.id }
+        assertTrue("second peer must ALSO see the broadcast (repo backfill)", composed.id in offerB)
     }
 }
