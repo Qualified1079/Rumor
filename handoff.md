@@ -1,4 +1,23 @@
-# Handoff — backlog audit + cleanups + adversarial-interop & ordering design (2026-07-16, session B)
+# Handoff — THE MERGE (2026-07-16, session C): archimedes + check-online → main
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+The two branch lineages (§1 of the audit below) are reconciled. Read
+`docs/ARCHIMEDES_MERGE_CATALOG.md` first — it is the decision log (authority
+rule, O36 reversal, G9/O41 rotation removal, rbsr-v2 drop, flatten method).
+CLAUDE.md's backlog is fully re-merged (rows O63–O91 imported; G30–G36 added;
+counts line current). Validation at merge time: 334 :core + 45 :simulator +
+95 :app tests green, debug APK assembles. KMP layout flattened to pure JVM;
+`core/platform/` shims kept as the iOS seam (O63). Remaining at time of
+writing: hardware regression on the phones, then push → `main` becomes the
+single canonical branch. The security punch-list from the sessions below
+(§2 dedup-before-verify above all) is still open and now applies to the
+MERGED MessageStore (two-tier dedup made the fix site slightly different —
+`recordAndCheck` now also feeds Tier 1 on eviction).
+
+---
+
+# Prior handoff — backlog audit + cleanups + adversarial-interop & ordering design (2026-07-16, session B)
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
 
