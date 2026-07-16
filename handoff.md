@@ -1,3 +1,144 @@
+# Handoff — backlog audit + cleanups + adversarial-interop & ordering design (2026-07-16, session B)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+> **Two sessions ran 2026-07-16 on this branch.** This top section is the
+> interactive "session B" (backlog reorg, three shipped cleanups, glossary,
+> design discussions). Below it, unchanged, is the parallel **overnight
+> security-audit session** (§0–§13) — read it, it is deeper on security than
+> this section and two of its findings independently corroborate mine. Below
+> *that* is the original O92/O98 handoff. Most-recent-first.
+
+## Committed by session B (pushed: dcb68e1, 1ea456b)
+
+- **`dcb68e1`** — three code cleanups from an implemented-code quality audit
+  (compartmentalization / security-hygiene / comment-clarity): `generateDeviceId`
+  → `CryptoManager.randomBytes(16).toHex()`; deleted dead `BloomFilterData.murmur3()`;
+  unified 3× `formatElapsed` into `app/.../ui/RelativeTime.kt` (fixed the
+  `MessagesScreen` copy missing the O96 rollup + negative clamp). Plus new
+  **`docs/GLOSSARY.md`** (~40 coined terms).
+- **`1ea456b`** — full **backlog re-verification + retier of CLAUDE.md**. Every
+  open row labelled implemented/unimplemented/defunct, "implemented" checked
+  against code. Stale rows found shipped → closed as **G25–G29** (O3 route
+  ranking, O13 bloom-OOM, O16 ingest bucket, O96, O105). O99 defunct. Rows
+  regrouped into disposition tiers. Also added **O108** (transfer-metadata
+  resource caps: evidence-gated setup + per-sender concurrent-transfer cap +
+  stale eviction; explicitly records that "make the attacker pay bandwidth" is
+  NOT the fix — a spammer saturates its own radio regardless) and **O109**
+  (windowed chunk requests — never materialize `(0 until totalChunks)`).
+
+## Overlap with the parallel audit session (important — these agree, not conflict)
+
+- **My O108/O109 ↔ their §3** (transfer-receive OOM). Same bug, same file. They
+  argue it's cheaper to trigger than the backlog described; O108/O109 now record
+  the fix shape. Corroborated by two independent sessions.
+- **My presence-provenance thread ↔ their §4** (`OnlineStatusTracker` unbounded
+  growth). Same finding. My angle adds the *future-timestamp* poison + the
+  provenance fix (trust first-hand only, never re-propagate hearsay).
+- **Their §2 (dedup-before-sig-verify censorship primitive) corrects me.** In my
+  code-quality audit I praised `MessageStore.ingest` gating rate-limit *before*
+  sig-verify as good CPU-protection. Their §2 shows the deeper truth: because
+  `duplicateFilter.recordAndCheck` also runs before verification, a forged
+  message bearing a *real* id marks that id permanently seen, so the genuine
+  signed message is later dropped as a duplicate — a targeted censorship/blackhole
+  primitive. **Their analysis is correct and supersedes my read. Treat their §2 as
+  the top security item**, ahead of my O108/O109.
+
+## Session-B design threads reached but NOT yet recorded in CLAUDE.md
+
+The next instance should record or reconsider these (none are in the doc):
+
+1. **Low-quality / black-hole node handling.** O3's score measures *link health*,
+   not *forwarding honesty* (a black hole completes sessions cleanly). Forwarding
+   is locally unobservable except via the end-to-end **DM ACK**. Researched
+   CONFIDANT/CORE (classic MANET reputation) → **rejected**: their promiscuous-
+   overhear watchdog premise doesn't hold on encrypted unicast, and isolation +
+   second-hand "warnings" are a Sybil/censorship weapon. Deployed meshes use
+   redundancy + preference, never exclusion. Proposed: **confidence-graded routing
+   width** — not hard exclusion; high ACK-confidence breadcrumb → narrow routed
+   copy, low/unknown → widen (top-2 + preserved flood budget), none → flood. Rep =
+   local first-hand ACK-return rate, decaying both ways, **never gossiped**. Gates
+   O98 anchor weight too (earned, not self-asserted FREE). **Needs simulation**
+   (decay rate, malus/missed-ack); prerequisite O40's ACK machinery.
+2. **Presence provenance** (see overlap w/ their §4): first-hand authoritative,
+   second-hand a weak decaying non-re-propagated hint, LRU-bound the map. Ties O95/O58.
+3. **Candidate design principle: "trust first-hand evidence, not assertions."**
+   Black-hole rep, presence, and causal-ordering refs all converge on it.
+4. **Group-membership guardrail for O52** (before it's built): membership = an
+   authored, signed, per-group append-only op-log with a trivial merge, **strictly
+   separate from message ordering, never state-resolved from the message DAG**.
+   O36's closed-membership-only decision makes the trivial merge sufficient. This
+   is what inoculates group rooms against Matrix's state-resolution failure class.
+5. **Pre-loader hardening row:** harden/deprecate `GossipEngine.injectFromPlugin`
+   (unauthenticated + unbounded arbitrary-message injection — the primary hole
+   before any DEX/plugin loader; `injectBridgedDm` beside it IS constrained, this
+   older path isn't) + point **O39** at `CryptoManager.x25519Agreement`'s welded
+   constant-salt HKDF-extract (correct today, but the buried per-message-salt
+   assumption is what the O39 FS audit must find).
+6. Index `docs/GLOSSARY.md` from CLAUDE.md.
+
+## Message ordering & time — NEUTRAL writeup (form your own opinion)
+
+Deliberately even-handed; the user wants a context-free instance to judge. A
+tentative lean is flagged at the very end as *one input only*.
+
+**Problem.** Cross-sender ordering can't lean on wall clocks in the target
+scenario (no NTP/GPS; a field phone was 64 days off). Per-sender order already
+exists — `RumorMessage.sequenceNumber` + `MessageDao` sort `sentAtMs ASC,
+sequenceNumber ASC`. The weak point: **cross-sender order still uses `sentAtMs`
+(wall clock)** as primary key. Same wall-clock reliance appears in presence (thread 2).
+
+**Options discussed (no ranking implied):**
+
+- **(A) Gossip clock-sync / epoch (mesh-median; Marzullo/NTP intersection).** Agree
+  a coarse shared time by trimmed-median of neighbour estimates, dropping outliers;
+  the full form of O95's mesh-median sketch. + coarse shared timeline. − adds beacon
+  traffic; trimmed-median survives a *minority* of liars but a local Sybil *majority*
+  biases it; too coarse to be a clock without constant beacons.
+- **(B) HLC (Hybrid Logical Clocks) — O95's original plan.** Scalar `(wallHint,
+  counter)`, `max+1` on receive. + very cheap (~8 B), zero extra traffic, causal-
+  consistent total order. − can't tell concurrent from ordered; still carries a wall
+  hint; no gap-tolerance beyond the scalar.
+- **(C) Per-author hash chain (Secure Scuttlebutt).** Each message commits to
+  `prevHash` of the author's previous message, inside the *existing* signature. +
+  tamper-evident own-history (no self-reorder/backdate), cheap (~32 B, **no new
+  signature — Rumor already signs every message**), forgery-resistant. − orders only
+  within one author; cross-author concurrent unless linked. SSB deliberately stops here.
+- **(D) Frontier causal refs (Matrix `prev_events` / Nostr `e`-tags).** Message
+  carries ids of the "tips" it had seen (Matrix caps ~10). + cross-author partial
+  order; **gap-tolerant** (order survives a missing middle — the DTN win); author-
+  signed, so a Sybil can't forge *others'* order, only its own view. − bandwidth
+  (~340 B for 10 32-char ids — large % on a small broadcast); needs linearization +
+  deterministic tiebreak (id-hash) for concurrent events; a ref to an id you lack
+  must **degrade to local-sort, never block/fetch-wait**.
+
+**Cross-cutting lessons from how others do it (researched this session):**
+- **Matrix**: the DAG-for-*ordering* is sound; its bleeding is **state resolution
+  over contested mutable room state** (state resets, room hijack via fake
+  `prev_events`; now on its 3rd algorithm). → don't run state-res over the DAG (see
+  guardrail 4 above).
+- **Nostr**: `e`-tags order *threads* well but the *global feed* still sorts by
+  self-asserted `created_at` (backdating hole; clients sanity-clamp). → don't
+  reintroduce trusted timestamps as the feed sort key.
+- **SSB**: only totally-orders within a feed, partial across — never invents a
+  global clock; demonstrates (C) as forgery-proof own-history.
+
+**Open questions:** which layers, applied where (refs on every message vs
+replies-only — Nostr does replies-only; measure the cost like the RBSR crossover)?
+Is the residual honest-enough (in C+D an author can only misorder *its own* view,
+never others', never hijack — strictly better than a clock, not zero)? Is an
+id-hash tiebreak for genuinely-concurrent events acceptable UX vs. the wall-clock
+lie it replaces?
+
+**Session-B tentative lean (one input, NOT a conclusion — re-derive yourself):** C
+unconditionally (cheap, closes self-reordering), D targeted to replies/threads only
+(cost-justified, not sprayed on every message), B as a cheap cross-author scalar,
+with three guardrails (no state-res over the DAG; no trusted-timestamp feed
+fallback; missing refs degrade-not-block). (A) was set aside for Sybil-majority
+weakness + added traffic. The user explicitly wants your independent opinion here.
+
+---
+
 # Handoff — overnight research/audit session (2026-07-16); no code changes to the app
 
 **Signal to next instance: sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
