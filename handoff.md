@@ -164,6 +164,24 @@ with:
 - `Chunker.missingIndices` (`Chunker.kt:93-94`) confirms O109's premise
   exactly: `(0 until totalChunks).filter { it !in received }` eagerly
   materializes the whole range regardless of size — no windowing anywhere.
+- **One real mitigating factor, worth knowing about before "fixing" this
+  from scratch:** `InboxPolicy.maxIncomingBytes` (`core/…/policy/
+  InboxPolicy.kt`) IS correctly wired as a real pre-filter —
+  `GossipEngine.emitToInbox` (`GossipEngine.kt:808-812`) calls
+  `inboxFilter.allowsInbox(msg)` before emitting to
+  `_incomingMessages`, and `InboxPolicyManager.allowsInbox`
+  (`InboxPolicyManager.kt:70-84`) does reject `TRANSFER_METADATA` whose
+  `totalBytes` exceeds the configured cap, *before* `TransferAssembler`
+  (which subscribes to that same `incomingMessages` flow) ever sees it —
+  so the OOM in this section is fully preventable today. The catch: the
+  cap (`InboxPolicy.maxIncomingBytes`) **defaults to `null` = unlimited**
+  (`InboxPolicyManager.kt:92-93`, matches README's documented default
+  "0 (unlimited)"), so this only protects users who've proactively set a
+  cap in Settings → Inbox policy. The proper fix is still O108/O109's
+  windowing + evidence-gated setup (a determined attacker could still
+  set `totalBytes` just under whatever cap a cautious user picked), but
+  a cheap complementary stopgap is worth considering: ship with a sane
+  non-null default cap instead of unlimited-by-default.
 
 ## §4 — HIGH severity, live, verified: OnlineStatusTracker unbounded growth + a false claim in this repo's own README
 
