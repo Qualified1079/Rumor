@@ -575,7 +575,61 @@ only, zero consumers anywhere) and the battery-optimization warning card
 (`showBatteryOptimisationWarning` defaults `false`, never set `true`
 anywhere in the ViewModel — permanently unreachable UI).
 
-## §12 — priority order if picking one thing at a time
+## §12 — round 2 continued: RelayBatcher weakens its own documented security property; Scheduler DRR is clean
+
+Closing out the second pass. `core/scheduler/Scheduler.kt` (the DRR
+outbound scheduler) was audited in full depth — deficit carry-over,
+per-flow quantum accounting, the INFRASTRUCTURE/REALTIME/TRANSFER_SETUP/
+BULK size-ceiling enforcement across every enqueue entry point (local
+compose, relay, reseed), overflow shedding targeting, the static-mode 3×
+multiplier, and concurrency (every public method genuinely
+`synchronized`) — **no issues found anywhere.** This is the cleanest
+subsystem this whole session touched; no further audit needed here
+unless the code changes.
+
+`RelayBatcher` (the 100-500ms relay-jitter window that's supposed to
+provide "timing correlation resistance," per README) has two real bugs,
+both in the direction of *weakening* that specific documented property:
+
+- **`RelayBatcher.kt:30` uses `java.util.Random()`, not `SecureRandom`.**
+  Every other security-relevant randomness use in this codebase
+  (`CryptoManager.kt:34`, `BlockManager.kt:79`, `GossipSession.kt:146`)
+  correctly uses `SecureRandom`; this is the one exception, and it's the
+  one place where the randomness itself IS the security property being
+  claimed (an observer who can narrow `java.util.Random`'s internal state
+  gains leverage in predicting relay-flush timing that `SecureRandom`
+  would deny them). Contrast with the simulator/jitter `Random` usage
+  elsewhere in the codebase, which is fine — that's UX/backoff jitter
+  with no security claim attached to it; this one specifically is
+  claimed as an anti-correlation mechanism.
+- **It's a periodic batch-window flush, not a per-message random delay**
+  — `RelayBatcher.kt:32-41` picks one random window length per loop
+  iteration and flushes everything currently queued at the end of it. A
+  message arriving right after a flush waits close to the full window;
+  a message arriving just before the *next* scheduled flush goes out
+  almost immediately (near-zero delay). Near-zero-delay relay right
+  after receipt is exactly the strongest timing signal an observer could
+  get — the one case the whole mechanism exists to prevent. README's
+  wording ("sit for a random 100-500ms window") implies a per-message
+  delay; the actual behavior is closer to "sit for up to 500ms, with the
+  exact wait depending on where in the current window you arrived,"
+  which has a very different (weaker) worst-case privacy bound. Both are
+  contained fixes — swap the RNG, and either derive each message's own
+  delay independently (per-message timer) rather than flushing on a
+  shared clock, or explicitly document the weaker bound this design
+  actually provides if the batch-flush shape is intentional for other
+  reasons (fewer transport wake-ups, per README's stated secondary
+  benefit) and per-message delay isn't worth the cost. Given O27's
+  existing "honest documentation, don't overclaim" ship-blocker for
+  deanonymization limits, this is squarely in that same bucket — either
+  fix the mechanism or fix the claim, but the current gap between the two
+  is a real, if narrow, privacy overclaim.
+- The "local compose bypasses the batcher entirely" claim (README) does
+  hold — verified every local-compose call site routes through
+  `enqueueImmediate` directly, never touching `RelayBatcher`; only the
+  `relay()` path does.
+
+## §13 — priority order if picking one thing at a time
 
 1. **§2 — the ingest dedup-before-sig-verify ordering bug.** Live
    censorship primitive, contained fix, highest severity in this
@@ -601,6 +655,16 @@ anywhere in the ViewModel — permanently unreachable UI).
    future-timestamp injection is the exception — that one's peer-
    triggerable too and probably belongs closer to tier 2).
 6. Everything else in §6/§8/§9 — real, verified, lower urgency.
+7. **§12's `RelayBatcher` findings** — slot between tiers 4 and 5: not
+   remotely-triggerable-DoS severity, but it's a documented security
+   property (timing-correlation resistance) that's currently weaker than
+   claimed, and both the RNG swap and the delay-shape fix are small,
+   contained changes relative to their write-up length.
+8. **§11's `MessagesViewModel`/simulator ordering bugs** — same tier as
+   #7. The thread-list spoofing bypass is a one-line "use the DAO's
+   already-correct ordering, don't re-derive it" fix; the simulator
+   ordering gap is cosmetic for now but will bite the next time someone
+   writes a scenario test that asserts thread order.
 
 ## What I did not get to
 
