@@ -7,7 +7,7 @@ import com.rumor.mesh.core.data.MessageRepository
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.Contact
 import com.rumor.mesh.core.model.RumorMessage
-import com.rumor.mesh.core.policy.StaticMode
+import com.rumor.mesh.core.mode.ModeState
 import kotlinx.coroutines.flow.Flow
 import com.rumor.mesh.core.platform.AtomicCounter
 import com.rumor.mesh.core.platform.ConcurrentMap
@@ -17,8 +17,8 @@ private const val DEFAULT_BROADCAST_HOPS = 7
 private const val MANUAL_RELAY_BOOST = 2
 private const val MAX_MESSAGES = 50_000
 private const val EVICT_BATCH = 500
-/** A static node holds a far deeper backlog so it can serve peers that were offline longer. */
-private const val STATIC_CACHE_BOOST = 4
+// The cache-depth multiplier now lives per-mode in ModeEnvelope
+// (storageCacheBoost: MOBILE=1, STATIC=4 [= the old STATIC_CACHE_BOOST], FREE=8).
 
 /**
  * Persistence + ingest gateway between the wire and the application
@@ -49,7 +49,7 @@ class MessageStore(
     private val messageRepo: MessageRepository,
     private val contactRepo: ContactRepository,
     private val duplicateFilter: DuplicateFilter,
-    private val staticMode: StaticMode? = null,
+    private val modeState: ModeState? = null,
     private val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
     /**
@@ -151,9 +151,9 @@ class MessageStore(
     }
 
     private suspend fun evictIfOverCap() {
-        val isStatic = staticMode?.enabled?.value == true
-        val maxMessages = if (isStatic) MAX_MESSAGES * STATIC_CACHE_BOOST else MAX_MESSAGES
-        val evictBatch = if (isStatic) EVICT_BATCH * STATIC_CACHE_BOOST else EVICT_BATCH
+        val boost = modeState?.envelope?.storageCacheBoost ?: 1
+        val maxMessages = MAX_MESSAGES * boost
+        val evictBatch = EVICT_BATCH * boost
         val count = messageRepo.count()
         if (count > maxMessages) {
             messageRepo.evictOldest(evictBatch)

@@ -3,7 +3,7 @@ package com.rumor.mesh.core.scheduler
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.TrafficClass
 import com.rumor.mesh.core.model.trafficClass
-import com.rumor.mesh.core.policy.StaticMode
+import com.rumor.mesh.core.mode.ModeState
 
 /**
  * Class-aware Deficit Round Robin scheduler.
@@ -35,7 +35,7 @@ class Scheduler(
     private val quantumBytes: Int = DEFAULT_QUANTUM_BYTES,
     private val perFlowCap: Int = DEFAULT_PER_FLOW_CAP,
     private val totalQueueCap: Int = DEFAULT_TOTAL_QUEUE_CAP,
-    private val staticMode: StaticMode? = null,
+    private val modeState: ModeState? = null,
 ) {
     private val lock = Any()
 
@@ -50,12 +50,13 @@ class Scheduler(
         val size: Int get() = queues.values.sumOf { it.size }
     }
 
-    // A static node is plugged in: it can afford bigger DRR rounds, deeper
-    // per-flow queues, and a larger overall backlog.
-    private val isStatic: Boolean get() = staticMode?.enabled?.value == true
-    private val effectiveQuantum: Int get() = if (isStatic) quantumBytes * STATIC_BOOST else quantumBytes
-    private val effectivePerFlowCap: Int get() = if (isStatic) perFlowCap * STATIC_BOOST else perFlowCap
-    private val effectiveTotalCap: Int get() = if (isStatic) totalQueueCap * STATIC_BOOST else totalQueueCap
+    // A plugged-in (static/free) node can afford bigger DRR rounds, deeper
+    // per-flow queues, and a larger overall backlog. The multiplier comes from
+    // the current mode's O62 envelope (MOBILE=1); no binary static/not branch.
+    private val boost: Int get() = modeState?.envelope?.schedulerBoost ?: 1
+    private val effectiveQuantum: Int get() = quantumBytes * boost
+    private val effectivePerFlowCap: Int get() = perFlowCap * boost
+    private val effectiveTotalCap: Int get() = totalQueueCap * boost
 
     fun enqueue(msg: RumorMessage) = synchronized(lock) {
         val group = groups.getValue(msg.trafficClass)
@@ -180,7 +181,7 @@ class Scheduler(
         const val DEFAULT_PER_FLOW_CAP = 500
         /** Total backlog cap across all classes; overflow sheds bulk first. */
         const val DEFAULT_TOTAL_QUEUE_CAP = 4_000
-        /** Multiplier applied to quantum and caps when [StaticMode] is on. */
-        const val STATIC_BOOST = 3
+        // The quantum/cap multiplier now lives per-mode in ModeEnvelope
+        // (schedulerBoost: MOBILE=1, STATIC=3 [= the old STATIC_BOOST], FREE=6).
     }
 }

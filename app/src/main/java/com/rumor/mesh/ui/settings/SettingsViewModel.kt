@@ -6,7 +6,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.logging.RumorLog
-import com.rumor.mesh.core.policy.StaticModeManager
+import com.rumor.mesh.core.model.UserMode
+import com.rumor.mesh.core.policy.ModeStateManager
 import com.rumor.mesh.core.transport.DeviceQuirks
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,7 +26,7 @@ data class SettingsState(
 )
 class SettingsViewModel(
     private val identityManager: IdentityManager,
-    private val staticModeManager: StaticModeManager,
+    private val modeStateManager: ModeStateManager,
     private val context: Context,
 ) : ViewModel() {
 
@@ -42,14 +43,17 @@ class SettingsViewModel(
             }
         }
         viewModelScope.launch {
-            staticModeManager.enabled.collect { on ->
-                _state.update { it.copy(staticMode = on) }
+            modeStateManager.mode.collect { mode ->
+                _state.update { it.copy(staticMode = mode != UserMode.MOBILE) }
             }
         }
     }
 
+    // The Settings toggle is binary today (on → STATIC, off → MOBILE). FREE is
+    // reachable via auto-triggers (plug + screen-off) once the O57 wiring lands;
+    // a 3-way mode selector is separate O57/O97 UI work.
     fun setStaticMode(enabled: Boolean) {
-        staticModeManager.setEnabled(enabled)
+        modeStateManager.setMode(if (enabled) UserMode.STATIC else UserMode.MOBILE)
     }
 
     fun setScanInterval(seconds: Int) {

@@ -26,8 +26,8 @@ import com.rumor.mesh.core.logging.AndroidLogSink
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.policy.InboxPolicyManager
-import com.rumor.mesh.core.policy.StaticMode
-import com.rumor.mesh.core.policy.StaticModeManager
+import com.rumor.mesh.core.mode.ModeState
+import com.rumor.mesh.core.policy.ModeStateManager
 import com.rumor.mesh.core.protocol.DuplicateFilter
 import com.rumor.mesh.core.protocol.GossipEngine
 import com.rumor.mesh.core.protocol.MessageStore
@@ -115,9 +115,9 @@ val appModule = module {
     single { IdentityManager(androidContext()) }
     single<IdentityProvider> { get<IdentityManager>() }
 
-    // ── Static mode ───────────────────────────────────────────────────────────
-    single { StaticModeManager(androidContext()) }
-    single<StaticMode> { get<StaticModeManager>() }
+    // ── Device mode (O62) ───────────────────────────────────────────────────────
+    single { ModeStateManager(androidContext()) }
+    single<ModeState> { get<ModeStateManager>() }
 
     // ── Block module ──────────────────────────────────────────────────────────
     single { BlockManager(get<BlockEntryRepository>(), get<SubscribedBlocklistRepository>(), get<BlocklistEntryRepository>()) }
@@ -126,12 +126,12 @@ val appModule = module {
 
     // ── Protocol layer ────────────────────────────────────────────────────────
     single { DuplicateFilter() }
-    single { MessageStore(get(), get(), get(), get<StaticMode>()) }
+    single { MessageStore(get(), get(), get(), get<ModeState>()) }
     single { OnlineStatusTracker() }
     single { NeighborStore() }
     single { TopologyTracker(get(), get()) }
     single { BreadcrumbCache(get()) }
-    single { Scheduler(staticMode = get<StaticMode>()) }
+    single { Scheduler(modeState = get<ModeState>()) }
     single { InboxPolicyManager(androidContext(), get()) }
     single<InboxFilter> { get<InboxPolicyManager>() }
     single { DmEnvelopeRegistry() }
@@ -195,7 +195,7 @@ val appModule = module {
     single { MessageScheduler(get<ScheduledMessageRepository>(), get<GossipEngine>(), get<ContactRepository>()) }
 
     // ── Transport ─────────────────────────────────────────────────────────────
-    single { BleDiscoveryManager(androidContext(), get<StaticMode>()) }
+    single { BleDiscoveryManager(androidContext(), get<ModeState>()) }
     single { WifiDirectTransport(androidContext()) }
 
     // ── Plugins ───────────────────────────────────────────────────────────────

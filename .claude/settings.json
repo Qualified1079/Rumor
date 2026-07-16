@@ -1,11 +1,5 @@
 {
   "permissions": {
-    "defaultMode": "dontAsk",
-    "deny": [
-      "Bash(rm -rf /*)",
-      "Bash(git push --force*)",
-      "Bash(git push -f*)"
-    ],
     "allow": [
       "Bash(adb *)",
       "Bash(gradle *)",
@@ -33,7 +27,15 @@
       "Bash(git push origin claude/*)",
       "Bash(jq *)",
       "Bash(kill *)",
-      "Bash(nohup adb *)"
-    ]
+      "Bash(nohup adb *)",
+      "Bash(/home/user/Android/Sdk/platform-tools/adb *)",
+      "Bash(/home/user/gradle-dist/gradle-8.13/bin/gradle *)"
+    ],
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)"
+    ],
+    "defaultMode": "dontAsk"
   }
 }

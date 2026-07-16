@@ -17,7 +17,8 @@ import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.ContentType
-import com.rumor.mesh.core.policy.StaticMode
+import com.rumor.mesh.core.mode.ModeState
+import com.rumor.mesh.core.model.UserMode
 import com.rumor.mesh.core.protocol.GossipEngine
 import com.rumor.mesh.core.block.BlocklistGossipBridge
 import com.rumor.mesh.core.transfer.TransferAssembler
@@ -80,7 +81,7 @@ class MeshService : Service(), MeshController {
     private val breadcrumbCache: BreadcrumbCache by inject()
     private val pluginRegistry: PluginRegistry by inject()
     private val pluginCatalog: PluginCatalog by inject()
-    private val staticMode: StaticMode by inject()
+    private val modeState: ModeState by inject()
     private val contactRepo: com.rumor.mesh.core.data.ContactRepository by inject()
     private val contactDao: ContactDao by inject()
     private val transferSender: TransferSender by inject()
@@ -203,7 +204,7 @@ class MeshService : Service(), MeshController {
         // Re-arm BLE on toggle so the new scan/advertise duty cycle takes effect
         // immediately. drop(1) skips the initial value emitted on collect.
         scope.launch {
-            staticMode.enabled.drop(1).collect {
+            modeState.mode.drop(1).collect {
                 updateNotification(statusText(wifiDirectTransport.peerCount.value))
                 bleDiscovery.stop()
                 bleDiscovery.start()
@@ -344,13 +345,17 @@ class MeshService : Service(), MeshController {
             .notify(NOTIFICATION_ID, buildNotification(statusText))
     }
 
-    /** Notification status line, with a static-node suffix when the toggle is on. */
+    /** Notification status line, with a mode suffix when not in the default MOBILE mode. */
     private fun statusText(peerCount: Int): String {
         val base = if (peerCount > 0) {
             "$peerCount peer${if (peerCount == 1) "" else "s"} nearby"
         } else {
             "Scanning for peers…"
         }
-        return if (staticMode.enabled.value) "$base · static node" else base
+        return when (modeState.mode.value) {
+            UserMode.STATIC -> "$base · static node"
+            UserMode.FREE -> "$base · free node"
+            UserMode.MOBILE -> base
+        }
     }
 }

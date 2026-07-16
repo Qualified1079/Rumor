@@ -12,7 +12,8 @@ import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.rumor.mesh.core.logging.RumorLog
-import com.rumor.mesh.core.policy.StaticMode
+import com.rumor.mesh.core.mode.ModeState
+import com.rumor.mesh.core.mode.ScanPower
 import com.rumor.mesh.core.transport.DeviceQuirks
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,7 +31,7 @@ import java.util.UUID
  */
 class BleDiscoveryManager(
     private val context: Context,
-    private val staticMode: StaticMode,
+    private val modeState: ModeState,
 ) {
     private val TAG = "BleDiscovery"
 
@@ -119,18 +120,25 @@ class BleDiscoveryManager(
             return
         }
 
-        // A plugged-in static node advertises harder so peers find it faster.
-        val isStatic = staticMode.enabled.value
+        // A plugged-in static/free node advertises harder so peers find it
+        // faster. Aggression comes from the current mode's O62 envelope.
+        val power = modeState.envelope.scanPower
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(
-                if (isStatic) AdvertiseSettings.ADVERTISE_MODE_BALANCED
-                else AdvertiseSettings.ADVERTISE_MODE_LOW_POWER
+                when (power) {
+                    ScanPower.LOW_POWER   -> AdvertiseSettings.ADVERTISE_MODE_LOW_POWER
+                    ScanPower.BALANCED    -> AdvertiseSettings.ADVERTISE_MODE_BALANCED
+                    ScanPower.LOW_LATENCY -> AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY
+                }
             )
             .setConnectable(false)
             .setTimeout(0)  // advertise indefinitely
             .setTxPowerLevel(
-                if (isStatic) AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM
-                else AdvertiseSettings.ADVERTISE_TX_POWER_LOW
+                when (power) {
+                    ScanPower.LOW_POWER   -> AdvertiseSettings.ADVERTISE_TX_POWER_LOW
+                    ScanPower.BALANCED    -> AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM
+                    ScanPower.LOW_LATENCY -> AdvertiseSettings.ADVERTISE_TX_POWER_HIGH
+                }
             )
             .build()
 
@@ -198,12 +206,15 @@ class BleDiscoveryManager(
             .setServiceUuid(RUMOR_PARCEL_UUID)
             .build()
 
-        // Static nodes scan at a balanced duty cycle — quicker peer discovery
-        // at a power cost a plugged-in device can absorb.
+        // Scan duty cycle from the current mode's O62 envelope — quicker peer
+        // discovery at a power cost a plugged-in device can absorb.
         val settings = ScanSettings.Builder()
             .setScanMode(
-                if (staticMode.enabled.value) ScanSettings.SCAN_MODE_BALANCED
-                else ScanSettings.SCAN_MODE_LOW_POWER
+                when (modeState.envelope.scanPower) {
+                    ScanPower.LOW_POWER   -> ScanSettings.SCAN_MODE_LOW_POWER
+                    ScanPower.BALANCED    -> ScanSettings.SCAN_MODE_BALANCED
+                    ScanPower.LOW_LATENCY -> ScanSettings.SCAN_MODE_LOW_LATENCY
+                }
             )
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .setMatchMode(ScanSettings.MATCH_MODE_STICKY)
