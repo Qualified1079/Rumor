@@ -29,6 +29,13 @@ class BlockManager(
     private val blockEntryRepo: BlockEntryRepository,
     private val subscribedBlocklistRepo: SubscribedBlocklistRepository,
     private val blocklistEntryRepo: BlocklistEntryRepository,
+    /**
+     * The local node's own userId, if known. Enforces the invariant that a node
+     * never blocks itself: [block] refuses it, and [refresh] excludes it from the
+     * effective set even if it slipped in via a subscribed list. Defaults to
+     * unknown (simulator/tests) — a null provider disables the guard harmlessly.
+     */
+    private val localUserId: () -> String? = { null },
 ) {
     private val TAG = "BlockManager"
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -51,7 +58,12 @@ class BlockManager(
 
     fun isBlocked(userId: String): Boolean = userId in blockedSet
 
-    suspend fun block(userId: String, durationMs: Long? = null, reason: String? = null) {
+    /** Returns false (a no-op) if [userId] is the local node's own identity. */
+    suspend fun block(userId: String, durationMs: Long? = null, reason: String? = null): Boolean {
+        if (userId == localUserId()) {
+            RumorLog.w(TAG, "Refusing to block own identity ${userId.take(16)}…")
+            return false
+        }
         val now = SystemClock.now()
         blockEntryRepo.upsert(
             BlockEntry(
@@ -63,6 +75,7 @@ class BlockManager(
         )
         refresh()
         RumorLog.i(TAG, "Blocked ${userId.take(16)}… ${if (durationMs == null) "permanently" else "for ${durationMs / 1000}s"}")
+        return true
     }
 
     suspend fun unblock(userId: String) {
@@ -99,7 +112,10 @@ class BlockManager(
     private suspend fun refresh() {
         val local = blockEntryRepo.getActiveIds().toSet()
         val subscribed = blocklistEntryRepo.getAllBlockedIds().toSet()
-        val union = local + subscribed
+        // Never treat our own identity as blocked, even if a subscribed list names
+        // it — blocking self is meaningless (relay is blocklist-blind, our own feed
+        // renders from the store) and only invites the publish-then-hide-me footgun.
+        val union = (local + subscribed) - setOfNotNull(localUserId())
         blockedSet = union
         _blockedFlow.value = union
     }

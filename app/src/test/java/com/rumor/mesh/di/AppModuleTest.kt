@@ -33,6 +33,9 @@ class AppModuleTest {
                 CanaryMetrics::class,
                 CoroutineScope::class,
                 Long::class,
+                // BlockManager's localUserId provider — supplied inside the
+                // single{} lambda from IdentityProvider, not resolved from graph.
+                Function0::class,
             ),
         )
     }

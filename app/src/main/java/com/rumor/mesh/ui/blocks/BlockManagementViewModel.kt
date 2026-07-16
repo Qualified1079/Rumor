@@ -51,11 +51,14 @@ class BlockManagementViewModel(
     fun block(userId: String, durationMinutes: Long?, reason: String?) {
         if (userId.isBlank()) return
         viewModelScope.launch {
-            blockManager.block(
+            val ok = blockManager.block(
                 userId = userId.trim(),
                 durationMs = durationMinutes?.let { it * 60_000L },
                 reason = reason?.takeIf { it.isNotBlank() },
             )
+            if (!ok) {
+                _state.update { it.copy(statusMessage = "You can't block your own identity") }
+            }
             refresh()
         }
     }

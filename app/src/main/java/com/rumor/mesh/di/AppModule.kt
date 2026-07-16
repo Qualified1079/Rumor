@@ -120,7 +120,15 @@ val appModule = module {
     single<ModeState> { get<ModeStateManager>() }
 
     // ── Block module ──────────────────────────────────────────────────────────
-    single { BlockManager(get<BlockEntryRepository>(), get<SubscribedBlocklistRepository>(), get<BlocklistEntryRepository>()) }
+    single {
+        val identityProvider = get<IdentityProvider>()
+        BlockManager(
+            get<BlockEntryRepository>(),
+            get<SubscribedBlocklistRepository>(),
+            get<BlocklistEntryRepository>(),
+            localUserId = { identityProvider.identity.value?.userId },
+        )
+    }
     single { BlocklistPublisher(get<BlockEntryRepository>(), get<IdentityProvider>()) }
     single { BlocklistSubscriber(get<SubscribedBlocklistRepository>(), get<BlocklistEntryRepository>()) }
 
