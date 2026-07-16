@@ -24,30 +24,28 @@ class PerPeerRoutingTest {
 
     @Test
     fun `relayed DM with breadcrumb match is offered only to matched peers`() = runBlocking {
-        // Three-node line: A — B — C, with B as the relay. A is the DM
-        // recipient. We seed B's breadcrumb cache so B knows "to reach A,
-        // go via A directly" (the simplest 1-hop case). When C sends a DM
-        // for A through B, B's relay marks the message with intendedPeers={A}.
+        // Four nodes: A (DM recipient), D (path node), B (relay under test),
+        // C (DM sender). The breadcrumb on B forms ORGANICALLY, the way
+        // production forms it: B receives one of A's messages relayed by D
+        // (fromPeerId=D != senderId=A → record "to reach A, go via D").
+        // The pre-deeper-O92 version of this test tried to lay the crumb via
+        // a direct A→B exchange, which record() correctly skips
+        // (fromPeerId == senderId) — the crumb never existed, awaitUntil
+        // timed out SOFTLY, and the assertions passed only because the
+        // destructive scheduler drain hid the DM from the second offer call.
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         val a = SimNode(0, scope)
         val b = SimNode(1, scope)
         val c = SimNode(2, scope)
+        val d = SimNode(3, scope)
 
-        // Phase 1: A broadcasts so B records "to A → via A" breadcrumb.
-        // (Direct receipt would normally be filtered; we use a third hop via
-        // C → B exchange where B sees A's message arriving from C, so B's
-        // crumb is 'to A → via C'. But for this test we instead just lay an
-        // A → B exchange first to populate the snapshot directly.)
-        a.gossipEngine.composeBroadcast("seed")!!
+        // Phase 1: A → D → B lays the crumb "to A, via D" on B.
+        val seed = a.gossipEngine.composeBroadcast("seed")!!
         a.flushSchedulerToRepo()
-        SimTransport(c, b).exchange(kotlin.random.Random(0))  // no-op, but warms B
-        SimTransport(a, b).exchange(kotlin.random.Random(1))  // B sees A's seed via A
-        // Deeper-O92 postmortem: the two lines above never laid a crumb —
-        // record() skips fromPeerId == senderId, and awaitUntil times out
-        // SOFTLY. This test used to pass only because the destructive
-        // scheduler drain hid the DM from the second offer. Lay the crumb
-        // explicitly so the test exercises the filter it claims to test.
-        b.breadcrumbs.record(targetUserId = a.userId, fromPeerId = a.userId)
+        SimTransport(a, d).exchange(kotlin.random.Random(1))
+        awaitUntil { d.knownMessages().any { it.id == seed.id } }
+        d.flushSchedulerToRepo()
+        SimTransport(d, b).exchange(kotlin.random.Random(2))
         awaitUntil { b.breadcrumbs.candidatePeersSync(a.userId).isNotEmpty() }
 
         registerContact(c, a)
@@ -58,26 +56,24 @@ class PerPeerRoutingTest {
         ) ?: error("composeDirect returned null")
         c.flushSchedulerToRepo()
 
-        // C → B exchange. B receives the DM (recipientId != B, so B relays it).
-        SimTransport(c, b).exchange(kotlin.random.Random(2))
+        // C → B exchange. B receives the DM (recipientId != B, so B relays it,
+        // marking intendedPeers = breadcrumb candidates for A = {D}).
+        SimTransport(c, b).exchange(kotlin.random.Random(3))
         // Ingest + RelayBatcher (1ms in sim) are asynchronous.
         awaitUntil { b.knownMessages().any { it.id == dm.id } && b.schedulerQueueDepth > 0 }
 
-        // At B: the relayed DM should be marked with intendedPeers={a.userId}
-        // because b's breadcrumb candidates for A include A. Now ask B what
-        // it would offer C versus what it would offer A.
-        val offerToA = b.gossipEngine.messagesForExchange(a.userId)
-        val offerToC = b.gossipEngine.messagesForExchange(c.userId)
+        val dmInOfferD = b.gossipEngine.messagesForExchange(d.userId).any { it.id == dm.id }
+        val dmInOfferA = b.gossipEngine.messagesForExchange(a.userId).any { it.id == dm.id }
+        val dmInOfferC = b.gossipEngine.messagesForExchange(c.userId).any { it.id == dm.id }
 
-        val dmInOfferA = offerToA.any { it.id == dm.id }
-        val dmInOfferC = offerToC.any { it.id == dm.id }
-        // C is the original sender — they already have the DM, and B's
-        // intendedPeers excludes them. A is the recipient and the
-        // breadcrumb candidate, so A receives the offer.
-        assertTrue("Offer to A must include the routed DM", dmInOfferA)
+        assertTrue("Offer to D (breadcrumb candidate) must include the routed DM", dmInOfferD)
+        // Deeper O92: the durable-store backfill re-offers the DM to its
+        // recipient directly even after the marked scheduler copy drained.
+        assertTrue("Offer to A (the recipient) must include the DM", dmInOfferA)
         assertEquals(
-            "Offer to C (the sender) must NOT include the routed DM — " +
-                "intendedPeers excludes non-matched peers",
+            "Offer to C (the sender, not a candidate) must NOT include the " +
+                "routed DM — the O29 restriction holds on both the marked " +
+                "scheduler copy and the derived backfill path",
             false, dmInOfferC,
         )
     }
