@@ -177,7 +177,9 @@ val appModule = module {
             }
         }
     }
-    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), canaryMetrics = get(), dmEnvelopeRegistry = get(), roomSubscriptionProvider = get<GossipEngine.RoomSubscriptionProvider>()) }
+    // O98 MeshView substrate — populated from inbound SELF_PRESENCE beacons; feeds the persistence planner.
+    single { com.rumor.mesh.core.routing.MeshViewTracker() }
+    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), canaryMetrics = get(), dmEnvelopeRegistry = get(), roomSubscriptionProvider = get<GossipEngine.RoomSubscriptionProvider>(), meshView = get<com.rumor.mesh.core.routing.MeshViewTracker>()) }
 
     // ── Transfer layer ────────────────────────────────────────────────────────
     single { TransferAssembler(get(), get(), get()) }

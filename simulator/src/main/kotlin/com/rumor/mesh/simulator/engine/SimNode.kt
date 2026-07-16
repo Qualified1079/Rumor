@@ -50,6 +50,13 @@ class SimNode(
      */
     val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
+    /**
+     * O98 — this node's declared [UserMode]. Scenarios set it before composing
+     * self-presence beacons (`composeSelfPresence(mode, …)`); it feeds the
+     * planner's degree budget via the MeshView the beacons assemble into.
+     */
+    var mode: com.rumor.mesh.core.model.UserMode = com.rumor.mesh.core.model.UserMode.MOBILE
+
     val identityProvider = SimIdentityProvider(index)
     val userId: String get() = identityProvider.identity.value!!.userId
 
@@ -70,6 +77,8 @@ class SimNode(
     private val onlineTracker   = OnlineStatusTracker()
     private val topoTracker     = TopologyTracker(routeRepo)
     internal val breadcrumbs    = BreadcrumbCache(breadcrumbRepo)
+    /** O98 MeshView substrate — populated from inbound SELF_PRESENCE beacons. */
+    val meshView               = com.rumor.mesh.core.routing.MeshViewTracker(clock = clock)
     private val scheduler       = Scheduler()
     private val blockManager    = BlockManager(blockEntryRepo, subscribedRepo, blocklistRepo)
     private val inboxFilter     = PermissiveInboxFilter()
@@ -116,6 +125,7 @@ class SimNode(
         relayBatchSpreadMs    = 1L,
         clock           = clock,
         roomSubscriptionProvider = roomSubscriptionProvider,
+        meshView        = meshView,
     )
 
     val transferSender = TransferSender(gossipEngine, identityProvider, transferRepo, chunkRepo)

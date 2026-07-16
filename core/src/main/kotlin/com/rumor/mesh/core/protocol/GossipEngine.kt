@@ -25,6 +25,7 @@ import com.rumor.mesh.core.model.routedHops
 import com.rumor.mesh.core.model.withTtlSplit
 import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.routing.BreadcrumbCache
+import com.rumor.mesh.core.routing.MeshViewTracker
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.scheduler.Scheduler
@@ -143,6 +144,14 @@ class GossipEngine(
      * tag computation is meaningful CPU.
      */
     private val roomSubscriptionProvider: RoomSubscriptionProvider? = null,
+    /**
+     * O98 (MeshView substrate) — optional tracker fed by inbound SELF_PRESENCE
+     * beacons. When non-null, every verified SELF_PRESENCE records the sender's
+     * mode + advertised neighbours (with recency decay); the O98 persistence
+     * planner reads [MeshViewTracker.assembleView] to pick a degree-bounded
+     * backbone. Null disables tracking — relay of the beacon still happens.
+     */
+    private val meshView: MeshViewTracker? = null,
 ) {
     /** O79 receive-side subscription snapshot consumed by ROOM_MESSAGE dispatch. */
     interface RoomSubscriptionProvider {
@@ -987,6 +996,14 @@ class GossipEngine(
             handlePrekeyPublish(msg)
         }
 
+        // O98: SELF_PRESENCE — record the sender's self-declared mode (self-
+        // presence, so senderId IS the subject: first-hand, no hearsay). Feeds
+        // the persistence planner's per-node degree budget. Relay still happens
+        // below so the beacon propagates broadcast-style.
+        if (msg.type == MessageType.SELF_PRESENCE) {
+            handleSelfPresence(msg)
+        }
+
         // O79: room message dispatch. Match the routing tag against the
         // local subscription cache; on match, decrypt (ENCRYPTED) or
         // pass through (OPEN), emit the resulting plaintext-bearing
@@ -1068,6 +1085,18 @@ class GossipEngine(
 
     /** O38 — exposed for sender-side consultation in composeDirect (follow-up). */
     val prekeyCache: PrekeyCache = PrekeyCache()
+
+    private fun handleSelfPresence(msg: RumorMessage) {
+        val tracker = meshView ?: return
+        val json = msg.payload?.content ?: return
+        val payload = runCatching {
+            WireJson.decodeFromString<SelfPresencePayload>(json)
+        }.getOrNull() ?: return
+        // Subject is the beacon author. authorizedAtMs is the beacon's own
+        // timestamp; MeshViewTracker clamps a future value and applies decay.
+        // recentlyExchangedWith is the author's advertised adjacency.
+        tracker.record(msg.senderId, payload.mode, payload.recentlyExchangedWith, payload.authorizedAtMs)
+    }
 
     private fun handlePrekeyPublish(msg: RumorMessage) {
         val json = msg.payload?.content ?: return
