@@ -25,7 +25,25 @@ branch `merge/archimedes` before any code moved.
 4. Ratchet: resolve subsystem-by-subsystem; suites compile+green before moving
    on; simulator scenarios; then 3-phone hardware regression.
 
-## A. Decision conflicts — user arbitration required, blocks the affected code
+## A. Decision conflicts — RESOLVED by user 2026-07-16
+
+- **O36: archimedes position adopted in full.** Global public feed is needed
+  (closed-only is the Briar issue and defeats the use case); global Room is
+  text-only as the moderation hard limit; private/closed rooms also ship (any
+  messenger needs them; easier to moderate; app stores demand moderation for
+  social apps). Full O79 Rooms + O89 + routing tags + MultiRecipientEnvelope
+  port across. Section C below is therefore IN scope.
+- **G9/O41: removal adopted; no official rotation mechanism.** Auto-rebind is
+  forgeable by exactly the compromise it recovers from, and even manual-confirm
+  trains prompt-fatigue into the same takeover socially. Users hold their own
+  keys and may *unofficially* prove rotation by signing a human-readable
+  announcement with the old key — just a message, judged by humans (matches
+  "trust first-hand evidence, not assertions"). Keep archimedes' IDENTITY_RETIRED
+  concept (signed retirement, NO successor key — can only destroy, not hijack)
+  as the sole official primitive; O45/O46 backup/recovery solve the actual
+  key-loss problem. Wire names stay reserved forever in RENAMED_FIELDS.
+
+Original conflict table kept for the record:
 
 | Conflict | check-online position | archimedes position | Notes |
 |---|---|---|---|
