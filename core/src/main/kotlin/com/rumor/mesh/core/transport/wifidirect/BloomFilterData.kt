@@ -74,16 +74,6 @@ class BloomFilterData(
         return Base64.getEncoder().encodeToString(bytes)
     }
 
-    private fun murmur3(data: ByteArray, seed: Long): Long {
-        var h = seed
-        for (b in data) {
-            h = h xor b.toLong()
-            h = h * 0x517cc1b727220a95L
-            h = h xor (h ushr 32)
-        }
-        return h
-    }
-
     companion object {
         /**
          * O42/UX: 0.01% — empirically ~1 skipped message in 5,000-8,000 per

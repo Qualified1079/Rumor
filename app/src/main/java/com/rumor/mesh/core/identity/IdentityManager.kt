@@ -2,17 +2,14 @@ package com.rumor.mesh.core.identity
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.hardware.Sensor
-import android.hardware.SensorManager
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
+import com.rumor.mesh.core.crypto.CryptoManager.toHex
 import com.rumor.mesh.core.logging.RumorLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.security.MessageDigest
-import java.util.UUID
 
 /** Android implementation of [IdentityProvider]. Persists keys in encrypted SharedPreferences. */
 class IdentityManager(
@@ -99,19 +96,14 @@ class IdentityManager(
     fun verify(data: ByteArray, signature: ByteArray, publicKeyBytes: ByteArray): Boolean =
         CryptoManager.verify(data, signature, publicKeyBytes)
 
-    private fun generateDeviceId(): String {
-        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        val hwFingerprint = buildString {
-            append(android.os.Build.FINGERPRINT)
-            append(android.os.Build.BOARD)
-            append(android.os.Build.HARDWARE)
-            append(android.os.Build.MODEL)
-            append(accel?.resolution ?: "0")
-            append(accel?.maximumRange ?: "0")
-        }
-        val combined = "$hwFingerprint:${UUID.randomUUID()}"
-        return MessageDigest.getInstance("SHA-256").digest(combined.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-    }
+    /**
+     * Opaque per-install identifier, shown only in Settings — never a security
+     * anchor (that is [userId] = SHA-256 of the public key) and never on the wire.
+     * A plain 128-bit random value from the same SecureRandom the keys use: the
+     * old derivation mixed device hardware descriptors with a random UUID, which
+     * was neither a stable hardware fingerprint (the UUID randomised it) nor free
+     * of a device-fingerprinting smell (the Build/sensor terms). Random is what it
+     * was actually behaving as, so make that explicit.
+     */
+    private fun generateDeviceId(): String = CryptoManager.randomBytes(16).toHex()
 }

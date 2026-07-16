@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.ui.formatElapsed
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -169,20 +170,5 @@ private fun ComposeBar(
         ) {
             Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
         }
-    }
-}
-
-private fun formatElapsed(elapsedMs: Long): String {
-    // Negative = sender's clock is ahead of ours (skew, no NTP in the field).
-    if (elapsedMs < 0) return "just now"
-    val sec = elapsedMs / 1000
-    return when {
-        sec < 60      -> "${sec}s ago"
-        sec < 3600    -> "${sec / 60}m ago"
-        sec < 86_400  -> "${sec / 3600}h ago"
-        sec < 604_800 -> "${sec / 86_400}d ago"
-        sec < 2_592_000  -> "${sec / 604_800}w ago"
-        sec < 31_536_000 -> "${sec / 2_592_000}mo ago"
-        else          -> "${sec / 31_536_000}y ago"
     }
 }

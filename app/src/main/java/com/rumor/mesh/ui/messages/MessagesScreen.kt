@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.OnlineStatus
+import com.rumor.mesh.ui.formatElapsed
 import com.rumor.mesh.ui.theme.AwayGrey
 import com.rumor.mesh.ui.theme.OnlineGreen
 import com.rumor.mesh.ui.theme.RecentlyAmber
@@ -132,15 +133,5 @@ private fun previewText(msg: com.rumor.mesh.core.model.RumorMessage): String = w
     msg.encryptedPayload != null -> "[encrypted]"
     msg.type == MessageType.TRANSFER_METADATA -> "[transfer]"
     else -> msg.payload?.content ?: ""
-}
-
-private fun formatElapsed(ms: Long): String {
-    val sec = ms / 1000
-    return when {
-        sec < 60   -> "${sec}s"
-        sec < 3600 -> "${sec / 60}m"
-        sec < 86_400 -> "${sec / 3600}h"
-        else -> "${sec / 86_400}d"
-    }
 }
 
