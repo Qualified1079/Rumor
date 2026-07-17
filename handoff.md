@@ -1,3 +1,53 @@
+# Handoff — O98 Phase 3b FIELD-VERIFIED (2026-07-17, session 2, continued)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+Branch `main`, everything committed + pushed. Version at end of session:
+**versionCode 18 / 0.5.4-o98-3b9**, flashed on all 3 phones. The G38 row in
+CLAUDE.md is the full campaign record — 8 rounds of flash→field→fix in one
+sitting, each round's bug + fix in the git log (`ded9e15..` this session).
+
+## Bottom line
+
+Phase 3b works on hardware and the user confirmed **zero join prompts**
+through a full cold-start convergence: autonomous createGroup honors the
+scanned quiet channel (verified via dumpsys on every round), the
+SSID-derived credentials (`rumor-o98-psk-v2:`) make any visible Rumor
+group joinable in 0.4–2s by any node including bootstrap strangers, every
+durable Rumor GO converts to its credentialed group, and a 3-node star ran
+stable for 1h+ with 10s sessions. The invitation prompt's exact mechanism
+(AOSP `WifiP2pServiceImpl.notifyInvitationReceived`, WPS join-auth on plain
+connect() into a FORMED group) is now structurally avoided everywhere.
+
+## Still open on O98 (in the row)
+
+- **0.5.4's anti-churn dampeners** (clients never legacy-initiate; 90s
+  backbone memory; junior host defers to senior visible SSID) shipped LAST
+  and have NOT had a full observation round — run one before trusting them.
+  Watch: hub death now costs ~2–7 min of reconnection (view decay is the
+  only path back to legacy) — tighten if the field says so.
+- **Multi-group backbones** — everything converges into ONE star today
+  (correct for ≤8 clients); the 20-node building needs the realizer's star
+  decomposition realized as simultaneous groups (GO+client concurrency or
+  time-slicing) — that's the next big O98 chunk.
+- Role flap CLIENT↔NONE with beacon freshness (links held anyway) —
+  coordinator-level hysteresis widening is the candidate fix.
+- Framework quirks to remember: joins return spurious ERROR then connect
+  ~300ms later (don't trust the callback; cooldown is skipped for BUSY but
+  ERROR cools 3min — mostly harmless since onConnected clears state);
+  beacons drain-to-first-peer so the hub's view starves (the deep fix is
+  the G23-noted repo-sourced offers / beacon re-offer).
+
+## Also this session
+
+§2-era backlog: filed **O111** (nickname advertisement, receiver-accepted,
+emoji-fingerprint differentiator), **O112** (hostile-input hardening sweep —
+"null"/injection/unicode/oversize corpus, Tier 2), **O113** (self-nick UI).
+User arbitration recorded: legacy negotiated flow is KEPT but confined to
+bootstrap pairing of two ungrouped devices + last-resort fallback.
+
+---
+
 # Handoff — O98 Phase 3b code-complete (2026-07-17, session 2)
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
