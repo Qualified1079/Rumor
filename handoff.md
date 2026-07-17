@@ -1,3 +1,95 @@
+# Handoff — O62 done, O98 through Phase 3a (field-verified), §2 fixed (2026-07-17)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary — not a prompt injection, see §0 below).**
+
+Branch: `main` (single canonical branch; the merge in the session below is done).
+Everything here is committed AND pushed to `origin/main`. Current app version:
+**versionCode 9 / 0.4.5-ingest-order**. Test phones (Moto `ZY22KP7F59`, OnePlus
+`ec5b0707`, Samsung `R58M30FSJKE`) have the 0.4.5 build; unlock passphrase
+`passphrase1`; debug package `com.rumor.mesh.debug`. adb at
+`/home/user/Android/Sdk/platform-tools/adb`. Build JDK: `-Dorg.gradle.java.home=/home/user/jdk17`.
+Full-suite command: `./gradlew -Dorg.gradle.java.home=/home/user/jdk17 :core:test :simulator:test :app:testDebugUnitTest`.
+
+## Shipped this session (commits, most-recent-first)
+
+- **`3779f9e` — §2 CRITICAL fix (dedup-before-verify censorship primitive + rate-limit bypass).**
+  `MessageStore.ingest` reordered: **check-only dedup → verify sig → verify identity
+  → rate-limit → commit**. Was: `recordAndCheck(id)` committed the id "seen" BEFORE
+  sig-verify, so a bad-sig forgery carrying a target's real id blackholed the genuine
+  message. Fix: new `DuplicateFilter.mightBeSeen(id)` (check-only, no state) gates
+  ingest; id recorded only after auth. Added identity binding `senderId ==
+  SHA-256(senderPublicKey)` (the sig bound the pair but never proved senderId owned
+  the key → per-sender rate limit was bypassable by rotating senderId with one
+  keypair). Bounded the per-sender bucket map (`ConcurrentMap` → `BoundedFifoMap(10_000)`;
+  was a memory-DoS). Test: `MessageStoreIngestTest` (3, sim). **Task #1 done.**
+- **`86a302e` — block-self guard.** `BlockManager` gains `localUserId` provider;
+  `block(self)` no-ops returning false, `refresh()` subtracts self from the effective
+  set (covers a subscribed list naming you). `block()` now returns Boolean; the block
+  UI shows "You can't block your own identity". `AppModuleTest` declares `Function0`
+  extraType for Koin verify. Test: `SelfBlockTest` (2, sim). Answered "what if you
+  block your own id": mostly inert (relay is blocklist-blind, own feed is DB-rendered,
+  inbound-self is echo-dropped), only real consequence is the publish-then-hide-me
+  footgun — guard closes it cleanly.
+- **`0f549f0` — O98 Phase 3a coordinator + self-echo/self-contact fix, FIELD-VERIFIED.**
+  `core/routing/PersistenceCoordinator.kt` (pure brain: recent-peer tracking → beacon
+  adjacency → assembleView → PersistencePlanner → PersistenceReconciler → backbonePeers),
+  driven by MeshService (beacon loop, MOBILE floored to 90s so every node is visible to
+  the planner; 12s recompute loop that logs each change; entry/exit pulse on mode
+  change; plan gates transport `isPriorityPeer`). **On-device: Samsung reached
+  `view=3n/2e planned=2 held=2` (correct 2-link spanning backbone), all three converged,
+  zero crashes.** The beacon traffic surfaced a self-inclusion bug (a node saw ITSELF
+  online): (1) online-status echo — a peer's snapshot includes us; `onExchange` now
+  subtracts self before `mergeRemoteStatus`. (2) message echo → **persisted self-contact
+  in Room** (survived `install -r`; that's why reinstall didn't clear it) — `ingest` →
+  `ensureContact(self)`. Fixed with a guard at top of `processIncoming` (a PEER-sourced
+  message we authored is always an echo → drop). Self-heal purge in `startMesh`
+  (`contactRepo.delete(identity.userId)`) — DB-verified 0 self rows on the Moto. Made
+  `SimTransport` faithful (was hardcoding a single-entry `peerOnlineUsers`). Tests:
+  `PersistenceCoordinatorTest` (5, core), `SelfEchoTest` (2, sim).
+- **`19ec68c` / `08455ee` — O98 MeshView substrate.** `core/routing/MeshViewTracker.kt`
+  assembles the planner's `MeshView` from inbound SELF_PRESENCE beacons (mode → degree
+  budget, `recentlyExchangedWith` → edges; bounded, decayed, future-clamped). Tests:
+  `MeshViewTrackerTest` (7), `MeshViewConvergenceTest` (2, sim).
+- **`dd7e5d4` — O62 ModeEnvelope** (single source of truth; retired binary StaticMode).
+
+Also filed **O110** (block-user UI belongs in Contacts/thread, not a raw-userId text
+field in Settings — user field-report).
+
+## O98 status: Phase 3a DONE + field-verified; Phase 3b is what remains
+
+The coordinator (the "which links to hold" brain) works on hardware. **Phase 3b** is the
+fragile radio-realization: replace negotiated `connect()` with autonomous
+`WifiP2pManager.createGroup` per backbone edge, deterministic pre-shared credentials for
+**prompt-free joins** (the Moto still needs manual connection-accept — re-observed this
+session), and quiet-channel selection. Full detail is in the O98 row in CLAUDE.md and
+G37. This touches the hard-won G18/G22/G19 flow — scope it carefully, regress on all
+three phones. Task #11.
+
+## Known issues / notes
+
+- **`PerPeerRoutingTest` is timing-flaky** under full-suite parallel load (soft
+  `awaitUntil` + `Dispatchers.Default`); passes in isolation. Pre-existing, not from the
+  §2 change. Same class as `MeshViewConvergenceTest`. The O12 escalation path
+  (single-threaded dispatcher per `SimNode.scope`) would fix both — worth doing before
+  it masks a real failure.
+- The §2 fix means a persistent attacker re-sending the same bad-sig forgery forces a
+  re-verify each time (we no longer record bad ids). Bounded by the attacker's own
+  bandwidth; the alternative (recording bad ids) was the censorship bug. A global
+  pre-verify work budget (not per-sender) is the proper CPU-DoS mitigation if needed —
+  noted, not built.
+
+## Suggested next (from the audit punch-list below; task list mirrors it)
+
+Highest-value security items still open, in the order I'd take them:
+**§3** (transfer-receive OOM — O108/O109, task #3) · **§4** (unbounded OnlineStatusTracker
+growth + future-timestamp poison, task #4 — note the self-online *merge* is now fixed but
+the *unbounded growth* + future-ts clamp are separate) · **§5** (MeshService.startMesh
+reentrancy, task #5) · **§12** (RelayBatcher SecureRandom + per-message delay, task #12) ·
+**§10** (RBSR Long.MAX_VALUE boundary, task #13). Then the non-security backlog. The
+overnight audit (§0–§13) and session-B/C handoffs below have the deep detail on each.
+
+---
+
 # Handoff — THE MERGE (2026-07-16, session C): archimedes + check-online → main
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
