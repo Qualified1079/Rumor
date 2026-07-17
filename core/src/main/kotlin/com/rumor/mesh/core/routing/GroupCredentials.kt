@@ -26,6 +26,9 @@ object GroupCredentials {
 
     data class Credentials(val networkName: String, val passphrase: String)
 
+    /** A backbone group SSID: `DIRECT-` + 12 lowercase hex of the host hash. */
+    val BACKBONE_SSID_REGEX = Regex("^DIRECT-[0-9a-f]{12}$")
+
     /**
      * Derive the credentials for a group hosted by [hostUserId]. Pure function —
      * host and every prospective client independently compute identical values.
@@ -36,12 +39,23 @@ object GroupCredentials {
      */
     fun forHost(hostUserId: String): Credentials {
         val net = Sha256.digest("rumor-o98-net-v1:$hostUserId".toByteArray(Charsets.UTF_8))
-        val psk = Sha256.digest("rumor-o98-psk-v1:$hostUserId".toByteArray(Charsets.UTF_8))
-        return Credentials(
-            networkName = "DIRECT-" + hex(net, 12),
-            passphrase = hex(psk, 16),
-        )
+        val name = "DIRECT-" + hex(net, 12)
+        return Credentials(networkName = name, passphrase = passphraseFor(name))
     }
+
+    /**
+     * The passphrase is derived from the NETWORK NAME, not the host userId, so
+     * a node that merely sees a backbone SSID in a Wi-Fi scan can join it
+     * prompt-free without knowing who hosts it — the bootstrap case (a fresh
+     * node beside an established backbone has no beacons yet, so it can't know
+     * the host's userId; a plain connect() into the formed group instead
+     * raises a manual invitation on some OEMs — field-observed on the Moto).
+     * Any radio-range observer can equally derive it; that was already true of
+     * the userId-derived scheme (userIds are gossiped) and is the accepted
+     * O51 posture — the group is a transport lane, identity is HELLO's job.
+     */
+    fun passphraseFor(networkName: String): String =
+        hex(Sha256.digest("rumor-o98-psk-v2:$networkName".toByteArray(Charsets.UTF_8)), 16)
 
     private fun hex(bytes: ByteArray, chars: Int): String =
         buildString {

@@ -51,4 +51,12 @@ class GroupCredentialsTest {
         assertTrue(c.networkName.removePrefix("DIRECT-").all { it in "0123456789abcdef" })
         assertTrue(c.passphrase.all { it in "0123456789abcdef" })
     }
+
+    @Test
+    fun `passphrase is derivable from the ssid alone`() {
+        // The bootstrap property: seeing the SSID is enough to join.
+        val c = GroupCredentials.forHost(hostId)
+        assertEquals(c.passphrase, GroupCredentials.passphraseFor(c.networkName))
+        assertTrue(GroupCredentials.BACKBONE_SSID_REGEX.matches(c.networkName))
+    }
 }

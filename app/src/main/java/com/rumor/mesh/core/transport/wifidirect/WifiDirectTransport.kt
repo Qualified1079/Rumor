@@ -183,6 +183,12 @@ class WifiDirectTransport(
     private val CONNECT_WATCHDOG_MS = 45_000L
     private val connectWatchdog = Runnable {
         RumorLog.d(TAG, "Connect watchdog expired — clearing in-flight flag")
+        // A credential join that never produced a connection: cool the SSID
+        // down so it can't pin the radio away from the legacy flow.
+        pendingJoinSsid?.let {
+            ssidCooldownUntil[it] = System.currentTimeMillis() + SSID_COOLDOWN_MS
+            pendingJoinSsid = null
+        }
         connectAttemptInFlight = false
     }
 
@@ -230,12 +236,19 @@ class WifiDirectTransport(
      * instead of stranding.
      */
     @Volatile private var backboneRole: BackboneRealizer.Role = BackboneRealizer.Role.None
-    /** True once OUR credentialed createGroup succeeded for the current role. */
+    /** True once OUR credentialed createGroup succeeded (role-driven or legacy-GO conversion). */
     @Volatile private var backboneGroupCreated = false
     @Volatile private var backboneAttemptAtMs = 0L
     @Volatile private var backboneRetriesLeft = 0
+    /** SSID of an in-flight credential join — cooled down if the watchdog fires. */
+    @Volatile private var pendingJoinSsid: String? = null
+    private val ssidCooldownUntil = ConcurrentHashMap<String, Long>()
+    /** Converts a negotiated legacy GO group to the credentialed backbone group. */
+    private var legacyGoConversionJob: Job? = null
     private val BACKBONE_ATTEMPT_GRACE_MS = 45_000L
     private val MAX_BACKBONE_RETRIES = 3
+    private val SSID_COOLDOWN_MS = 180_000L
+    private val LEGACY_GO_CONVERT_DELAY_MS = 15_000L
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -467,35 +480,66 @@ class WifiDirectTransport(
     private fun joinBackboneGroup(hostUserId: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         if (groupConnected) { verifyClientGroup(hostUserId); return }
-        if (connectAttemptInFlight) return
-        val creds = GroupCredentials.forHost(hostUserId)
-        if (!ssidVisible(creds.networkName)) {
+        val name = GroupCredentials.forHost(hostUserId).networkName
+        if (!ssidVisible(name)) {
             // Nothing to join yet — the host hasn't (or hasn't yet) realized
             // its side. Nudge a scan and let the legacy flow keep the radio.
-            RumorLog.d(TAG, "O98 backbone group ${creds.networkName} not on air yet — waiting")
+            RumorLog.d(TAG, "O98 backbone group $name not on air yet — waiting")
             runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
             return
         }
+        joinBySsid(name)
+    }
+
+    /**
+     * Credential-join a backbone group by its SSID alone — the passphrase is
+     * derivable from the name (see [GroupCredentials.passphraseFor]), so this
+     * serves both a planned Client role and the bootstrap case of a fresh node
+     * that merely sees Rumor infrastructure on the air. Failed SSIDs (foreign
+     * networks matching the pattern, stale scans) go on cooldown so they can't
+     * pin the radio away from the legacy flow.
+     */
+    private fun joinBySsid(networkName: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (groupConnected || connectAttemptInFlight) return
         val p2pCfg = WifiP2pConfig.Builder()
-            .setNetworkName(creds.networkName)
-            .setPassphrase(creds.passphrase)
+            .setNetworkName(networkName)
+            .setPassphrase(GroupCredentials.passphraseFor(networkName))
             .build()
         connectAttemptInFlight = true
+        pendingJoinSsid = networkName
         backboneAttemptAtMs = System.currentTimeMillis()
         handler.removeCallbacks(connectWatchdog)
         handler.postDelayed(connectWatchdog, CONNECT_WATCHDOG_MS)
         enqueueCommand {
             wifiP2pManager?.connect(channel, p2pCfg, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
-                    RumorLog.i(TAG, "O98 joining backbone group ${creds.networkName} (host ${hostUserId.take(8)}…)")
+                    RumorLog.i(TAG, "O98 joining backbone group $networkName")
                 }
                 override fun onFailure(reason: Int) {
                     RumorLog.w(TAG, "O98 backbone join failed: ${p2pError(reason)}")
+                    ssidCooldownUntil[networkName] = System.currentTimeMillis() + SSID_COOLDOWN_MS
+                    pendingJoinSsid = null
                     handler.removeCallbacks(connectWatchdog)
                     connectAttemptInFlight = false
                 }
             })
         }
+    }
+
+    /** Rumor-scheme SSIDs currently on the air, excluding our own and cooled-down ones. */
+    private fun visibleBackboneSsids(): List<String> {
+        val own = config?.let { GroupCredentials.forHost(it.localUserId).networkName }
+        val now = System.currentTimeMillis()
+        return runCatching {
+            @Suppress("DEPRECATION")
+            (wifiManager?.scanResults ?: emptyList())
+                .mapNotNull { it.SSID }
+                .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) }
+                .filter { it != own && (ssidCooldownUntil[it] ?: 0L) <= now }
+                .distinct()
+                .sorted()
+        }.getOrDefault(emptyList())
     }
 
     /** Least-congested non-DFS 5 GHz candidate from the latest AP scan. */
@@ -522,6 +566,19 @@ class WifiDirectTransport(
         // createGroup / credential joins own the radio — a negotiated connect
         // here would disrupt group formation exactly like the grouped case above.
         if (backboneOwnsRadio()) return
+
+        // O98 3b: never negotiated-connect while joinable Rumor infrastructure
+        // is on the air — a plain connect() into a formed group raises a manual
+        // invitation on some OEMs (field-observed on the Moto), which is the
+        // exact prompt the derived credentials exist to avoid. Applies to
+        // bootstrap (role None) too: the passphrase derives from the SSID.
+        if (backboneRole !is BackboneRealizer.Role.Host) {
+            val ssid = visibleBackboneSsids().firstOrNull()
+            if (ssid != null) {
+                joinBySsid(ssid)
+                return
+            }
+        }
 
         // Two non-dual-role peers that both auto-connect to each other collide in
         // GO negotiation (both request GO with equal intent) and neither ever
@@ -786,6 +843,7 @@ class WifiDirectTransport(
     private fun onConnected() {
         handler.removeCallbacks(connectWatchdog)
         connectAttemptInFlight = false
+        pendingJoinSsid = null
         groupConnected = true
         wifiP2pManager?.requestConnectionInfo(channel) { info ->
             val isGo = info?.isGroupOwner == true
@@ -794,12 +852,32 @@ class WifiDirectTransport(
             // group's disconnect broadcast AFTER createGroup's success callback,
             // wiping backboneGroupCreated — then the idle watchdog's hold-guard
             // fails and kills the new group 35s in (field-observed 48s re-host
-            // cycle). Becoming GO while holding a Host role means our
-            // credentialed group is the one that came up: reaffirm the flag and
-            // refresh the retry budget so a later real drop gets fresh attempts.
-            if (isGo && backboneRole is BackboneRealizer.Role.Host) {
-                backboneGroupCreated = true
-                backboneRetriesLeft = MAX_BACKBONE_RETRIES
+            // cycle). Reaffirm from ground truth: if the group we now own IS
+            // our credentialed SSID, mark it created and refresh the retry
+            // budget. Otherwise it's a negotiated legacy group with a random
+            // SSID nobody can credential-join (a third phone entering it via
+            // plain connect() raises the manual invitation prompt) — convert it
+            // to the credentialed group after one round, so the first exchange
+            // still carries beacons. The delayed re-check of backboneGroupCreated
+            // keeps the conversion from firing on an already-credentialed group.
+            if (isGo) {
+                val own = config?.let { GroupCredentials.forHost(it.localUserId).networkName }
+                wifiP2pManager?.requestGroupInfo(channel) { group ->
+                    if (group != null && group.networkName == own) {
+                        backboneGroupCreated = true
+                        backboneRetriesLeft = MAX_BACKBONE_RETRIES
+                    }
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    legacyGoConversionJob?.cancel()
+                    legacyGoConversionJob = scope.launch {
+                        delay(LEGACY_GO_CONVERT_DELAY_MS)
+                        if (groupConnected && _isGroupOwner.value && !backboneGroupCreated) {
+                            RumorLog.i(TAG, "O98 converting legacy GO group to credentialed backbone group")
+                            hostBackboneGroup()
+                        }
+                    }
+                }
             }
             if (isGo) armGoIdleWatchdog()
             // Read the actual GO address from WifiP2pInfo. The well-known constant
@@ -829,6 +907,7 @@ class WifiDirectTransport(
         // role that exhausted its attempts against a stale group state gets to
         // try again rather than staying parked on the legacy flow forever.
         backboneGroupCreated = false
+        legacyGoConversionJob?.cancel()
         if (backboneRole !is BackboneRealizer.Role.None) backboneRetriesLeft = MAX_BACKBONE_RETRIES
         goIdleWatchdog?.cancel()
         serverJob?.cancel()
