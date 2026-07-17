@@ -373,7 +373,14 @@ class WifiDirectTransport(
         val withinGrace = System.currentTimeMillis() - backboneAttemptAtMs < BACKBONE_ATTEMPT_GRACE_MS
         return when (role) {
             is BackboneRealizer.Role.Host -> backboneRetriesLeft > 0 || withinGrace
-            is BackboneRealizer.Role.Client -> connectAttemptInFlight && withinGrace
+            // Once the host's SSID is on the air the credential join owns the
+            // radio: a legacy negotiated connect() racing it lands as a WPS
+            // invitation the GO's owner must manually accept (field-observed —
+            // two prompts on the Moto), which is exactly what credentials make
+            // unnecessary.
+            is BackboneRealizer.Role.Client ->
+                (connectAttemptInFlight && withinGrace) ||
+                    ssidVisible(GroupCredentials.forHost(role.hostUserId).networkName)
             BackboneRealizer.Role.None -> false
         }
     }
