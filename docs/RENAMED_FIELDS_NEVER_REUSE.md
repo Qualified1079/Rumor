@@ -54,6 +54,8 @@ backlog row that justified it.
 | `rumor-room-posting-cert-v1:` (signable-bytes domain tag) | O89 posting cert sig scope | Set in `roomPostingCertSignableBytes`. Bumping requires `-v2:` and forces every issued cert to be re-signed. |
 | `"room_posting_cert"` (SerialName for `RoomPostingCert`) | O89 | Wire payload type name. Reserved forever. |
 | `_ext.t` (sealed-sender tag carrier on RumorMessage) | O53 | Base64-encoded 32-byte HMAC tag from `SealedSenderTag.tagFor`. Reserved forever — do NOT reuse this key for any other `_ext` payload. |
+| `rumor-o98-net-v1:` (SHA-256 prefix for backbone group networkName) | O98 Phase 3b group credentials | Used in `GroupCredentials.forHost` — `networkName = "DIRECT-" + first 12 hex of SHA-256(tag + hostUserId)`. Both endpoints derive independently; changing the derivation partitions old/new builds' backbone joins. |
+| `rumor-o98-psk-v1:` (SHA-256 prefix for backbone group passphrase) | O98 Phase 3b group credentials | Used in `GroupCredentials.forHost` — `passphrase = first 16 hex of SHA-256(tag + hostUserId)`. Deliberately derivable by anyone holding the userId (prompt-free joins); NOT a secret — trust stays with HELLO Ed25519. |
 
 ## Retired names
 

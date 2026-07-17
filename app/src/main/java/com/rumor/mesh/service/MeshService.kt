@@ -255,6 +255,9 @@ class MeshService : Service(), MeshController {
                             "+${s.added.size}/-${s.removed.size}",
                     )
                 }
+                // Phase 3b: realize the held backbone as actual radio state.
+                // Idempotent while healthy; the transport owns retry/fallback.
+                wifiDirectTransport.applyBackboneRole(coordinator.selfRole())
             }
         }
 

@@ -48,6 +48,10 @@ class PersistenceCoordinator(
     /** Backbone neighbours the transport should hold persistent links to. */
     val backbonePeers: Set<String> get() = _backbonePeers
 
+    /** Modes from the last assembled view — capacity ranking for [selfRole]. */
+    @Volatile
+    private var lastModes: Map<String, UserMode> = emptyMap()
+
     /** Record a completed exchange so the peer counts as a realizable edge. */
     fun onExchanged(peerUserId: String) {
         if (peerUserId == selfId) return
@@ -77,6 +81,7 @@ class PersistenceCoordinator(
         val delta = reconciler.reconcile(plan)
         val held = BackbonePlan(reconciler.activeLinks())
         _backbonePeers = held.persistentPeersOf(selfId)
+        lastModes = view.modes
         return Summary(
             viewNodes = view.modes.size,
             viewEdges = view.edges.size,
@@ -87,6 +92,15 @@ class PersistenceCoordinator(
             removed = delta.toRemove,
         )
     }
+
+    /**
+     * O98 Phase 3b: this node's radio role under the current held backbone.
+     * Deterministic over (held links, view modes), so both endpoints of a
+     * realized edge agree on who hosts without any election traffic. Read
+     * after [recompute]; hysteresis in the held set keeps it stable.
+     */
+    fun selfRole(): BackboneRealizer.Role =
+        BackboneRealizer.realize(reconciler.activeLinks(), lastModes).roleOf(selfId)
 
     /** One-line-loggable snapshot of a [recompute]. */
     data class Summary(

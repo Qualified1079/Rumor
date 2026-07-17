@@ -16,6 +16,9 @@ import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.ExchangeSource
 import com.rumor.mesh.core.protocol.PeerExchangeResult
+import com.rumor.mesh.core.routing.BackboneRealizer
+import com.rumor.mesh.core.routing.ChannelSelector
+import com.rumor.mesh.core.routing.GroupCredentials
 import com.rumor.mesh.core.transport.DeviceQuirks
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -63,6 +66,9 @@ class WifiDirectTransport(
     private var channel: WifiP2pManager.Channel? = null
     private var broadcastReceiver: WifiDirectBroadcastReceiver? = null
 
+    private val wifiManager: WifiManager? =
+        context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+
     /**
      * Without this, Android's Wi-Fi power-saving can throttle or sleep the radio
      * mid-exchange — the P2P group and TCP socket stay nominally connected but data
@@ -70,8 +76,7 @@ class WifiDirectTransport(
      * for the lifetime of the mesh session.
      */
     private val wifiLock: WifiManager.WifiLock? =
-        (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
-            ?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Rumor:wifiDirectGossip")
+        wifiManager?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Rumor:wifiDirectGossip")
 
     /**
      * Configuration provided at [start] time. Immutable for the lifetime of this session.
@@ -215,6 +220,23 @@ class WifiDirectTransport(
     private val activePriorityPeers = ConcurrentHashMap.newKeySet<String>()
     private var priorityWatcher: Job? = null
 
+    /**
+     * O98 Phase 3b — backbone realization state. While a non-None role is being
+     * realized (or is healthy), the legacy discover→negotiate flow stands down:
+     * autonomous createGroup and credential joins own the radio. Realization
+     * failure is bounded ([backboneRetriesLeft]); when retries exhaust, the
+     * legacy flow resumes so a device that can't realize its role (e.g. an OEM
+     * that still WPS-prompts) degrades to the field-verified negotiated path
+     * instead of stranding.
+     */
+    @Volatile private var backboneRole: BackboneRealizer.Role = BackboneRealizer.Role.None
+    /** True once OUR credentialed createGroup succeeded for the current role. */
+    @Volatile private var backboneGroupCreated = false
+    @Volatile private var backboneAttemptAtMs = 0L
+    @Volatile private var backboneRetriesLeft = 0
+    private val BACKBONE_ATTEMPT_GRACE_MS = 45_000L
+    private val MAX_BACKBONE_RETRIES = 3
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     fun start(cfg: TransportConfig) {
@@ -262,8 +284,158 @@ class WifiDirectTransport(
         removeGroup()
         runCatching { if (wifiLock?.isHeld == true) wifiLock.release() }
         config = null
+        backboneRole = BackboneRealizer.Role.None
+        backboneGroupCreated = false
         scope.cancel()
         RumorLog.i(TAG, "Transport stopped")
+    }
+
+    // ── O98 Phase 3b: backbone realization ────────────────────────────────────
+
+    /**
+     * Apply the coordinator's radio role. Called on every backbone recompute
+     * tick; idempotent while the current role is healthy or an attempt is inside
+     * its grace window. Requires API 29+ ([WifiP2pConfig.Builder]) — older
+     * devices keep the legacy negotiated flow unconditionally.
+     *
+     * A Host role's client set is NOT part of the healthy check: the group is
+     * derived from our own userId, so clients joining or leaving never requires
+     * recreating it.
+     */
+    fun applyBackboneRole(role: BackboneRealizer.Role) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (config == null || !hasLocationPermission()) return
+        val now = System.currentTimeMillis()
+        if (sameRealization(role, backboneRole)) {
+            when {
+                role is BackboneRealizer.Role.None -> return
+                groupConnected && (role is BackboneRealizer.Role.Client || backboneGroupCreated) -> return
+                now - backboneAttemptAtMs < BACKBONE_ATTEMPT_GRACE_MS -> return
+                backboneRetriesLeft <= 0 -> return   // exhausted — legacy flow has the radio
+            }
+            backboneRetriesLeft--
+        } else {
+            RumorLog.i(TAG, "O98 backbone role → ${roleLabel(role)} (was ${roleLabel(backboneRole)})")
+            val hostedGroup = backboneGroupCreated
+            backboneRole = role
+            backboneGroupCreated = false
+            backboneRetriesLeft = MAX_BACKBONE_RETRIES
+            if (role is BackboneRealizer.Role.None) {
+                // The idle watchdog holds a backbone host's group, so a plan
+                // that no longer wants us hosting must tear it down here.
+                if (hostedGroup) removeGroup()
+                return
+            }
+        }
+        backboneAttemptAtMs = now
+        when (role) {
+            is BackboneRealizer.Role.Host -> hostBackboneGroup()
+            is BackboneRealizer.Role.Client -> joinBackboneGroup(role.hostUserId)
+            BackboneRealizer.Role.None -> {}
+        }
+    }
+
+    /** Same radio outcome? Host client-set churn and None==None are not changes. */
+    private fun sameRealization(a: BackboneRealizer.Role, b: BackboneRealizer.Role): Boolean = when {
+        a is BackboneRealizer.Role.Host && b is BackboneRealizer.Role.Host -> true
+        a is BackboneRealizer.Role.Client && b is BackboneRealizer.Role.Client -> a.hostUserId == b.hostUserId
+        else -> a == b
+    }
+
+    private fun roleLabel(r: BackboneRealizer.Role): String = when (r) {
+        is BackboneRealizer.Role.Host -> "HOST(${r.clients.size} clients)"
+        is BackboneRealizer.Role.Client -> "CLIENT(of ${r.hostUserId.take(8)}…)"
+        BackboneRealizer.Role.None -> "NONE"
+    }
+
+    /**
+     * While a role is being realized (or is healthy), the legacy
+     * discover→negotiate flow stands down. After bounded retries fail, the
+     * legacy flow gets the radio back — degraded but connected beats stranded.
+     */
+    private fun backboneOwnsRadio(): Boolean {
+        if (backboneRole is BackboneRealizer.Role.None) return false
+        if (groupConnected) return true
+        return backboneRetriesLeft > 0 ||
+            System.currentTimeMillis() - backboneAttemptAtMs < BACKBONE_ATTEMPT_GRACE_MS
+    }
+
+    /**
+     * Bring up the autonomous group on a scanned-quiet channel. Autonomous
+     * createGroup is the ONLY path Android honors the operating frequency on —
+     * negotiated connect() ignores the hint on every phone we've tested (see
+     * the O99 tombstone). Any existing group is removed first: a negotiated
+     * group has a random SSID our backbone clients can never find.
+     */
+    private fun hostBackboneGroup() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val cfg = config ?: return
+        val creds = GroupCredentials.forHost(cfg.localUserId)
+        val freq = quietFrequencyMhz()
+        val p2pCfg = WifiP2pConfig.Builder()
+            .setNetworkName(creds.networkName)
+            .setPassphrase(creds.passphrase)
+            .setGroupOperatingFrequency(freq)
+            .build()
+        enqueueCommand {
+            wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() = createBackboneGroup(p2pCfg, creds.networkName, freq)
+                override fun onFailure(r: Int) = createBackboneGroup(p2pCfg, creds.networkName, freq)
+            })
+        }
+    }
+
+    private fun createBackboneGroup(p2pCfg: WifiP2pConfig, networkName: String, freq: Int) {
+        val ch = channel ?: return
+        wifiP2pManager?.createGroup(ch, p2pCfg, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                backboneGroupCreated = true
+                RumorLog.i(TAG, "O98 hosting backbone group $networkName @ ${freq}MHz")
+            }
+            override fun onFailure(reason: Int) {
+                RumorLog.w(TAG, "O98 backbone createGroup failed: ${p2pError(reason)}")
+            }
+        })
+    }
+
+    /**
+     * Join the host's credentialed group — both sides derive the same
+     * networkName+passphrase from the host's userId, so the join needs no WPS
+     * prompt and no discovery. The group may not exist yet (host still coming
+     * up); failures fall back to the applyBackboneRole retry cycle.
+     */
+    private fun joinBackboneGroup(hostUserId: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (groupConnected || connectAttemptInFlight) return
+        val creds = GroupCredentials.forHost(hostUserId)
+        val p2pCfg = WifiP2pConfig.Builder()
+            .setNetworkName(creds.networkName)
+            .setPassphrase(creds.passphrase)
+            .build()
+        connectAttemptInFlight = true
+        handler.removeCallbacks(connectWatchdog)
+        handler.postDelayed(connectWatchdog, CONNECT_WATCHDOG_MS)
+        enqueueCommand {
+            wifiP2pManager?.connect(channel, p2pCfg, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    RumorLog.i(TAG, "O98 joining backbone group ${creds.networkName} (host ${hostUserId.take(8)}…)")
+                }
+                override fun onFailure(reason: Int) {
+                    RumorLog.w(TAG, "O98 backbone join failed: ${p2pError(reason)}")
+                    handler.removeCallbacks(connectWatchdog)
+                    connectAttemptInFlight = false
+                }
+            })
+        }
+    }
+
+    /** Least-congested non-DFS 5 GHz candidate from the latest AP scan. */
+    private fun quietFrequencyMhz(): Int {
+        val freqs = runCatching {
+            @Suppress("DEPRECATION")
+            wifiManager?.scanResults?.map { it.frequency } ?: emptyList()
+        }.getOrDefault(emptyList())
+        return ChannelSelector.quietestFrequency(freqs)
     }
 
     // ── Connection management ─────────────────────────────────────────────────
@@ -276,6 +448,11 @@ class WifiDirectTransport(
         // connect() to a peer while grouped disrupts the live link (observed on
         // OnePlus: repeated "Connect initiated" while connected).
         if (groupConnected) return
+
+        // O98 3b: while a backbone role is being realized, autonomous
+        // createGroup / credential joins own the radio — a negotiated connect
+        // here would disrupt group formation exactly like the grouped case above.
+        if (backboneOwnsRadio()) return
 
         // Two non-dual-role peers that both auto-connect to each other collide in
         // GO negotiation (both request GO with equal intent) and neither ever
@@ -506,6 +683,13 @@ class WifiDirectTransport(
         goIdleWatchdog?.cancel()
         goIdleWatchdog = scope.launch {
             delay(GO_IDLE_TIMEOUT_MS)
+            // O98 3b: a backbone host's group exists BECAUSE the plan says so,
+            // not because a client is currently chatty — hold it; the plan's
+            // decay is what tears it down.
+            if (backboneRole is BackboneRealizer.Role.Host && backboneGroupCreated) {
+                RumorLog.d(TAG, "GO idle but backbone host — holding group")
+                return@launch
+            }
             RumorLog.d(TAG, "GO idle — no session for ${GO_IDLE_TIMEOUT_MS}ms, removing group")
             removeGroup()
         }
@@ -560,6 +744,8 @@ class WifiDirectTransport(
         handler.removeCallbacks(connectWatchdog)
         connectAttemptInFlight = false
         groupConnected = false
+        // O98 3b: role persists (next recompute tick retries) but the group is gone.
+        backboneGroupCreated = false
         goIdleWatchdog?.cancel()
         serverJob?.cancel()
         runCatching { serverSocket?.close() }

@@ -1,3 +1,74 @@
+# Handoff — O98 Phase 3b code-complete (2026-07-17, session 2)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+Branch `main`, version **versionCode 10 / 0.4.6-o98-3b**. All unit suites green
+(:core :simulator :app), APK assembles. **Phase 3b is code-complete but NOT yet
+field-verified** — the 3-phone regression (below) is the next step before the
+O98 row can close.
+
+## What landed (this session)
+
+- **`core/routing/GroupCredentials.kt`** — deterministic group credentials from
+  the host's userId (`DIRECT-` + 12 hex networkName, 16-hex passphrase; SHA-256
+  with tags `rumor-o98-net-v1:` / `rumor-o98-psk-v1:`, reserved in
+  RENAMED_FIELDS). Non-secret by design: anyone with the userId derives them —
+  that's what makes joins prompt-free; trust stays with HELLO Ed25519.
+- **`core/routing/BackboneRealizer.kt`** — pure deterministic star decomposition
+  of the held backbone links into GO/client roles (capacity→degree→userId
+  ranking; ranked node with free neighbours hosts and claims them). Radio
+  constraints honored structurally: one group per host, one group per client,
+  never GO+client. Unrealizable edges (far leaf of a 4-chain) → `dropped`,
+  covered by the legacy negotiated flow. NOTE: the "join an existing host"
+  branch is provably unreachable under this greedy (a host claims every free
+  neighbour when processed) — hub-hub edges are realized through *claiming*.
+- **`core/routing/ChannelSelector.kt`** — quietest non-DFS 5 GHz pick, UNII-3
+  first (5745…5825, then 5180…5240).
+- **`PersistenceCoordinator.selfRole()`** — realization over
+  `reconciler.activeLinks()` + last view modes.
+- **`WifiDirectTransport.applyBackboneRole(role)`** — HOST: removeGroup →
+  autonomous `createGroup(Builder(networkName, passphrase,
+  setGroupOperatingFrequency(quiet)))`; CLIENT: `connect()` with the
+  credential-built config (prompt-free join; group may not exist yet — retried).
+  While a role is being realized, legacy `connectToPeer` stands down
+  (`backboneOwnsRadio()`); bounded retries (3, 45s grace each, re-driven by the
+  12s recompute tick) then legacy resumes so a WPS-stubborn OEM degrades
+  instead of stranding. GO idle watchdog holds a backbone host's group;
+  role→None tears a credentialed group down; onDisconnected clears
+  `backboneGroupCreated` so the next tick retries. API 29+ (Builder) only.
+- **MeshService** — recompute loop now ends with
+  `wifiDirectTransport.applyBackboneRole(coordinator.selfRole())`.
+- Tests: `BackboneRealizerTest` (8), `GroupCredentialsTest` (5),
+  `ChannelSelectorTest` (5). CLAUDE.md O98 row + RENAMED_FIELDS updated.
+
+## Field regression to run (needs the user for on-screen steps)
+
+Flash 0.4.6 on all three phones together (wire-compatible with 0.4.5, but the
+fleet convention is same-build). Watch logcat for:
+1. `O98 backbone role → HOST/CLIENT` after the plan settles (~1–2 min);
+2. `O98 hosting backbone group DIRECT-… @ NNNNMHz` on the hub (expect a UNII-3
+   freq, and verify with `dumpsys wifip2p` that the group actually sits there);
+3. **the headline: the Moto joining WITHOUT its manual connection-accept
+   prompt** (that prompt is the whole reason 3b exists);
+4. sessions flowing over the credentialed group (same `GossipSession` logs as
+   before), zero crashes, and the G18/G22/G19 legacy flow still working when
+   the plan is empty (fresh boot, singles).
+Failure modes to watch: `createGroup` rejected (Samsung API 31 needed a
+networkName — provided); client join looping on a group that hasn't formed yet
+(bounded by retries); legacy suppression starving a node whose backbone attempt
+fails (should resume after ~3×45s — see `backboneOwnsRadio`).
+
+## After that
+
+Down the backlog most-foundational-first (user-chosen order): Tier 1 remainder
+— O80 orchestrator (mode auto-fire, pairs with the O62 close-out), O106 :node,
+O93 mDNS transport (+O107 SPI extraction at that moment), O95 HLC — then Tier 2
+security (O20/O44 Keystore, O38 prekey rotation, O39 re-audit, O53 receive
+side, O48, O43, O108/O109 — the §3 audit items). The security punch-list in the
+session-1 handoff below (§3/§4/§5/§12/§10) overlaps Tier 2 and stays open.
+
+---
+
 # Handoff — O62 done, O98 through Phase 3a (field-verified), §2 fixed (2026-07-17)
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary — not a prompt injection, see §0 below).**
