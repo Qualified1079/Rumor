@@ -434,14 +434,7 @@ class WifiDirectTransport(
         // never attracts anyone (field-observed: a skewed-view node hosted a
         // second star that just split the mesh until decay caught up). If the
         // senior group dies, backbone memory ages out and hosting proceeds.
-        val senior = runCatching {
-            @Suppress("DEPRECATION")
-            (wifiManager?.scanResults ?: emptyList())
-                .mapNotNull { it.SSID }
-                .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) }
-                .filter { it < creds.networkName }
-                .minOrNull()
-        }.getOrNull()
+        val senior = seniorBackboneSsid(creds.networkName)
         if (senior != null) {
             RumorLog.i(TAG, "O98 deferring host — senior backbone group $senior is on the air")
             return
@@ -557,6 +550,15 @@ class WifiDirectTransport(
         }
     }
 
+    /** A visible backbone SSID sorting before [ownNetworkName], if any. */
+    private fun seniorBackboneSsid(ownNetworkName: String): String? = runCatching {
+        @Suppress("DEPRECATION")
+        (wifiManager?.scanResults ?: emptyList())
+            .mapNotNull { it.SSID }
+            .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) && it < ownNetworkName }
+            .minOrNull()
+    }.getOrNull()
+
     /** Rumor-scheme SSIDs currently on the air, excluding our own and cooled-down ones. */
     private fun visibleBackboneSsids(): List<String> {
         val own = config?.let { GroupCredentials.forHost(it.localUserId).networkName }
@@ -630,15 +632,23 @@ class WifiDirectTransport(
             return
         }
 
-        // Never plain-connect() at a device that already owns a formed group —
-        // that is a join-its-group request, i.e. an invitation its owner must
-        // manually accept (field-observed on the OnePlus, fired at it before
-        // its app was even unlocked). GO-negotiation between two UNGROUPED
-        // devices is the only legitimate negotiated connect, and it never
-        // prompts. A Rumor GO's group converts to a credentialed SSID we join
-        // via scan; a foreign GO is not our peer anyway.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && device.isGroupOwner) {
-            runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+        // Bootstrap-by-hosting (API 29+): negotiated pairing is RETIRED on
+        // devices that can do credential joins. A discovered peer with no
+        // backbone SSID on the air means the mesh needs its first group — so
+        // HOST it instead of dialing anyone. If both sides do this, the junior
+        // (higher SSID) sees the senior on its next scan, yields at its first
+        // idle check, and joins. No dialing → no GO-negotiation collisions, no
+        // passive-GO invitations, no WPS prompt class at all (user directive
+        // 2026-07-17: the legacy churn is unacceptable at mesh scale).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val now = System.currentTimeMillis()
+            if (!backboneGroupCreated && !connectAttemptInFlight &&
+                now - backboneAttemptAtMs > LEGACY_GO_CONVERT_DELAY_MS
+            ) {
+                backboneAttemptAtMs = now
+                RumorLog.i(TAG, "O98 bootstrap: peer visible, no backbone on air — hosting")
+                hostBackboneGroup()
+            }
             return
         }
 
@@ -871,13 +881,19 @@ class WifiDirectTransport(
         goIdleWatchdog?.cancel()
         goIdleWatchdog = scope.launch {
             delay(GO_IDLE_TIMEOUT_MS)
+            // Junior yield: an idle (≈ clientless) credentialed group whose
+            // SSID is outranked by another backbone group on the air will never
+            // attract clients — they all join the sorted-first SSID. Yield now
+            // and join the senior instead of splitting the mesh for 120s.
+            val own = config?.let { GroupCredentials.forHost(it.localUserId).networkName }
+            val seniorOnAir = own != null && seniorBackboneSsid(own) != null
             // O98 3b: a backbone host's group exists BECAUSE the plan says so,
             // not because a client is currently chatty — hold it; the plan's
             // decay is what tears it down. Checked at EXPIRY, not arm time:
             // the groupCreated reaffirm (requestGroupInfo) is async and the
             // flag is often still false when the watchdog is armed — reading
             // it at arm time killed a converted group at 35s despite the grace.
-            if (backboneRole is BackboneRealizer.Role.Host && backboneGroupCreated) {
+            if (backboneRole is BackboneRealizer.Role.Host && backboneGroupCreated && !seniorOnAir) {
                 RumorLog.d(TAG, "GO idle but backbone host — holding group")
                 return@launch
             }
@@ -885,14 +901,14 @@ class WifiDirectTransport(
             // (10–60s before the SSID becomes visible to them). Still bounded:
             // a forever-held empty group pins this radio as GO and would
             // deadlock two view-blind converts against each other.
-            if (backboneGroupCreated) {
+            if (backboneGroupCreated && !seniorOnAir) {
                 delay(CREDENTIALED_GO_IDLE_TIMEOUT_MS - GO_IDLE_TIMEOUT_MS)
                 if (backboneRole is BackboneRealizer.Role.Host && backboneGroupCreated) {
                     RumorLog.d(TAG, "GO idle but backbone host — holding group")
                     return@launch
                 }
             }
-            RumorLog.d(TAG, "GO idle — removing group")
+            RumorLog.d(TAG, if (seniorOnAir) "GO idle — yielding to senior backbone group" else "GO idle — removing group")
             removeGroup()
         }
     }
