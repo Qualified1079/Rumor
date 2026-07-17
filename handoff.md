@@ -22,6 +22,24 @@ bootstrap-host redundantly for minutes before seeing a live group
 (self-heals via yield); fix candidates: SCAN_RESULTS broadcasts or P2P
 service discovery. Current version **versionCode 20 / 0.5.6-o98-3b11**.
 
+## Emulator status (2026-07-17, diagnosed and parked)
+
+The "keeps dropping after ~30s" emulator is a **SIGSEGV in emulator build
+36.6.11 itself** on this host (Fedora, kernel 6.19) — crashes ~12s in,
+right after "performing a full startup", with exit 139. Ruled out: KVM
+(`-accel-check` clean), OOM (5GB free), stale AVD state (fresh AVD also
+crashes), GPU path (`swiftshader_indirect`, `-gpu off`, `-feature -Vulkan`
+all crash identically), launch method (harness-tracked foreground run
+reproduces). A pre-crash warning ("cannot unmap ptr … protected range")
+points at the emulator's guest-memory sub-allocator. **Fix path when it
+matters: manually install an older emulator package** (sdkmanager only
+serves latest; grab a 35.x zip into `Android/Sdk/emulator/`), or retest
+after the next emulator update. AVDs: `api31` (the original, in the
+Flatpak Android Studio dir `/home/user/.var/app/com.google.AndroidStudio/
+config/.android/avd` — launch with `ANDROID_AVD_HOME` pointed there) and
+`rumor31` (created this session, same dir). [TODO/EMU] rows are unaffected
+in priority — real hardware covers current testing needs.
+
 ## Bottom line
 
 Phase 3b works on hardware and the user confirmed **zero join prompts**
