@@ -120,28 +120,30 @@ fun SettingsScreen(
         ModeOption(
             title = "Auto",
             subtitle = "Static when plugged in, Free when plugged in with the screen " +
-                "off, Mobile otherwise." +
+                "off, Mobile otherwise. Never slows down active use — Free only " +
+                "engages while the screen is off." +
                 if (state.modeAuto) " Currently: ${state.currentMode.name.lowercase()}." else "",
             selected = state.modeAuto,
             onClick = viewModel::setModeAuto,
         )
         ModeOption(
             title = "Mobile",
-            subtitle = "Carried device. Conservative scanning, low routing weight.",
+            subtitle = "Carried device. Conservative scanning — lightest on battery.",
             selected = !state.modeAuto && state.currentMode == UserMode.MOBILE,
             onClick = { viewModel.setModeManual(UserMode.MOBILE) },
         )
         ModeOption(
             title = "Static",
-            subtitle = "Plugged-in, always-on device. Scans harder, caches more for " +
-                "peers, and pushes larger batches per exchange.",
+            subtitle = "Plugged-in, always-on device. Scans more often and caches " +
+                "more for peers. Uses somewhat more battery; no noticeable slowdown.",
             selected = !state.modeAuto && state.currentMode == UserMode.STATIC,
             onClick = { viewModel.setModeManual(UserMode.STATIC) },
         )
         ModeOption(
             title = "Free",
-            subtitle = "Dedicates bandwidth, CPU, and battery to the mesh. Best for a " +
-                "permanently powered relay node.",
+            subtitle = "Scans continuously and syncs every few seconds. Drains battery " +
+                "quickly and can cause Wi-Fi stutter while you use the phone — meant " +
+                "for a device left on a charger.",
             selected = !state.modeAuto && state.currentMode == UserMode.FREE,
             onClick = { viewModel.setModeManual(UserMode.FREE) },
         )
