@@ -523,7 +523,11 @@ class WifiDirectTransport(
                 }
                 override fun onFailure(reason: Int) {
                     RumorLog.w(TAG, "O98 backbone join failed: ${p2pError(reason)}")
-                    ssidCooldownUntil[networkName] = System.currentTimeMillis() + SSID_COOLDOWN_MS
+                    // BUSY means the framework was mid-command, not that the
+                    // group is absent — retry without penalizing the SSID.
+                    if (reason != WifiP2pManager.BUSY) {
+                        ssidCooldownUntil[networkName] = System.currentTimeMillis() + SSID_COOLDOWN_MS
+                    }
                     pendingJoinSsid = null
                     handler.removeCallbacks(connectWatchdog)
                     connectAttemptInFlight = false
@@ -592,6 +596,18 @@ class WifiDirectTransport(
         // appears, legacy resumes after the holdoff.
         if (backboneRole is BackboneRealizer.Role.Client &&
             System.currentTimeMillis() - roleAssignedAtMs < CLIENT_LEGACY_HOLDOFF_MS) {
+            runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+            return
+        }
+
+        // Never plain-connect() at a device that already owns a formed group —
+        // that is a join-its-group request, i.e. an invitation its owner must
+        // manually accept (field-observed on the OnePlus, fired at it before
+        // its app was even unlocked). GO-negotiation between two UNGROUPED
+        // devices is the only legitimate negotiated connect, and it never
+        // prompts. A Rumor GO's group converts to a credentialed SSID we join
+        // via scan; a foreign GO is not our peer anyway.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && device.isGroupOwner) {
             runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
             return
         }
