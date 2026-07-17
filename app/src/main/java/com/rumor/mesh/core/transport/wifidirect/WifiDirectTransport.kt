@@ -309,7 +309,15 @@ class WifiDirectTransport(
         if (sameRealization(role, backboneRole)) {
             when {
                 role is BackboneRealizer.Role.None -> return
-                groupConnected && (role is BackboneRealizer.Role.Client || backboneGroupCreated) -> return
+                // A connected client is only healthy in the RIGHT group — a
+                // legacy negotiated group (random SSID) satisfies groupConnected
+                // but is not the backbone; verify and leave it if mismatched
+                // (field-observed: Samsung parked in the OnePlus's negotiated
+                // group, join early-returned forever).
+                groupConnected && role is BackboneRealizer.Role.Client -> {
+                    verifyClientGroup(role.hostUserId); return
+                }
+                groupConnected && backboneGroupCreated -> return
                 now - backboneAttemptAtMs < BACKBONE_ATTEMPT_GRACE_MS -> return
                 backboneRetriesLeft <= 0 -> return   // exhausted — legacy flow has the radio
             }
@@ -404,9 +412,29 @@ class WifiDirectTransport(
      * prompt and no discovery. The group may not exist yet (host still coming
      * up); failures fall back to the applyBackboneRole retry cycle.
      */
+    /**
+     * Connected-as-something already — but to the backbone host's group? A
+     * legacy negotiated group must be left (its random SSID is unjoinable by
+     * the other planned clients and it pins this radio); the next recompute
+     * tick then performs the actual credential join.
+     */
+    private fun verifyClientGroup(hostUserId: String) {
+        val expected = GroupCredentials.forHost(hostUserId).networkName
+        wifiP2pManager?.requestGroupInfo(channel) { group ->
+            if (group != null && group.networkName != expected) {
+                RumorLog.i(
+                    TAG,
+                    "O98 leaving ${group.networkName} — backbone wants $expected",
+                )
+                removeGroup()
+            }
+        }
+    }
+
     private fun joinBackboneGroup(hostUserId: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
-        if (groupConnected || connectAttemptInFlight) return
+        if (groupConnected) { verifyClientGroup(hostUserId); return }
+        if (connectAttemptInFlight) return
         val creds = GroupCredentials.forHost(hostUserId)
         val p2pCfg = WifiP2pConfig.Builder()
             .setNetworkName(creds.networkName)
@@ -721,6 +749,17 @@ class WifiDirectTransport(
         wifiP2pManager?.requestConnectionInfo(channel) { info ->
             val isGo = info?.isGroupOwner == true
             _isGroupOwner.value = isGo
+            // O98 3b: the removeGroup→createGroup handoff delivers the OLD
+            // group's disconnect broadcast AFTER createGroup's success callback,
+            // wiping backboneGroupCreated — then the idle watchdog's hold-guard
+            // fails and kills the new group 35s in (field-observed 48s re-host
+            // cycle). Becoming GO while holding a Host role means our
+            // credentialed group is the one that came up: reaffirm the flag and
+            // refresh the retry budget so a later real drop gets fresh attempts.
+            if (isGo && backboneRole is BackboneRealizer.Role.Host) {
+                backboneGroupCreated = true
+                backboneRetriesLeft = MAX_BACKBONE_RETRIES
+            }
             if (isGo) armGoIdleWatchdog()
             // Read the actual GO address from WifiP2pInfo. The well-known constant
             // (192.168.49.1) is the typical value but is not guaranteed by spec —
@@ -744,8 +783,12 @@ class WifiDirectTransport(
         handler.removeCallbacks(connectWatchdog)
         connectAttemptInFlight = false
         groupConnected = false
-        // O98 3b: role persists (next recompute tick retries) but the group is gone.
+        // O98 3b: role persists (next recompute tick retries) but the group is
+        // gone. A disconnect is a new situation — refresh the retry budget so a
+        // role that exhausted its attempts against a stale group state gets to
+        // try again rather than staying parked on the legacy flow forever.
         backboneGroupCreated = false
+        if (backboneRole !is BackboneRealizer.Role.None) backboneRetriesLeft = MAX_BACKBONE_RETRIES
         goIdleWatchdog?.cancel()
         serverJob?.cancel()
         runCatching { serverSocket?.close() }
