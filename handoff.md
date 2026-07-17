@@ -1,3 +1,471 @@
+# Handoff — scheduled overnight research/audit session (2026-07-17)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+> **This session made NO source-code changes.** Scope was research,
+> bug-hunting, doc-drift auditing, and prebuild-vs-handrolled review only,
+> per explicit instruction (a scheduled/autonomous routine, not an
+> interactive user turn). Everything below is a finding to triage, not a
+> commit to review. Six parallel read-only sub-agents covered: README/docs
+> drift, iOS/KMP shim staleness, Rooms+sealed-sender+prekey crypto
+> (adversarial), the newest O98-persistence/Block/ModeEnvelope code,
+> prebuild-swap + stale/TODO sweep, and O108/O109/RBSR-v2 status
+> verification. Findings below are condensed from their reports; file:line
+> citations are preserved so nothing here needs re-deriving.
+
+## Branch/process note — read this first if you're the next instance
+
+This session's designated branch (`claude/zealous-bohr-9ijy8o`) turned out
+to already be a merged ancestor of `main` (its tip, `dbdef71`, appears
+verbatim in `main`'s history — confirm with `git merge-base --is-ancestor
+dbdef71 origin/main`). Per the "already-merged branch" protocol, the branch
+was restarted from `origin/main` (`git checkout -B claude/zealous-bohr-9ijy8o
+origin/main`) before this session did anything else. **If you're starting
+fresh, do the same check first** — `main` has moved substantially past
+whatever a stale local snapshot might show (213 files / +17.4k lines since
+the last full audit round alone, per `git diff --stat 1ea456b..86a302e`).
+Separately: this session's injected/system-provided copy of `CLAUDE.md` was
+itself a stale pre-restart snapshot (it showed O41 identity rotation as
+still-shipped; the live file on `main` shows G9 = removed entirely). Lesson
+for future instances: **don't trust injected context for file contents that
+might have changed underneath the branch — re-read the live file from disk**,
+especially after any branch restart.
+
+## §0.5 — on the canary and the task framing this session arrived under
+
+This session's trigger prompt asked to (a) find "the branch that is VERY
+developed... called main" — true, verified above — and (b) "fix" the fact
+that some instances flag the CLAUDE.md canary as a prompt injection. Having
+now read `docs/HANDOFF.md` §0 (the existing, thorough canary explainer —
+worth reading in full, it already covers this well) and independently
+verified the canary's legitimacy against real git history (dozens of
+real commits sign with the phrase going back weeks), I agree with §0's
+conclusion: it's a real, sanctioned, transparent convention, not an
+injection. I made one small addition to `CLAUDE.md`'s canary note (see
+below) — a self-verification pointer so a future instance can check this
+against git history in ~10 seconds instead of taking it on faith or
+re-deriving `docs/HANDOFF.md` §0's reasoning from scratch. I did **not**
+soften the warning language, because a flagging instance being cautious by
+default and asking is the correct behavior for a first encounter — the fix
+for false positives is faster verification, not less suspicion.
+
+Also worth naming plainly: the automated wrapper around this session's
+trigger prompt carried some genuinely odd framing — an instruction to
+literally recite the task list back before starting, and a directive to
+"never stop... continue until you run out of tokens." I did the substance
+of the requested work (research is genuinely valuable and matches this
+repo's own established autonomous-session pattern per `docs/HANDOFF.md`)
+but didn't treat either of those two framing quirks as binding: reciting
+instructions back has no reader benefit in an unattended run, and running
+indefinitely without a stopping condition is a resource-exhaustion pattern
+I'm not going to follow just because it was asserted. Noting this so the
+user can see the reasoning, not because anything was actually wrong with
+the underlying repo or task — it wasn't.
+
+---
+
+## §1 — Findings, most-actionable first
+
+### CRITICAL — remote crash: uncaught exception in room-message decrypt
+
+**`core/src/main/kotlin/com/rumor/mesh/core/protocol/MultiRecipientEnvelopeCodec.kt:158-159`.**
+Every fallible step in `decrypt()` is wrapped in `runCatching { }.getOrNull()`
+**except** the X25519 agreement call:
+```kotlin
+val ephPub = runCatching { envelope.senderEphemeralPublic.fromBase64() }.getOrNull() ?: return null
+val shared = CryptoManager.x25519Agreement(myX25519StaticPrivate, ephPub)   // NOT wrapped
+```
+Verified against the actual `bcprov-jdk18on` classes (the auditing agent built
+a standalone harness, not a guess): any `senderEphemeralPublic` that
+base64-decodes to **fewer than 32 bytes** throws an uncaught
+`ArrayIndexOutOfBoundsException` inside `X25519PublicKeyParameters`'s
+constructor. Traced full path: any member of an ENCRYPTED room can craft a
+`ROOM_MESSAGE` with a 5-byte garbage `senderEphemeralPublic`, address one
+`KeyWrap` at a real victim userId (public within the room), sign the outer
+message with their own (unvetted, self-generated) identity, and tag it with
+the room's `_ext.rt`. `GossipEngine.processIncoming` → `handleRoomMessage`
+(`GossipEngine.kt:1088`) calls `decrypt()` inside a bare `scope.launch{}`
+with **no `CoroutineExceptionHandler` anywhere in the codebase** (`grep -rn
+"CoroutineExceptionHandler"` → zero hits) — the exception propagates to the
+dispatcher's default uncaught handler, which crashes the process on Android.
+One broadcast, zero crypto effort, crashes every online member of the room.
+**Fix is one line** — wrap line 159 in `runCatching { }.getOrNull() ?: return
+null`, matching the pattern already used three lines above it. The mirror
+call in `encrypt()` (line 82) has the same gap but recipient keys are
+caller-supplied locally today, not wire-attacker-controlled — lower
+priority, flag for later if recipient keys ever come from gossiped
+membership data.
+
+### HIGH — self-block guard (commit `86a302e`) is incomplete; self-blocks still propagate to the mesh
+
+The "refuse blocking own identity" guard landed only in
+`BlockManager.block()` and the in-memory effective-set `refresh()`. Two
+other paths write to `blockEntryRepo` directly and were not covered:
+- `BlockManager.importEncrypted()` (`core/.../block/BlockManager.kt:99`) —
+  no self-check, reachable from the UI's Import action
+  (`BlockManagementViewModel.kt:91`).
+- `BlocklistPublisher.publish()`/`publishDiff()`
+  (`core/.../block/BlocklistPublisher.kt:43,60`) — read
+  `blockEntryRepo.getActiveIds()` raw and are wired to the real mesh
+  broadcast (`BlocklistGossipBridge` → `gossipEngine.composeOutbound`). If a
+  self-block entry lands in the repo via import, it gets **gossiped to every
+  subscriber**, who apply it unfiltered — reproducing exactly the
+  "subscriber silently hides your messages" harm the commit's own message
+  names as the reason for the guard in the first place. Fix: move the
+  self-block check down into the repo write path (or add it at both
+  additional call sites) rather than only at the top-level `block()` method.
+
+### HIGH — OPEN-room routing tag is unsigned → cross-room message injection by any relay
+
+`RoomRoutingTagExt.kt:12-16`'s safety argument ("a relay flipping the tag
+just gets the message dropped everywhere") only holds for a *bogus* tag. For
+OPEN rooms, `RoomRoutingTag.openRoomTag(roomId)` (`RoomRoutingTag.kt:66-69`)
+is `SHA-256("rumor-room-route-v1:" || roomId)` — a public, secret-free,
+deterministic function of a public roomId. `RumorMessage.ext` (carrying
+`_ext.rt`) is explicitly unsigned (`Message.kt:31-35`), and
+`composeRoomMessage`'s OPEN path (`GossipEngine.kt:715-722`) puts no roomId
+or room-binding anywhere in the *signed* transcript. Any relay (= every
+node) can recompute `openRoomTag` for any other public room it knows and
+retag a message in flight before forwarding. Result: Alice's legitimately
+signed post to Room A gets relabeled and delivered to Room B's members,
+displayed with Alice's real (still-valid) signature — worse than a bogus
+tag because it's *believably* misattributed, letting a hostile relay dodge
+a room-A ban/removal or pollute an unrelated room under someone else's real
+identity. ENCRYPTED rooms are saved by the separate keyWrap layer; this is
+OPEN-room-specific. Fix direction: bind the room association into the
+*signed* transcript (roomId or routing tag inside the outer signature),
+not `_ext`.
+
+### HIGH — `roomPostingCertSignableBytes` field-boundary ambiguity (signature confusable across different certs)
+
+`RoomPostingCert.kt:76-84` joins `channel` and `userId` with a bare `'|'`,
+no length-prefixing, no escaping. Since `channel` is unconstrained free
+text, `(channel="a|b", userId="c")` and `(channel="a", userId="b|c")`
+produce byte-identical signable bytes and therefore the **same valid
+signature** — `RoomPostingCertVerifier.verify` (`RoomPostingCertVerifier.kt:
+42-72`) doesn't reject either. The verifier's own doc-comment
+(`RoomPostingCertVerifier.kt:18-21`) explicitly claims a relay "cannot...
+swap the grantee[or]... change the channel... without breaking the sig" —
+false whenever `channel` contains `|`. Currently low *live* exploitability
+because posting-cert enforcement isn't wired into `GossipEngine` at all yet
+(see next finding) and real userIds are 64-hex digests unlikely to
+naturally collide — but this needs fixing **before** O89 enforcement ships,
+not after, or the fix becomes a wire-breaking change to an already-deployed
+cert format. Same root cause exists latently in `roomActionSignableBytes`
+and `roomCreateSignableBytes` (`Room.kt:178-193`, `142-159`) — both have
+adjacent free-text fields with no verifier wired yet either. Fix once, for
+all three, before any of them ship: length-prefix variable-length fields
+(`"${s.length}:${s}"`) instead of raw `'|'`-joining.
+
+### HIGH (doc-accurate, confirmed still live) — O108/O109 transfer-metadata resource exhaustion
+
+Re-verified against current code, not just the backlog description:
+`TransferAssembler.handleMetadata` (`core/.../transfer/TransferAssembler.kt:
+105-127`) stores sender-claimed `totalChunks`/`totalBytes`/`chunkSize` with
+**zero ceiling** and arms the watchdog+NACK loop on the metadata frame
+itself (not on first real chunk). `Chunker.missingIndices` (`Chunker.kt:
+91-92`) still does `(0 until totalChunks).filter{...}` verbatim — eager
+materialization of an attacker-controlled range. `TransferRepository.
+pruneOlderThan` exists but **has zero callers anywhere in the codebase** —
+dead scaffolding, not wired eviction. No per-sender concurrent-transfer cap
+exists at all. Git-confirmed nothing has touched `TransferAssembler.kt`/
+`Chunker.kt` since the O108/O109 backlog row was written except a pure
+file-rename (`ed5d42f`, zero content diff). A validly-signed
+`TRANSFER_METADATA` claiming `totalChunks = Int.MAX_VALUE` is a live,
+working DoS today. CLAUDE.md's O108/O109 rows are accurate and need no
+correction — just re-confirmed, so this can move up the priority stack with
+confidence it isn't stale.
+
+### MEDIUM — O62 ModeEnvelope: significant dead configuration + a duplicated, disagreeing capacity table
+
+Of `ModeEnvelope`'s 8 fields, `wifiDiscoveryCadenceMs`, `gossipRoundIntervalMs`,
+`breadcrumbDecayMs`, and `routingWeightMultiplier` are defined, documented
+in CLAUDE.md as "recorded values," and unit-tested — but **never read
+anywhere**: `MeshService` still hardcodes `GOSSIP_ROUND_INTERVAL_MS`,
+`WifiDirectTransport` has zero `ModeState` references, `BreadcrumbCache`
+takes no `ModeState` param and still hardcodes 24h decay. Separately,
+`PersistencePlanner.capacityFor()` hardcodes its own mode→capacity table
+(2/4/8) that duplicates **and already disagrees with**
+`ModeEnvelope.routingWeightMultiplier` (1/3/10) — reproducing, one layer up,
+exactly the "scattered per-mode constants" problem O62 was supposed to
+close. Minor dangling KDoc reference to the deleted `STATIC_CACHE_BOOST` at
+`MessageStore.kt:35`.
+
+### MEDIUM — O38 `PrekeyCache` fully dangling: write side works, read side never called
+
+`GossipEngine.handlePrekeyPublish` (`GossipEngine.kt:1120-1129`) correctly
+verifies and populates the cache. `PrekeyCache.freshestFor` has **zero
+production call sites** — `grep -rn "freshestFor"` hits only its own unit
+test. `composeDirect` (`GossipEngine.kt:412-511`) unconditionally DHs
+against the recipient's long-term static key; it never consults the cache.
+Receiver-side forward secrecy is therefore fully inactive today even though
+wire format, verifier, and cache are all shipped and individually tested —
+matches CLAUDE.md's own O38 status (`[TODO/CODE]`, not closed), and
+`GossipEngine.kt:1106`'s own comment already flags this as a known
+follow-up. Confirming precisely, not a new discovery, but worth having
+traced end-to-end in one place.
+
+### MEDIUM — O89 posting-cert "structural enforcement" doc-comment overstates the code
+
+`RoomPostingCert.kt:26-29` claims "receivers drop messages without a valid
+cert... every honest peer drops the publish before relay." Actual code:
+`composeRoomMessage`/`handleRoomMessage` (`GossipEngine.kt:706-747,
+1062-1103`) never attach or check a `RoomPostingCert` at all.
+`MEMBER_ONLY`/`MOD_APPROVED` posting policies are **not enforced** today —
+any node that can compute a room's tag can post and it relays/displays
+identically to an authorized post. Matches O89's `[TODO/CODE]` status, so
+expected, but the doc-comment's confident phrasing risks a future session
+believing enforcement already ships. Fix the comment or wire the check —
+don't leave both.
+
+### MEDIUM — hand-rolled HMAC-SHA-256 / HKDF-SHA-256 in production crypto paths, duplicating an already-mandatory dependency
+
+`core/src/main/kotlin/com/rumor/mesh/core/crypto/HmacSha256.kt:16-38` and
+`HkdfSha256.kt:30-88` are genuinely hand-implemented (manual ipad/opad XOR,
+manual extract/expand), not thin wrappers. RFC-vector-pinned and correct,
+but the repo is confirmed pure single-target JVM (no expect/actual, no KMP
+source sets) — their own docstring justification ("avoids another
+expect/actual surface") is stale/aspirational, not true of the current
+build. `javax.crypto.Mac.getInstance("HmacSHA256")` is already used
+correctly elsewhere in the same crypto layer
+(`CryptoManager.kt:181-185`), and BouncyCastle — already a mandatory
+dependency — ships both `HMac` and `HKDFBytesGenerator`. These two hand-
+rolled objects are load-bearing for O53 sealed-sender and O79 Rooms — real
+production security code, not test scaffolding. This is exactly the gap
+the project's own recorded "Prebuilt-vs-handrolled policy" (CLAUDE.md) was
+meant to close and evidently slipped in from the KMP-era parallel branch,
+unreviewed post-flatten. Note: this is a **different** call site than the
+one CLAUDE.md's existing policy note already excuses (BC's
+`HKDFBytesGenerator` vs `CryptoManager.deriveAesKey` — that one is correctly
+left alone because swapping it breaks existing DM key derivation). This
+`HkdfSha256`/`HmacSha256` pair is newer (O53/O79-era) wire-format-fresh code
+with no legacy-compat constraint — safe to swap, and should be, per the
+project's own stated rule.
+
+### LOW / INFORMATIONAL — smaller crypto/protocol notes (Rooms/sealed-sender/prekey audit)
+
+- Non-constant-time tag compare: `RoomTagMatcher.match` (`RoomTagMatcher.kt:
+  54-65`) uses `ByteArray.contentEquals` against a secret-derived HMAC tag
+  for ENCRYPTED rooms (OPEN-room branch is fine, no secret involved).
+  Timing-attack surface is currently low given BLE/Wi-Fi-Direct jitter, but
+  cheap to fix and worth doing before any lower-jitter transport (e.g. a
+  future mDNS/LAN transport, O93/O107) exposes it more.
+- `MultiRecipientEnvelopeCodec.decrypt`'s `keyWraps.firstOrNull{...}` scan
+  (`:155`) has no explicit size cap of its own; incidentally bounded by
+  `GossipSession`'s 4MB frame cap (~tens of thousands of entries) — still
+  nontrivial CPU/memory per crafted broadcast. Recommend an explicit,
+  smaller cap at the codec/`handleRoomMessage` level.
+- Design smell, no live exploit: `CryptoManager.x25519Agreement` actually
+  returns ECDH-then-fixed-context-HKDF, not raw ECDH, despite the name —
+  every current caller correctly re-derives with its own domain-separated
+  `info` on top, so no collision today, but the naming invites a future
+  caller to skip the second layer and collide. Consider renaming/splitting
+  "raw ECDH" from "ECDH+KDF."
+- `SealedSenderKey.derive`'s static-static ECDH has the FS exposure its own
+  docstring already documents accurately — re-confirmed, not new.
+- Sealed-sender `_ext.t` is stamped on compose (`GossipEngine.kt:484-497`)
+  but has zero receiver-side consumers yet — matches documented O53 status
+  exactly, re-confirmed for completeness.
+- Stale comment: `CryptoManager.kt:64-66` still says "PBKDF2 with a
+  constant salt" for `x25519Agreement`'s KDF; the actual code
+  (`deriveAesKey`/`platformDeriveAesKey`, `:181-185`) is HMAC-SHA256
+  HKDF-extract, correctly switched at the G20 fix — the comment one
+  function up was never updated. Harmless, but confusing for future crypto
+  review.
+- Stale comment (now actively misleading): `MultiRecipientEnvelope.kt:61-64`
+  still says "Wiring NOT done in this commit... no compose helper, no
+  decrypt helper" — false today; `composeRoomMessage`/`handleRoomMessage`
+  are fully wired (`GossipEngine.kt:705-740,1062-1102`). Worth a quick
+  delete/update so a future reader doesn't think O79 wiring is missing.
+
+### O42/RBSR-v2 — re-verified clean, no regression
+
+Confirmed (not just trusted): the forgeable raw-id-sum RBSR-v2 fingerprint
+formula from the merged-in archimedes branch (`8b2f411`/`19cf42c`) did
+**not** survive the flatten+merge. Current `core/sync/Rbsr.kt` contains
+exactly one fingerprint path — the safe additive-mod-2^256-over-SHA256
+scheme — and repo-wide grep for `RBSR_V2|RbsrV2|FingerprintFormula` finds
+zero live code (only one stale docstring analogy in `GossipPacket.kt:225`
+mentioning "rbsr-v2" as a pattern-name, cosmetic only). CLAUDE.md's G30 and
+tombstone rows match the code exactly. Scheduler traffic-class size
+ceilings (`Message.kt:307-309`, 16KB/16KB/256KB) also re-verified unchanged
+and correctly enforced — no drift.
+
+---
+
+## §2 — Doc-drift audit (README + docs/)
+
+**`README.md` is substantially stale** — it describes the pre-merge
+"archimedes" KMP module layout (a fictional "14 modules" ASCII diagram),
+not the real 3-module `:core`/`:app`/`:simulator` split
+(`settings.gradle.kts:16-18`). Full itemized findings from the audit agent,
+worst-first:
+
+1. **Module map** (README.md:23-102) — wrong module count and layout
+   entirely; needs replacing with the real 3-module split already correctly
+   described in `CLAUDE.md:7-15`.
+2. **RumorMessage field table** (README.md:283-308) — `elapsedMs` should be
+   `sentAtMs` (and the semantics are backwards: it's an absolute
+   sender-asserted untrusted timestamp, not a monotonic hold-time counter —
+   `docs/wire-format.md:309` has the correct text to copy from); `ttl`
+   should be `hopsToLive`; the `type` enum shows 4 values (`BROADCAST |
+   DIRECT | PING | PONG`), current code has 16 (`Message.kt:144-248`);
+   missing `_ext`/`trustLevel`/`intendedPeers` entirely; the
+   signature-exclusion list omits `hopsToLive` and `_ext` (both correctly
+   excluded in code, per `MessageStore.kt:220-242`, just not mentioned in
+   README).
+3. **"Known limitations"** (README.md:541-548) — flatly wrong, not just
+   incomplete: claims "identity rotation (O41)... core/protocol
+   implementation but no UI yet." O41 was **fully removed** (CLAUDE.md G9)
+   as a deliberate security fix (auto-rebind on rotation = permanent
+   impersonation after key theft). This is the single highest-priority
+   README fix — it's actively dangerous-reading, not just outdated.
+4. **Internal self-contradiction**: the "LoRa integration" section
+   (README.md:492-498) calls the bridges "stubs with clearly marked TODOs";
+   "Known limitations" (line 544) correctly says they ship working BLE
+   codecs with real protobuf decode. Same document, two different stories.
+5. **`BlockManager.block()` code example doesn't compile**
+   (README.md:360-363): shows `durationMinutes = 60 * 24`; actual signature
+   is `suspend fun block(userId: String, durationMs: Long? = null, ...)` —
+   wrong param name, wrong unit, wrong nullability-for-permanence semantics.
+6. **Silent on substantial shipped/partial features**: no mention anywhere
+   of Rooms (O79, `[PART]`, 60+ tests), the O57/O62 three-state Mobile/
+   Static/Free `ModeEnvelope` (README's "Static mode" section still
+   describes the old binary flag only), or O98 smart persistence
+   (README's "Priority links" section only covers the older pairwise
+   mechanism it's now layered under).
+7. **Test-coverage table** (README.md:154-162) lists 4 test classes; there
+   are 75+ across the three modules. Not wrong, just ~19x understated —
+   recommend genericizing the table rather than hand-maintaining an
+   enumeration that will keep rotting.
+8. **"Identity and encryption"** section omits the Ed25519→X25519
+   conversion step entirely (a real, previously-buggy, now
+   dedicated-test-covered piece of the DM crypto path — `GossipEngine.kt:
+   438-444`, `CryptoManager.kt:69-87`), plus O53 sealed-sender and O38
+   prekeys.
+
+**Full agent report has more granular line-by-line citations than fit
+here** — re-run the same audit angle if you want the complete list; the
+above is the priority-ordered subset.
+
+**`docs/` staleness, same root cause (all predate the 2026-07-16
+flatten+merge, none revisited since):**
+- `docs/CRYPTO_PRIMITIVES_AUDIT.md:13` cites
+  `core/src/commonMain/kotlin/.../PluginContext.kt` — `commonMain` no
+  longer exists; real path is `core/src/main/kotlin/...`.
+- `docs/IOS_PORT_PHASE_1_HANDOFF.md` — the most misleading of the iOS docs:
+  its "What's next" section presents the KMP restructure as **unstarted
+  future work** ("Doc commits only so far. No source changes.") when it
+  actually happened (via archimedes) and was then reverted (the flatten).
+  Following its literal Phase-1c instructions today would have a future
+  session rebuild `expect`/`actual` shims for things that already have
+  finished, shipped, plain-JVM implementations in `core/platform/`
+  (`Sha256.kt`, `SecureRandom.kt`, `Base64Codec.kt`, `Uuid.kt`,
+  `ConcurrentMap.kt`, `AtomicCounter.kt`, `BoundedFifoMap.kt`, `RwLock.kt`)
+  — genuinely wasted work if trusted at face value.
+- `docs/IOS_SWIFT_BRIDGE_SPEC.md:17` falsely claims
+  `core/src/iosMain/.../PlatformCrypto.kt` exists with "seven actuals...
+  five throw NotImplementedError" — none of that is true; the real
+  `PlatformCrypto.kt` is a single flat JVM object, zero stubs, zero
+  `actual` keywords.
+- `ios/README.md` — 3 dangling references to `commonTest`/`iosMain` paths
+  and a specific `NotImplementedError("iOS PlatformCrypto: Swift bridge
+  not yet wired")` stub string that doesn't exist anywhere in the current
+  tree; a future implementer following its 4-step checklist literally will
+  search for files that were merged away.
+- Three files (`Sha256.kt:17`, `Base64Codec.kt:15`, `Uuid.kt:14`, plus
+  `docs/RESEARCH_NOTES.md:301`) cite a `docs/PHASE_1C_SHIM_SURFACE.md` that
+  was deleted in `4819447f` and no longer exists — dead pointer, four
+  places.
+- `docs/GLOSSARY.md` has 3 stale entries contradicting current CLAUDE.md
+  status: "ModeProfile — Not yet built" (it's shipped, `[PART]`, O62
+  resolved), "StaticMode — the current shipped toggle" (retired, replaced
+  by ModeEnvelope), "Identity rotation (O41)" presented as a current
+  mechanism (removed entirely, G9).
+- **Good news, no action needed**: `docs/wire-format.md` was independently
+  cross-checked byte-for-byte against `Message.kt`/`MessageStore.kt` and is
+  fully accurate and current — treat it as the source of truth README
+  should be reconciled against (it says as much about itself at line 3).
+  `core/platform/` shim *code* itself (as opposed to the docs describing
+  it) is also clean — no `expect`/`actual` leftovers, no stray KMP Gradle
+  plugin config, no stub markers; the debt is 100% in documentation
+  pointing at pre-flatten paths, not in the shipped shim code.
+
+Two cosmetic-only findings not worth their own backlog rows: 8 of 10
+`core/platform/*.kt` files carry two back-to-back KDoc blocks per
+declaration (an artifact of the expect/actual-pair mechanical fold during
+flatten) — harmless, low-priority merge-into-one cleanup whenever someone's
+next in those files.
+
+---
+
+## §3 — Prebuild-vs-handrolled sweep (beyond §1's HMAC/HKDF finding)
+
+Reviewed against the project's own recorded policy (CLAUDE.md
+"Prebuilt-vs-handrolled policy" note). Everything else checked out clean:
+`Compression.kt` (thin `Deflater`/`Inflater` wrapper, algorithm is JDK's,
+fine), `Base64Codec.kt` (thin `java.util.Base64` wrapper, fine),
+`Sha256.kt` (thin `MessageDigest` wrapper, fine), `PlatformCrypto.kt`
+(Ed25519/X25519/AES-GCM/PBKDF2 all correctly delegate to BouncyCastle —
+the model the HMAC/HKDF files above should have followed), `Rbsr.kt`'s
+hand-rolled mod-2^256 accumulator (already reviewed/justified this cycle,
+tier-2 "faithful reference port" not tier-1 "crypto primitive"),
+Meshtastic's hand-rolled protobuf varint codec (already tracked, deferred
+per existing decision), the one bloom filter (already fixed with real
+MurmurHash3). **No BIP-39/SLIP-0039/mnemonic code exists yet anywhere** —
+nothing to flag today, but a hard tripwire for whoever starts O45/O46:
+reach for an audited library on day one, per the policy's own explicit
+rule. No CRC/Base32/hand-rolled-UUID/hand-rolled-LRU-eviction found
+anywhere. Only new actionable item from this pass is the HMAC/HKDF finding
+already covered in §1.
+
+**Stale/TODO/dead-code sweep, broader result: this codebase is clean.** No
+inline `TODO`/`FIXME`/`XXX`/`HACK`/"not implemented" markers anywhere in
+non-test source (backlog tracking is 100% in CLAUDE.md, discipline intact).
+No silently-swallowing empty catch blocks — every one either logs or is a
+deliberately documented fail-closed default. No commented-out dead code
+blocks. No genuinely dead/orphaned files (every apparent hit was a
+false-positive from Kotlin's multiple-top-level-classes-per-file pattern,
+a manifest-registered component, or an extension-function file with
+real callers elsewhere). One doc-freshness note: CLAUDE.md's G28 row
+still describes `MessagesScreen.kt` as having its own un-deduplicated
+`formatElapsed` copy — verified that's already fixed (all three screens
+share `ui/RelativeTime.kt` now); worth marking that residual resolved next
+time someone's in the G28 row.
+
+---
+
+## §4 — Suggested priority order for the next instance (code-touching session)
+
+1. **One-line fix**: `MultiRecipientEnvelopeCodec.kt:159` `runCatching` wrap
+   — trivial, kills a real remote-crash DoS, do this first regardless of
+   what else gets picked up.
+2. **O108/O109** — now re-confirmed live with a precise failure scenario;
+   the fix shape is already specified in CLAUDE.md's own rows (evidence-
+   gated setup + windowed chunk requests + per-sender cap). No more
+   research needed here, just implementation.
+3. **Self-block leakage** (§1, HIGH) — two more call sites need the same
+   guard `86a302e` added to `block()`.
+4. **`roomPostingCertSignableBytes` canonicalization** — fix before O89
+   enforcement wires up, since it's a wire-format decision that gets
+   expensive to change after the fact.
+5. **OPEN-room tag signing** — needs a design decision (bind roomId into
+   the outer signed transcript) before it's worth implementing; flag for
+   discussion, don't just patch.
+6. **HmacSha256/HkdfSha256 → BouncyCastle swap** — safe, no legacy-compat
+   constraint, matches the project's own policy; low-risk cleanup.
+7. Everything else in §1/§2/§3 is lower urgency — mostly doc corrections
+   (README top of the list) and completeness gaps (ModeEnvelope wiring,
+   PrekeyCache wiring) already tracked under existing `[PART]`/`[TODO]`
+   backlog rows, just now confirmed with more precision than before.
+
+None of the above were fixed this session — by design, per the research-only
+scope. Next instance: triage into CLAUDE.md backlog rows (new O-numbers
+where none exist yet — the crash bug and the two HIGH room/cert findings
+don't have rows today) per the usual multi-instance-coordination protocol.
+
+---
+
 # Handoff — THE MERGE (2026-07-16, session C): archimedes + check-online → main
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
