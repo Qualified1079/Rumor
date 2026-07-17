@@ -7,6 +7,21 @@ Branch `main`, everything committed + pushed. Version at end of session:
 CLAUDE.md is the full campaign record — 8 rounds of flash→field→fix in one
 sitting, each round's bug + fix in the git log (`ded9e15..` this session).
 
+## Session finale (rounds 9–11, 0.5.4→0.5.6): legacy retired
+
+User verdict on 0.5.3's endpoint: churn unacceptable at scale, "fix the
+legacy thing." Done: **negotiated pairing no longer exists on API 29+** —
+bootstrap-by-hosting (peer visible + no backbone SSID on air → host your
+own credentialed group; both-host collisions resolve by SSID seniority:
+junior yields at its 35s idle check and joins the senior). Final
+observation round: **`Connect initiated` 0/0/0 across the fleet, zero
+prompts, star converged via hosting + credential joins only.** Negotiated
+machinery survives solely for pre-Q devices. Known limitation to carry:
+OS foreground-scan throttling (4/2min) paces SSID visibility — nodes can
+bootstrap-host redundantly for minutes before seeing a live group
+(self-heals via yield); fix candidates: SCAN_RESULTS broadcasts or P2P
+service discovery. Current version **versionCode 20 / 0.5.6-o98-3b11**.
+
 ## Bottom line
 
 Phase 3b works on hardware and the user confirmed **zero join prompts**
