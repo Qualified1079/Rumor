@@ -247,12 +247,14 @@ class WifiDirectTransport(
     private var legacyGoConversionJob: Job? = null
     /** When the current non-None role was assigned — see the client holdoff in [connectToPeer]. */
     @Volatile private var roleAssignedAtMs = 0L
+    /** Last time any backbone SSID was seen on air — see backbone memory in [connectToPeer]. */
+    @Volatile private var backboneSeenAtMs = 0L
     private val BACKBONE_ATTEMPT_GRACE_MS = 45_000L
     private val MAX_BACKBONE_RETRIES = 3
     private val SSID_COOLDOWN_MS = 180_000L
     private val LEGACY_GO_CONVERT_DELAY_MS = 15_000L
     private val CREDENTIALED_GO_IDLE_TIMEOUT_MS = 120_000L
-    private val CLIENT_LEGACY_HOLDOFF_MS = 45_000L
+    private val BACKBONE_MEMORY_MS = 90_000L
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -411,7 +413,9 @@ class WifiDirectTransport(
      */
     private fun ssidVisible(networkName: String): Boolean = runCatching {
         @Suppress("DEPRECATION")
-        wifiManager?.scanResults?.any { it.SSID == networkName } == true
+        val visible = wifiManager?.scanResults?.any { it.SSID == networkName } == true
+        if (visible) backboneSeenAtMs = System.currentTimeMillis()
+        visible
     }.getOrDefault(false)
 
     /**
@@ -425,6 +429,23 @@ class WifiDirectTransport(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         val cfg = config ?: return
         val creds = GroupCredentials.forHost(cfg.localUserId)
+        // Defer to a senior group already on the air: clients join the
+        // lexicographically-first visible SSID, so a junior competing group
+        // never attracts anyone (field-observed: a skewed-view node hosted a
+        // second star that just split the mesh until decay caught up). If the
+        // senior group dies, backbone memory ages out and hosting proceeds.
+        val senior = runCatching {
+            @Suppress("DEPRECATION")
+            (wifiManager?.scanResults ?: emptyList())
+                .mapNotNull { it.SSID }
+                .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) }
+                .filter { it < creds.networkName }
+                .minOrNull()
+        }.getOrNull()
+        if (senior != null) {
+            RumorLog.i(TAG, "O98 deferring host — senior backbone group $senior is on the air")
+            return
+        }
         val freq = quietFrequencyMhz()
         val p2pCfg = WifiP2pConfig.Builder()
             .setNetworkName(creds.networkName)
@@ -542,10 +563,11 @@ class WifiDirectTransport(
         val now = System.currentTimeMillis()
         return runCatching {
             @Suppress("DEPRECATION")
-            (wifiManager?.scanResults ?: emptyList())
+            val all = (wifiManager?.scanResults ?: emptyList())
                 .mapNotNull { it.SSID }
                 .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) }
-                .filter { it != own && (ssidCooldownUntil[it] ?: 0L) <= now }
+            if (all.isNotEmpty()) backboneSeenAtMs = now
+            all.filter { it != own && (ssidCooldownUntil[it] ?: 0L) <= now }
                 .distinct()
                 .sorted()
         }.getOrDefault(emptyList())
@@ -589,13 +611,21 @@ class WifiDirectTransport(
             }
         }
 
-        // A fresh Client role whose target SSID isn't visible yet is usually
-        // scan latency, not an absent host (field-observed: a negotiated
-        // connect slipped out 8s after the host's group came up, raising the
-        // GO prompt). Hold legacy off briefly; if the group truly never
-        // appears, legacy resumes after the holdoff.
-        if (backboneRole is BackboneRealizer.Role.Client &&
-            System.currentTimeMillis() - roleAssignedAtMs < CLIENT_LEGACY_HOLDOFF_MS) {
+        // A Client-role node NEVER legacy-initiates: its host's group exists or
+        // is coming (scan latency, hub flap); dialing peers meanwhile is what
+        // produced the field-observed churn of junk pairings — O(N) of them
+        // per hub flap at mesh scale. If the host is truly gone, the view's
+        // recency decay clears the role (≤6 min) and legacy returns.
+        if (backboneRole is BackboneRealizer.Role.Client) {
+            runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+            return
+        }
+
+        // Backbone memory: a backbone SSID seen on air moments ago means the
+        // backbone is flapping, not absent — don't fill the gap with junk
+        // pairings a returning hub will orphan anyway. A genuinely dead
+        // backbone ages out and bootstrap pairing resumes.
+        if (System.currentTimeMillis() - backboneSeenAtMs < BACKBONE_MEMORY_MS) {
             runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
             return
         }
