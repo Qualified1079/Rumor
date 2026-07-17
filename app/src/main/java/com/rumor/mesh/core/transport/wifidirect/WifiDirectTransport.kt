@@ -307,16 +307,16 @@ class WifiDirectTransport(
         if (config == null || !hasLocationPermission()) return
         val now = System.currentTimeMillis()
         if (sameRealization(role, backboneRole)) {
+            // Client joins self-gate (connected → verify right group; attempt
+            // in flight → skip; group not on air → wait) and are naturally
+            // rate-limited by the connect watchdog — the Host retry/grace
+            // budget below doesn't apply to them.
+            if (role is BackboneRealizer.Role.Client) {
+                joinBackboneGroup(role.hostUserId)
+                return
+            }
             when {
                 role is BackboneRealizer.Role.None -> return
-                // A connected client is only healthy in the RIGHT group — a
-                // legacy negotiated group (random SSID) satisfies groupConnected
-                // but is not the backbone; verify and leave it if mismatched
-                // (field-observed: Samsung parked in the OnePlus's negotiated
-                // group, join early-returned forever).
-                groupConnected && role is BackboneRealizer.Role.Client -> {
-                    verifyClientGroup(role.hostUserId); return
-                }
                 groupConnected && backboneGroupCreated -> return
                 now - backboneAttemptAtMs < BACKBONE_ATTEMPT_GRACE_MS -> return
                 backboneRetriesLeft <= 0 -> return   // exhausted — legacy flow has the radio
@@ -360,13 +360,34 @@ class WifiDirectTransport(
      * While a role is being realized (or is healthy), the legacy
      * discover→negotiate flow stands down. After bounded retries fail, the
      * legacy flow gets the radio back — degraded but connected beats stranded.
+     *
+     * A Client role only claims the radio while its join is actually in
+     * flight: until the host's group is on the air there is nothing to join,
+     * and suppressing legacy then would starve the very gossip that carries
+     * beacons to the (possibly still view-blind) host.
      */
     private fun backboneOwnsRadio(): Boolean {
-        if (backboneRole is BackboneRealizer.Role.None) return false
+        val role = backboneRole
+        if (role is BackboneRealizer.Role.None) return false
         if (groupConnected) return true
-        return backboneRetriesLeft > 0 ||
-            System.currentTimeMillis() - backboneAttemptAtMs < BACKBONE_ATTEMPT_GRACE_MS
+        val withinGrace = System.currentTimeMillis() - backboneAttemptAtMs < BACKBONE_ATTEMPT_GRACE_MS
+        return when (role) {
+            is BackboneRealizer.Role.Host -> backboneRetriesLeft > 0 || withinGrace
+            is BackboneRealizer.Role.Client -> connectAttemptInFlight && withinGrace
+            BackboneRealizer.Role.None -> false
+        }
     }
+
+    /**
+     * A P2P GO's network name is an ordinary SSID — it shows up in Wi-Fi scan
+     * results once the group is actually up. This is the "is there anything to
+     * join yet" signal that keeps clients from acting on a plan whose host
+     * hasn't realized its side.
+     */
+    private fun ssidVisible(networkName: String): Boolean = runCatching {
+        @Suppress("DEPRECATION")
+        wifiManager?.scanResults?.any { it.SSID == networkName } == true
+    }.getOrDefault(false)
 
     /**
      * Bring up the autonomous group on a scanned-quiet channel. Autonomous
@@ -421,10 +442,15 @@ class WifiDirectTransport(
     private fun verifyClientGroup(hostUserId: String) {
         val expected = GroupCredentials.forHost(hostUserId).networkName
         wifiP2pManager?.requestGroupInfo(channel) { group ->
-            if (group != null && group.networkName != expected) {
+            // Leave a wrong group ONLY once the backbone group is actually on
+            // the air. Tearing down a live legacy group for a target that
+            // doesn't exist yet destroys the very links that carry beacons to
+            // the (possibly still view-blind) host — field-observed round 2:
+            // clients shredded working groups chasing a group nobody hosted.
+            if (group != null && group.networkName != expected && ssidVisible(expected)) {
                 RumorLog.i(
                     TAG,
-                    "O98 leaving ${group.networkName} — backbone wants $expected",
+                    "O98 leaving ${group.networkName} — backbone group $expected is on the air",
                 )
                 removeGroup()
             }
@@ -436,11 +462,19 @@ class WifiDirectTransport(
         if (groupConnected) { verifyClientGroup(hostUserId); return }
         if (connectAttemptInFlight) return
         val creds = GroupCredentials.forHost(hostUserId)
+        if (!ssidVisible(creds.networkName)) {
+            // Nothing to join yet — the host hasn't (or hasn't yet) realized
+            // its side. Nudge a scan and let the legacy flow keep the radio.
+            RumorLog.d(TAG, "O98 backbone group ${creds.networkName} not on air yet — waiting")
+            runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+            return
+        }
         val p2pCfg = WifiP2pConfig.Builder()
             .setNetworkName(creds.networkName)
             .setPassphrase(creds.passphrase)
             .build()
         connectAttemptInFlight = true
+        backboneAttemptAtMs = System.currentTimeMillis()
         handler.removeCallbacks(connectWatchdog)
         handler.postDelayed(connectWatchdog, CONNECT_WATCHDOG_MS)
         enqueueCommand {
