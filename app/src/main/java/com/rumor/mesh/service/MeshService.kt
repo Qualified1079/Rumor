@@ -107,6 +107,7 @@ class MeshService : Service(), MeshController {
     private val pluginRegistry: PluginRegistry by inject()
     private val pluginCatalog: PluginCatalog by inject()
     private val modeState: ModeState by inject()
+    private val modeOrchestrator: com.rumor.mesh.core.policy.ModeOrchestrator by inject()
     private val contactRepo: com.rumor.mesh.core.data.ContactRepository by inject()
     private val contactDao: ContactDao by inject()
     private val transferSender: TransferSender by inject()
@@ -300,6 +301,12 @@ class MeshService : Service(), MeshController {
             }
         }
 
+        // ── O80: mode auto-fire ──────────────────────────────────────────────
+        // Plug/screen/battery/network signals → ModeProfile → setMode. Applies
+        // only while the user's mode selection is "Auto" (manual wins, O57).
+        // Idempotent — safe against startMesh re-entry.
+        modeOrchestrator.start()
+
         // ── Declare available plugins ────────────────────────────────────────
         // The catalog persists user toggle state. Adding a new plugin = one
         // declare() call here. Nothing else in core touches plugin code paths.
@@ -337,6 +344,7 @@ class MeshService : Service(), MeshController {
     }
 
     private fun stopMesh() {
+        modeOrchestrator.stop()
         messageScheduler.stop()
         pluginRegistry.unregisterAll()
         bleDiscovery.stop()

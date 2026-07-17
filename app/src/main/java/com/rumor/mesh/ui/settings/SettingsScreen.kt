@@ -19,6 +19,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.rumor.mesh.core.model.UserMode
+import com.rumor.mesh.core.policy.ModeStateManager
+import com.rumor.mesh.ui.formatElapsed
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -112,16 +115,53 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(4.dp))
 
-        // ── Node mode ─────────────────────────────────────────────────────
+        // ── Node mode (O57/O80) ───────────────────────────────────────────
         SectionHeader("Node mode")
-        SwitchRow(
-            icon = Icons.Default.Power,
-            title = "Static mode",
-            subtitle = "For a plugged-in, always-on device. Scans harder, " +
-                "caches more for peers, and pushes larger batches per exchange.",
-            checked = state.staticMode,
-            onCheckedChange = viewModel::setStaticMode,
+        ModeOption(
+            title = "Auto",
+            subtitle = "Static when plugged in, Free when plugged in with the screen " +
+                "off, Mobile otherwise." +
+                if (state.modeAuto) " Currently: ${state.currentMode.name.lowercase()}." else "",
+            selected = state.modeAuto,
+            onClick = viewModel::setModeAuto,
         )
+        ModeOption(
+            title = "Mobile",
+            subtitle = "Carried device. Conservative scanning, low routing weight.",
+            selected = !state.modeAuto && state.currentMode == UserMode.MOBILE,
+            onClick = { viewModel.setModeManual(UserMode.MOBILE) },
+        )
+        ModeOption(
+            title = "Static",
+            subtitle = "Plugged-in, always-on device. Scans harder, caches more for " +
+                "peers, and pushes larger batches per exchange.",
+            selected = !state.modeAuto && state.currentMode == UserMode.STATIC,
+            onClick = { viewModel.setModeManual(UserMode.STATIC) },
+        )
+        ModeOption(
+            title = "Free",
+            subtitle = "Dedicates bandwidth, CPU, and battery to the mesh. Best for a " +
+                "permanently powered relay node.",
+            selected = !state.modeAuto && state.currentMode == UserMode.FREE,
+            onClick = { viewModel.setModeManual(UserMode.FREE) },
+        )
+        if (state.modeTransitions.isNotEmpty()) {
+            Text(
+                "Recent transitions",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            val now = System.currentTimeMillis()
+            state.modeTransitions.take(5).forEach { t ->
+                Text(
+                    "${formatElapsed(now - t.atMs)} ago — ${t.mode.name.lowercase()} " +
+                        if (t.source == ModeStateManager.Source.AUTO) "(auto)" else "(manual)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                )
+            }
+        }
 
         Spacer(Modifier.height(4.dp))
 
@@ -199,6 +239,21 @@ private fun SettingRow(
     ListItem(
         headlineContent = { Text(title) },
         leadingContent = { Icon(icon, contentDescription = null) },
+        modifier = Modifier.clickable(onClick = onClick),
+    )
+}
+
+@Composable
+private fun ModeOption(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(subtitle, style = MaterialTheme.typography.bodySmall) },
+        leadingContent = { RadioButton(selected = selected, onClick = onClick) },
         modifier = Modifier.clickable(onClick = onClick),
     )
 }

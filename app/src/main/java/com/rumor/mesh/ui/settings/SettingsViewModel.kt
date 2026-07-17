@@ -21,7 +21,9 @@ data class SettingsState(
     val scanIntervalSec: Int = 5,
     val sleepIntervalSec: Int = 30,
     val debugLogging: Boolean = false,
-    val staticMode: Boolean = false,
+    val modeAuto: Boolean = false,
+    val currentMode: UserMode = UserMode.MOBILE,
+    val modeTransitions: List<ModeStateManager.ModeTransition> = emptyList(),
     val showBatteryOptimisationWarning: Boolean = false,
 )
 class SettingsViewModel(
@@ -44,16 +46,28 @@ class SettingsViewModel(
         }
         viewModelScope.launch {
             modeStateManager.mode.collect { mode ->
-                _state.update { it.copy(staticMode = mode != UserMode.MOBILE) }
+                _state.update { it.copy(currentMode = mode) }
+            }
+        }
+        viewModelScope.launch {
+            modeStateManager.autoEnabled.collect { auto ->
+                _state.update { it.copy(modeAuto = auto) }
+            }
+        }
+        viewModelScope.launch {
+            modeStateManager.transitions.collect { log ->
+                _state.update { it.copy(modeTransitions = log) }
             }
         }
     }
 
-    // The Settings toggle is binary today (on → STATIC, off → MOBILE). FREE is
-    // reachable via auto-triggers (plug + screen-off) once the O57 wiring lands;
-    // a 3-way mode selector is separate O57/O97 UI work.
-    fun setStaticMode(enabled: Boolean) {
-        modeStateManager.setMode(if (enabled) UserMode.STATIC else UserMode.MOBILE)
+    // O57 manual-override-wins: picking an explicit mode turns auto off; the
+    // orchestrator only applies transitions while auto is on.
+    fun setModeAuto() = modeStateManager.setAutoEnabled(true)
+
+    fun setModeManual(mode: UserMode) {
+        modeStateManager.setAutoEnabled(false)
+        modeStateManager.setMode(mode)
     }
 
     fun setScanInterval(seconds: Int) {

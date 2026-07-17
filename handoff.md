@@ -1,3 +1,55 @@
+# Handoff — O80 mode auto-fire shipped, O57 closed (2026-07-17, session 3)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+Branch `main`. Version **versionCode 21 / 0.6.0-o80-automode** — built, all
+suites green (:core :simulator :app), APK assembles. **Not yet flashed or
+field-checked** — no wire-format change, safe to flash alone or with the
+next batch.
+
+## What landed (G39 in CLAUDE.md is the full record)
+
+Post-O98, per the standing most-foundational-first order, the Tier 1
+remainder starts with the O80 orchestrator (also the O62/O57 close-out
+remainder). Shipped:
+
+- `core/mode/AutoModeController.kt` + 7 tests — pure decision layer.
+  Starter profile = O57 defaults (plugged+screen-off → FREE, plugged →
+  STATIC, else MOBILE). Hysteresis: suppress a change iff it's *purely*
+  battery-driven (re-evaluating with battery pinned at the last-applied
+  anchor yields the current mode) and battery moved <5 points from the
+  anchor; discrete signals (plug/screen/network/time) always fire.
+- `app/…/core/policy/ModeOrchestrator.kt` — sticky ACTION_BATTERY_CHANGED
+  (seeds battery+plug state at registration) + SCREEN_ON/OFF receivers,
+  `registerNetworkCallback` (the default-callback variant is API 24+,
+  minSdk is 23), 60s tick for time-of-day rules; idempotent start/stop,
+  fresh scope per start; owned by MeshService startMesh/stopMesh.
+- `ModeStateManager`: persisted `autoEnabled` + bounded (20) transition log
+  with MANUAL/AUTO source. Manual-override-wins is structural: the
+  orchestrator applies only while auto is on; a manual pick turns it off.
+- Settings: binary "Static mode" switch → 4-way Auto/Mobile/Static/Free
+  radio selector (FREE manually reachable for the first time); last-5
+  transition log rendered under it.
+- G12 pulses needed nothing — MeshService already fires SELF_PRESENCE on
+  every mode transition regardless of source.
+- CLAUDE.md: G39 added; O57 closed (tombstone → G39); O80 remainder is now
+  only rule-editor UI + profile persistence + per-rule override application.
+
+## Field check when convenient (fold into the next flash round)
+
+Plug a phone in with Auto selected → logcat `Mode → STATIC (AUTO)` + a
+SELF_PRESENCE pulse; screen off while plugged → FREE; unplug → MOBILE.
+Verify a manual pick stops auto transitions until Auto is re-picked. Also
+still pending from last session: an observation round on 0.5.4's anti-churn
+dampeners (unchanged in this build).
+
+## Next (per the standing order)
+
+O106 :node · O93 mDNS transport (+O107 SPI extraction at that moment) ·
+O95 HLC — then Tier 2 security (§3/§4/§5/§12/§10 punch-list below).
+
+---
+
 # Handoff — O98 Phase 3b FIELD-VERIFIED (2026-07-17, session 2, continued)
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**

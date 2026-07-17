@@ -118,6 +118,8 @@ val appModule = module {
     // ── Device mode (O62) ───────────────────────────────────────────────────────
     single { ModeStateManager(androidContext()) }
     single<ModeState> { get<ModeStateManager>() }
+    // O80 auto-fire orchestrator; MeshService owns start/stop.
+    single { com.rumor.mesh.core.policy.ModeOrchestrator(androidContext(), get()) }
 
     // ── Block module ──────────────────────────────────────────────────────────
     single {
