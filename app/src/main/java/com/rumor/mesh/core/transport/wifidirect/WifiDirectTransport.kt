@@ -824,21 +824,29 @@ class WifiDirectTransport(
     private fun armGoIdleWatchdog() {
         goIdleWatchdog?.cancel()
         goIdleWatchdog = scope.launch {
-            // A credentialed group must outlive its clients' Wi-Fi scan latency
-            // (10–60s before the SSID even becomes visible to them) — the 35s
-            // legacy timeout killed a freshly-converted group before anyone
-            // could join it (field-observed). Still bounded: an empty held
-            // group pins this radio as GO and would otherwise deadlock two
-            // view-blind converts against each other.
-            delay(if (backboneGroupCreated) CREDENTIALED_GO_IDLE_TIMEOUT_MS else GO_IDLE_TIMEOUT_MS)
+            delay(GO_IDLE_TIMEOUT_MS)
             // O98 3b: a backbone host's group exists BECAUSE the plan says so,
             // not because a client is currently chatty — hold it; the plan's
-            // decay is what tears it down.
+            // decay is what tears it down. Checked at EXPIRY, not arm time:
+            // the groupCreated reaffirm (requestGroupInfo) is async and the
+            // flag is often still false when the watchdog is armed — reading
+            // it at arm time killed a converted group at 35s despite the grace.
             if (backboneRole is BackboneRealizer.Role.Host && backboneGroupCreated) {
                 RumorLog.d(TAG, "GO idle but backbone host — holding group")
                 return@launch
             }
-            RumorLog.d(TAG, "GO idle — no session for ${GO_IDLE_TIMEOUT_MS}ms, removing group")
+            // A credentialed group must outlive its clients' Wi-Fi scan latency
+            // (10–60s before the SSID becomes visible to them). Still bounded:
+            // a forever-held empty group pins this radio as GO and would
+            // deadlock two view-blind converts against each other.
+            if (backboneGroupCreated) {
+                delay(CREDENTIALED_GO_IDLE_TIMEOUT_MS - GO_IDLE_TIMEOUT_MS)
+                if (backboneRole is BackboneRealizer.Role.Host && backboneGroupCreated) {
+                    RumorLog.d(TAG, "GO idle but backbone host — holding group")
+                    return@launch
+                }
+            }
+            RumorLog.d(TAG, "GO idle — removing group")
             removeGroup()
         }
     }
@@ -894,7 +902,12 @@ class WifiDirectTransport(
                     legacyGoConversionJob?.cancel()
                     legacyGoConversionJob = scope.launch {
                         delay(LEGACY_GO_CONVERT_DELAY_MS)
-                        if (groupConnected && _isGroupOwner.value && !backboneGroupCreated) {
+                        // A planned Client must not spin up a competing group —
+                        // the verify/join flow migrates it out of the legacy GO
+                        // seat once its host's SSID is on the air.
+                        if (groupConnected && _isGroupOwner.value && !backboneGroupCreated &&
+                            backboneRole !is BackboneRealizer.Role.Client
+                        ) {
                             RumorLog.i(TAG, "O98 converting legacy GO group to credentialed backbone group")
                             hostBackboneGroup()
                         }
