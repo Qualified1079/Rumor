@@ -90,6 +90,17 @@ class DuplicateFilter(
         for (id in ids) cache[id] = Unit
     }
 
+    /**
+     * Check-only: true if [id] has probably been seen, WITHOUT recording it.
+     * Used by the ingest path to test for a duplicate before signature
+     * verification — a check that commits no "seen" state, so a later forgery
+     * carrying a genuine message's id can't blackhole it (the §2 fix). Does not
+     * bump LRU order (a bare lookup isn't an access).
+     */
+    fun mightBeSeen(id: String): Boolean = kotlinx.atomicfu.locks.synchronized(this) {
+        cache.containsKey(id) || longTail?.mightContain(id) == true
+    }
+
     /** Returns true if [id] is new (not previously seen). Records it either way. */
     fun recordAndCheck(id: String): Boolean = kotlinx.atomicfu.locks.synchronized(this) {
         // Tier 0: exact LRU check.

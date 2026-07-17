@@ -10,13 +10,14 @@ import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.mode.ModeState
 import kotlinx.coroutines.flow.Flow
 import com.rumor.mesh.core.platform.AtomicCounter
-import com.rumor.mesh.core.platform.ConcurrentMap
 
 private const val TAG = "MessageStore"
 private const val DEFAULT_BROADCAST_HOPS = 7
 private const val MANUAL_RELAY_BOOST = 2
 private const val MAX_MESSAGES = 50_000
 private const val EVICT_BATCH = 500
+// Upper bound on distinct per-sender rate buckets held at once (§2 memory-DoS fix).
+private const val MAX_RATE_BUCKETS = 10_000
 // The cache-depth multiplier now lives per-mode in ModeEnvelope
 // (storageCacheBoost: MOBILE=1, STATIC=4 [= the old STATIC_CACHE_BOOST], FREE=8).
 
@@ -85,12 +86,16 @@ class MessageStore(
     // every platform. Mutations of windowStartMs / count are under that monitor;
     // happens-before via synchronized makes @Volatile redundant.
     private class Bucket(var windowStartMs: Long, var count: Int) : kotlinx.atomicfu.locks.SynchronizedObject()
-    private val buckets = ConcurrentMap<String, Bucket>()
+    // BoundedFifoMap, not an unbounded ConcurrentMap: a Sybil attacker minting a
+    // fresh senderId per message would otherwise grow this without limit (one
+    // Bucket per distinct sender string = a memory-growth DoS). FIFO eviction
+    // caps it; an evicted sender just gets a fresh rate window, which is harmless.
+    private val buckets = com.rumor.mesh.core.platform.BoundedFifoMap<String, Bucket>(MAX_RATE_BUCKETS)
     private val INGEST_BUDGET_PER_SEC = 100
     private val INGEST_WINDOW_MS = 1_000L
 
     private fun acceptForRate(senderId: String, nowMs: Long): Boolean {
-        val b = buckets.getOrPut(senderId) { Bucket(nowMs, 0) }
+        val b = buckets.get(senderId) ?: Bucket(nowMs, 0).also { buckets.put(senderId, it) }
         return kotlinx.atomicfu.locks.synchronized(b) {
             if (nowMs - b.windowStartMs >= INGEST_WINDOW_MS) {
                 b.windowStartMs = nowMs
@@ -110,29 +115,55 @@ class MessageStore(
      * Returns true if the message was new and should be forwarded/flooded.
      */
     suspend fun ingest(msg: RumorMessage): Boolean {
-        if (!duplicateFilter.recordAndCheck(msg.id)) return false
+        // §2 ORDERING IS SECURITY-CRITICAL. Nothing keyed on unverified wire data
+        // may commit persistent state before the Ed25519 check. In particular the
+        // dedup filter is only *checked* (not recorded) here — recording an id
+        // before verification let a forged, bad-signature message carrying a
+        // target's real id permanently mark that id "seen", so the genuine signed
+        // message later dropped as a duplicate. A pure targeted-censorship
+        // primitive. Order must stay: check-only dedup → verify sig → verify
+        // identity → rate-limit → COMMIT (record dedup + persist).
 
-        // O16: per-sender token bucket gate. Skip ingest entirely for senders
-        // exceeding INGEST_BUDGET_PER_SEC. Caller treats the return as a duplicate;
-        // the relay path is unaffected so other peers still propagate.
-        if (!acceptForRate(msg.senderId, clock.now())) {
-            _rateLimited.incrementAndGet()
-            RumorLog.d(TAG, "Rate-limit drop from ${msg.senderId.take(8)}… (>$INGEST_BUDGET_PER_SEC/s)")
-            return false
-        }
+        // 1. Check-only dedup. Commits no "seen" state — a later forgery can't be
+        //    what burned the id.
+        if (duplicateFilter.mightBeSeen(msg.id)) return false
 
+        // 2. Signature verification. A forgery must never reach the record step.
         val pubKeyBytes = msg.senderPublicKey.fromBase64()
         val payload = signableBytes(msg)
         val sigBytes = msg.signature.fromBase64()
         if (!CryptoManager.verify(payload, sigBytes, pubKeyBytes)) {
             RumorLog.w(TAG, "Dropping message ${msg.id.take(8)}: invalid signature")
             _sigFailures.incrementAndGet()
-            duplicateFilter.recordAndCheck(msg.id)
+            // Deliberately do NOT record the id — leave it available for the
+            // genuine message that may still arrive via an honest path.
             return false
         }
 
-        ensureContact(msg.senderId, msg.senderPublicKey)
+        // 3. Identity binding. The signature proves the holder of senderPublicKey
+        //    signed this, but not that senderId belongs to that key. Enforce the
+        //    identity model (userId = SHA-256(pubkey)) so senderId is authenticated
+        //    — otherwise the per-sender rate bucket below keys on a field the
+        //    attacker can rotate freely with a single keypair.
+        if (msg.senderId != CryptoManager.publicKeyToUserId(pubKeyBytes)) {
+            RumorLog.w(TAG, "Dropping message ${msg.id.take(8)}: senderId does not match senderPublicKey")
+            _sigFailures.incrementAndGet()
+            return false
+        }
 
+        // 4. O16 per-sender token bucket, now on an AUTHENTICATED senderId: minting
+        //    a fresh budget requires a fresh keypair (the Sybil floor per O27/O60),
+        //    not merely a different string. Relay path is unaffected — this only
+        //    caps what a sender consumes of OUR local ingest resources.
+        if (!acceptForRate(msg.senderId, clock.now())) {
+            _rateLimited.incrementAndGet()
+            RumorLog.d(TAG, "Rate-limit drop from ${msg.senderId.take(8)}… (>$INGEST_BUDGET_PER_SEC/s)")
+            return false
+        }
+
+        // 5. Commit: only now is it safe to mark the id permanently seen and store.
+        duplicateFilter.recordAndCheck(msg.id)
+        ensureContact(msg.senderId, msg.senderPublicKey)
         messageRepo.insert(msg)
         evictIfOverCap()
 
