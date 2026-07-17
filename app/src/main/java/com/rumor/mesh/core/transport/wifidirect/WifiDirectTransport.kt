@@ -436,7 +436,11 @@ class WifiDirectTransport(
         // senior group dies, backbone memory ages out and hosting proceeds.
         val senior = seniorBackboneSsid(creds.networkName)
         if (senior != null) {
-            RumorLog.i(TAG, "O98 deferring host — senior backbone group $senior is on the air")
+            // Don't just stand down — join the group we deferred to. A
+            // deferring host with no way in would sit isolated until view
+            // decay re-roles it (≤6 min of dead air for the planned hub).
+            RumorLog.i(TAG, "O98 deferring host — joining senior backbone group $senior")
+            joinBySsid(senior)
             return
         }
         val freq = quietFrequencyMhz()
@@ -600,13 +604,15 @@ class WifiDirectTransport(
         // here would disrupt group formation exactly like the grouped case above.
         if (backboneOwnsRadio()) return
 
-        // O98 3b: never negotiated-connect while joinable Rumor infrastructure
-        // is on the air — a plain connect() into a formed group raises a manual
-        // invitation on some OEMs (field-observed on the Moto), which is the
-        // exact prompt the derived credentials exist to avoid. Applies to
-        // bootstrap (role None) too: the passphrase derives from the SSID.
-        if (backboneRole !is BackboneRealizer.Role.Host) {
-            val ssid = visibleBackboneSsids().firstOrNull()
+        // O98 3b: joinable Rumor infrastructure on the air → credential-join it,
+        // never dial. A Host-role node joins only a SENIOR SSID (the group it
+        // would defer to anyway); junior SSIDs it out-ranks are its own
+        // clients-to-be and will collapse toward it.
+        run {
+            val own = GroupCredentials.forHost(cfg.localUserId).networkName
+            val ssid = visibleBackboneSsids().firstOrNull {
+                backboneRole !is BackboneRealizer.Role.Host || it < own
+            }
             if (ssid != null) {
                 joinBySsid(ssid)
                 return
