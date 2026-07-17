@@ -245,10 +245,14 @@ class WifiDirectTransport(
     private val ssidCooldownUntil = ConcurrentHashMap<String, Long>()
     /** Converts a negotiated legacy GO group to the credentialed backbone group. */
     private var legacyGoConversionJob: Job? = null
+    /** When the current non-None role was assigned — see the client holdoff in [connectToPeer]. */
+    @Volatile private var roleAssignedAtMs = 0L
     private val BACKBONE_ATTEMPT_GRACE_MS = 45_000L
     private val MAX_BACKBONE_RETRIES = 3
     private val SSID_COOLDOWN_MS = 180_000L
     private val LEGACY_GO_CONVERT_DELAY_MS = 15_000L
+    private val CREDENTIALED_GO_IDLE_TIMEOUT_MS = 120_000L
+    private val CLIENT_LEGACY_HOLDOFF_MS = 45_000L
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -339,6 +343,7 @@ class WifiDirectTransport(
             RumorLog.i(TAG, "O98 backbone role → ${roleLabel(role)} (was ${roleLabel(backboneRole)})")
             val hostedGroup = backboneGroupCreated
             backboneRole = role
+            roleAssignedAtMs = now
             backboneGroupCreated = false
             backboneRetriesLeft = MAX_BACKBONE_RETRIES
             if (role is BackboneRealizer.Role.None) {
@@ -580,6 +585,17 @@ class WifiDirectTransport(
             }
         }
 
+        // A fresh Client role whose target SSID isn't visible yet is usually
+        // scan latency, not an absent host (field-observed: a negotiated
+        // connect slipped out 8s after the host's group came up, raising the
+        // GO prompt). Hold legacy off briefly; if the group truly never
+        // appears, legacy resumes after the holdoff.
+        if (backboneRole is BackboneRealizer.Role.Client &&
+            System.currentTimeMillis() - roleAssignedAtMs < CLIENT_LEGACY_HOLDOFF_MS) {
+            runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+            return
+        }
+
         // Two non-dual-role peers that both auto-connect to each other collide in
         // GO negotiation (both request GO with equal intent) and neither ever
         // reaches a stable group. Break the symmetry deterministically: only the
@@ -808,7 +824,13 @@ class WifiDirectTransport(
     private fun armGoIdleWatchdog() {
         goIdleWatchdog?.cancel()
         goIdleWatchdog = scope.launch {
-            delay(GO_IDLE_TIMEOUT_MS)
+            // A credentialed group must outlive its clients' Wi-Fi scan latency
+            // (10–60s before the SSID even becomes visible to them) — the 35s
+            // legacy timeout killed a freshly-converted group before anyone
+            // could join it (field-observed). Still bounded: an empty held
+            // group pins this radio as GO and would otherwise deadlock two
+            // view-blind converts against each other.
+            delay(if (backboneGroupCreated) CREDENTIALED_GO_IDLE_TIMEOUT_MS else GO_IDLE_TIMEOUT_MS)
             // O98 3b: a backbone host's group exists BECAUSE the plan says so,
             // not because a client is currently chatty — hold it; the plan's
             // decay is what tears it down.
