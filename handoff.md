@@ -1,3 +1,97 @@
+# Handoff — session wrap: field round done, echo-loop fix PARTIAL (2026-07-18, session ended by user mid-fix)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+Session ended on user direction (context too long) partway through an
+approved fix round. Everything is committed + pushed; **tip commit
+`b42c4ed` is a PARTIAL fix with one KNOWN-FAILING test — do NOT flash it,
+do NOT "fix" the test by reverting the behavior change.** Read this whole
+section before touching anything.
+
+## Fleet state
+
+All 3 phones run **0.6.1-o93-lan** (versionCode 22), unlocked, on the
+user's Wi-Fi. Field-verified this session: **O93 LAN transport works on
+hardware** (mDNS resolved peers at 10.0.0.x, hundreds of LAN sessions),
+O80 auto-mode fires, O98 blind joins fire. The phones are ALSO stuck in a
+harmless-but-chatty **self-echo bandwidth loop** (below) — expected until
+the completed fix is flashed.
+
+## The echo loop (verified root cause, DB-evidenced)
+
+Every phone holds almost none of its own authored messages (3–14 rows)
+while peers hold 1500+ of them — the stores are **99% SELF_PRESENCE
+beacons** (composed every 90s, never `ingestOwn`'d by the author, but
+persisted forever by every receiver; zero DIRECT rows anywhere). Beacon
+bloat pushed store sizes over the RBSR gate (3000); the RBSR diff is
+store-based, the author's snapshot permanently lacks its own echoed
+beacons (the G37 echo-guard dropped them *without recording the ids*),
+and `messagesByIds` serves any type — so the same ~500-message /
+~400KB diff re-ships every 10s round, forever. Both directions,
+Moto↔OnePlus worst.
+
+## What tip commit `b42c4ed` already changes (core only, coherent)
+
+- `MessageStore.ingest(msg, persist: Boolean = true)` — full verify
+  pipeline + dedup record; `persist=false` skips
+  ensureContact/insert/evict.
+- `GossipEngine.processIncoming` — self-echoes now go through
+  `ingest(clamped, persist=false)` (verify THEN record THEN drop; §2
+  forbids recording unverified ids) and SELF_PRESENCE ingests with
+  `persist=false` (ephemeral: verified, dedup-known, tracker-fed,
+  relayed, never archived).
+
+**KNOWN FAILING:** `simulator SelfPresenceTest > entry pulse … propagates`
+still asserts the beacon lands in the receiver's *store* — the old
+contract. Update the assertion to: `beacon.id in
+b.gossipEngine.knownMessageIds()` + `b.knownMessages().none { it.id ==
+beacon.id }` + `b.meshView.assembleView("b", MOBILE,
+emptySet()).modes[a.userId] == UserMode.FREE`. (`MeshView.modes` per
+`PersistencePlanner.kt:120`; `SimNode.userId` exists.)
+
+## Punch list to finish the fix round (was tasks #5/#6)
+
+1. Update `SelfPresenceTest` per above; full suites green.
+2. MeshService start-time purge of accumulated beacon rows:
+   `MessageRepository.deleteByType(MessageType)` added across ALL impls
+   per the DI 4-impl rule (interface + Room `MessageDao` query + adapter +
+   simulator InMemory), called from `startMesh` alongside the G37
+   self-contact purge. Note: purged-but-dedup-known ids would re-enter via
+   the RBSR diff from peers still holding them — fine, because (a)
+   re-received beacons no longer persist and (b) the whole fleet flashes
+   together so peers purge too.
+3. DM-decrypt logging (task #5): `ThreadViewModel.decryptPayload`'s
+   `.getOrElse { "[decryption failed]" }` swallows the exception — log it
+   (RumorLog.w with msg id + throwable). The user's reported DM failure is
+   **NOT O38** (unwired prekeys cost only FS; static-key path was G20
+   field-verified); zero DIRECT rows exist in any DB now, so it needs a
+   fresh repro with the log line in place.
+4. Bump versionCode 23 / 0.6.2, flash all three, re-verify: echo loop
+   GONE (no repeating 500/394 sessions), stores shrink toward
+   broadcasts-only, `source=LAN` sessions continue, blind-join timing,
+   §5 background/foreground cycling, user sends a fresh DM → read the
+   real decrypt exception from logcat.
+
+## After that (user-approved queue)
+
+- **LineageOS reflash of the Samsung S10e** (user-approved; OS testing is
+  orthogonal to hardware testing — O56 testing note). User does on-device
+  steps per the standing workflow.
+- **O95 wire go/no-go**: HLC shadow impl + sweep committed (`75572bb`),
+  numbers + recommendation + known sim gaps recorded on the O95 row —
+  adoption awaits explicit user go (wire-format change).
+- The 2026-07-18 overnight audit is fully filed as **O114–O123** (tiered
+  by severity in CLAUDE.md); echo/§5/blind-join work above overlaps some.
+
+## Session conduct notes for the next instance (user feedback this session)
+
+- **Announce the plan and wait before writing/pushing code**; report in
+  practical terms (what the phone does differently), not file lists. See
+  memory `check-in-before-coding`.
+- When the user says stop: stop — commit-as-is beats fixing one more thing.
+
+---
+
 # Handoff — O93 LAN transport + O98 blind join + §5 guard (2026-07-18)
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
