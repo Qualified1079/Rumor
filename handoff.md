@@ -1,3 +1,116 @@
+# Handoff — overnight research/audit session (2026-07-18), continued — round 2
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+Continuation of the session above. Still no source-code changes. This
+round re-verifies, against current code, a batch of findings from the
+2026-07-13 audit rounds recorded later in this file (search "Round 2" /
+"Round 3" below) that the round-1 write-up above didn't get to. Same
+method as round 1: every claim below was re-checked against the actual
+file today, not taken on the old write-up's word — five days and the
+whole archimedes merge sit between that audit and this one, so "still
+true" is real information, not a repeat.
+
+## Confirmed RESOLVED
+- **`StaticMode.kt`/`StaticModeManager`** (the undocumented boolean
+  toggle that violated O62's "no mode-branching until ModeProfile lands"
+  gate, with scattered `if (isStatic)` checks in `BleDiscoveryManager`/
+  `Scheduler`/`MessageStore`): **no longer exists anywhere in the tree**
+  (`find . -iname "StaticMode*.kt"` — zero hits). Consistent with G39's
+  O80 mode-orchestrator work replacing the old binary Settings toggle
+  with the 4-way selector — looks like the cleanup happened as part of
+  that, even though G39's own entry doesn't explicitly mention deleting
+  it. Good outcome either way.
+
+## Confirmed STILL OPEN (re-verified against current code)
+- **`TransferAssembler.assembledTransfers` has no collector anywhere in
+  `:app`.** Confirmed by grep: the only `.collect` on this `SharedFlow`
+  in the whole tree is `simulator/.../SimNode.kt:141`, which just
+  increments a counter for scenario scoring. A fully received, hash-
+  verified file transfer is assembled in memory on-device and then
+  dropped — never written to disk, never surfaced anywhere a user could
+  see it. This is a bigger gap than O14 (extraction-warning UI) implies;
+  O14 assumes a file arrives and needs a dialog, but on current `main`
+  no file ever reaches anywhere visible, regardless of O14. Worth its
+  own backlog row distinct from O14/O108/O109 (which cover the sender-
+  side resource-cap half of this subsystem, not "does a completed
+  transfer go anywhere").
+- **`BlockManagementViewModel.unsubscribe()` still calls
+  `subscribedBlocklistRepo.delete(publisherId)` directly** (line 106)
+  instead of `BlocklistSubscriber.unsubscribe()`, which is the only path
+  that also does `blocklistEntryRepo.deleteAllForPublisher(publisherId)`.
+  Confirmed `BlocklistSubscriber` still isn't what's injected/called
+  here. Net effect unchanged from five days ago: tapping "unsubscribe"
+  drops the publisher from the roster but every userId they ever blocked
+  keeps silently suppressing your inbox forever, with no UI path to
+  clear it short of re-subscribing to the same publisher.
+- **`OnlineStatusTracker.lastSeen` is still never pruned, and
+  `README.md:336` still asserts that it is.** Confirmed both sides: the
+  backing `mutableMapOf<String, Long>` (line 44) has no `.remove()`/
+  eviction call anywhere in the class — `currentSnapshot()` (line 62-65)
+  only *filters* on read via `.filterValues`, the map itself keeps every
+  entry forever. `README.md:336`, verbatim, still today: "Peers older
+  than 30 minutes are pruned from the in-memory map on each update
+  cycle." That's not true of the current implementation — an
+  unbounded-growth doc claim that's actively wrong, not just outdated,
+  which is worse than the silent-staleness pattern found elsewhere (§4
+  of the round-1 entry above). Same class of bug as `BreadcrumbCache`/
+  `TopologyTracker`'s unwired prune methods (§2.5 above) — recommend
+  fixing all three unbounded-growth spots in one pass, since they're the
+  same mistake in three places.
+- **`mergeRemoteStatus` still adopts any peer-supplied timestamp greater
+  than what's on file, with no upper bound against the future**
+  (`OnlineStatusTracker.kt:54-60`, `if (existing == null || ts >
+  existing) lastSeen[id] = ts`). A malicious peer can inject a far-
+  future timestamp for any userId and that user shows as permanently
+  ONLINE to everyone downstream in the gossip chain. Cheap fix: clamp
+  to `minOf(ts, now)` before the comparison.
+- **`KeywordFilterMatcher.match()` still has zero callers outside its
+  own tests** — confirmed by grep across `:app`. Stronger than "O67 UI
+  not built yet": there's no consumer of the matcher at all, so even a
+  fully populated, correctly-subscribed filter list has zero effect on
+  what any user sees today. (Incidental upside, unchanged: because
+  nothing calls it, it can't have accidentally been wired into the
+  relay path either, so the "filtering is display-only" rule isn't at
+  risk here — just by absence, not by an enforced gate.)
+- **`DeviceQuirks.isDeviceMediaTek()`/`isDeviceQualcomm()` are still
+  dead code** (`DeviceQuirks.kt:150-160`): both call
+  `System.getProperty("ro.product.board")`, which is a JVM system
+  property lookup, not an Android build-prop read — on Android this
+  should be `Build.BOARD`/`Build.HARDWARE`. Both detectors always
+  return `false` on real hardware, so the documented "MediaTek demands
+  Group Owner regardless of intent" workaround silently never fires on
+  actual MediaTek devices — exactly the budget-phone class O33 targets.
+  Cheap, mechanical, one-line-per-function fix.
+- **The "Radio duty cycle" Settings slider is still cosmetic.**
+  `scanIntervalSec` has a ViewModel setter but nothing downstream reads
+  it (not persisted, not consulted by `BleDiscoveryManager`/`Scheduler`);
+  `sleepIntervalSec` has no setter at all, permanently 30. A user
+  dragging the slider changes nothing.
+
+## Not re-verified this round (time-boxed; flagging for whoever picks
+   these up next rather than leaving silently unmentioned)
+- The transfer-receive OOM path (`Chunker.kt` allocating
+  `ByteArray(metadata.totalBytes.toInt())` with no cap) — this is
+  already tracked as `CLAUDE.md` O108/O109 (transfer-metadata resource
+  caps + windowed chunk requests), so not new, just confirming the
+  round-1-of-2026-07-13 finding and the current backlog row are
+  describing the same gap.
+- `PluginRegistry`/`PluginCatalog` disable-boundary races (a plugin
+  snapshotted just before `unregister()` can still receive one more
+  `onMessageReceived`; outbound `sendMessage` isn't cancelled by a
+  disable since it runs on `GossipEngine`'s scope, not the plugin's) —
+  plausible on a code-shape read, not independently re-confirmed this
+  round.
+- PBKDF2 iteration count (100,000, roughly 6x below OWASP's current
+  600,000 guidance) and the passphrase `String`/`PBEKeySpec.
+  clearPassword()` gaps noted alongside `IdentityManager.lock()` in the
+  original round-2 write-up — not re-checked independently this session,
+  but plausible and low-cost to verify given how directly it sits next
+  to the `lock()` finding already confirmed in the entry above.
+
+---
+
 # Handoff — overnight research/audit session (2026-07-18, no code changes)
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
