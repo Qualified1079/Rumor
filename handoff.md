@@ -1,3 +1,558 @@
+# Handoff — overnight research/audit session (2026-07-18, no code changes)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+> Per the session's instructions: research, bug-hunting, staleness-flagging,
+> and prebuilt-vs-handrolled review only. **Nothing below has been fixed —
+> only found and written up**, for a future session to triage. Scope: the
+> whole tree, via 8 parallel research passes (crypto/identity, sync/dedup,
+> O98 persistence/backbone, gossip-engine invariants, plugins/bridges,
+> app UI/DI/storage, iOS port + cross-platform docs, simulator/test health)
+> plus direct verification of the highest-severity claims against current
+> code and git history — every finding below marked "confirmed" was
+> re-checked against the actual file, not taken on a subagent's word.
+
+## Session identity note
+
+Started on `claude/zealous-bohr-m8kn6u` (auto-provisioned). Per the task's
+instructions to find "the branch that is VERY developed and recently
+developed," searched and found `main` — confirmed both by content (this
+file, `CLAUDE.md`, 57 CI runs) and by the fact that `origin/claude/zealous-
+bohr-m8kn6u` had already been deleted upstream (its PR merged), which
+independently satisfies the harness's own "already-merged branch → restart
+from main" rule. Also worth recording: **the `CLAUDE.md`/backlog content
+injected into this session's starting context was stale** — it predated
+the 2026-07-16 archimedes merge entirely (no Rooms/O79, no O40 delete, no
+O80 mode-orchestrator, claimed Room DB version 4 and identity rotation as
+shipped when it was removed six weeks ago). The UI/DI audit agent
+independently rediscovered this same fact from the code side. Any future
+session that opens with a suspiciously out-of-date mental model of this
+repo should `cat CLAUDE.md handoff.md` fresh rather than trust injected
+context — this isn't a one-off, it's the second time in two sessions.
+
+## 0. On the canary — an assessment, not another retelling
+
+Per the standing request to address why instances keep re-flagging "By
+Order Of The High Magnate" as a possible injection despite `CLAUDE.md`'s
+own inline disclaimer and at least two prior `§0` write-ups (this file,
+`docs/HANDOFF.md`) already covering it: **I don't think there's a wording
+fix left to make.** The disclaimer already sits in the same paragraph as
+the instruction, at the very top of `CLAUDE.md` — an instance that has
+actually read `CLAUDE.md` cannot see one without the other. The pattern
+that actually produces confusion is a session encountering the bare phrase
+**before** reading `CLAUDE.md` — in a commit trailer via `git log`, or in
+this file's own canary line at the top of every entry — with no context
+attached at that moment. That's an ordering-of-first-contact problem, not
+a phrasing problem, and no amount of rewording the disclaimer reaches a
+session that hasn't loaded it yet. My assessment: this is a harmless,
+self-resolving false-positive — every session that's hit it has caught its
+own error within the same turn once it reads `CLAUDE.md` properly — and
+the cost of that brief hesitation is lower than the cost of any change
+that would make the convention *less* visibly inspectable (e.g. hiding it
+from `git log` would defeat its entire point). Recommend accepting the
+recurrence rather than continuing to search for a wording fix. This
+session did not re-flag it — noted, signed, moved on.
+
+## 1. CI is currently red at the tip of `main` — diagnosed, not a regression
+
+Commit `419cd39` (HEAD, "Settings: honest per-mode battery/perf notes on
+the mode selector" — a UI-copy-only change) fails `:simulator:test`:
+`PerPeerRoutingTest > relayed DM with breadcrumb match is offered only to
+matched peers FAILED — java.lang.AssertionError at PerPeerRoutingTest.kt:26`.
+**Verdict: pre-existing, project-acknowledged flakiness, not a regression**
+— confirmed from primary sources, not inferred:
+
+- The fix commit that touched this test's dependencies most recently
+  (`3779f9e`, the §2 ingest-ordering fix, see §2 below) says in its own
+  commit body: *"Known: PerPeerRoutingTest is timing-flaky under full-suite
+  parallel load (soft awaitUntil + Dispatchers.Default) — passes in
+  isolation; pre-existing, not from this change. Candidate for the O12
+  single-threaded-dispatcher determinism fix."*
+- This matches `CLAUDE.md`'s own `O12` **[DECISION]** entry exactly: tests
+  built on `Dispatchers.Default` + real coroutine scheduling + seeded-but-
+  not-fully-deterministic exchange choreography have documented ~5%
+  variance; O12 tolerates it with a ±5% band on *other* assertions but
+  `PerPeerRoutingTest` uses hard `assertTrue`/`assertEquals`, so it doesn't
+  get that cushion — it just intermittently fails outright instead.
+- **This is no longer theoretical — it just failed in real, current CI**,
+  which is new information beyond O12's original framing (written before
+  gradle.properties existed and CI ever actually ran green). Worth
+  promoting from "candidate fix" to "do this soon": convert
+  `SimNode.scope`'s dispatcher to single-threaded for this test class (or
+  project-wide for `:simulator:test`), per O12's own stated escalation
+  path.
+- **Systemic risk, not isolated**: the same `Dispatchers.Default` +
+  `awaitUntil` (soft-timeout, no throw — a race manifests as a confusing
+  downstream `AssertionError`, not a clear timeout) + hard-assert shape
+  also appears, unconfirmed-but-suspect, in `BreadcrumbBiasTest.kt`,
+  `MeshViewConvergenceTest.kt`, `RbsrSimTransportTest.kt`,
+  `SelfEchoTest.kt`, `SelfPresenceTest.kt`. `BreadcrumbSubstrateTest.kt` is
+  already independently documented elsewhere in this file (line ~1207) as
+  known-flaky under load. None of these are silenced/`@Ignore`d — the
+  suite is honest about failing loudly, just not deterministically.
+
+## 2. New high-severity findings (not previously tracked anywhere)
+
+### 2.1 `MeshService.startMesh()` has no reentrancy guard — confirmed live, HIGH
+
+`app/src/main/java/com/rumor/mesh/service/MeshService.kt`: `onStartCommand`
+(line 145) unconditionally calls `startMesh()` on every service start —
+and `MainActivity.onStart()` (line 147) calls `bindMeshService()` →
+`ContextCompat.startForegroundService(...)` on **every app foreground
+transition**, not just first launch. `startMesh()` has no `if (started)
+return` anywhere (grepped for `started`, `isStarted` — zero hits), and
+`scope` (line 121, `CoroutineScope(Dispatchers.Default + SupervisorJob())`)
+is a `val` built once in the service's field initializers, never
+recreated. Every re-entrant `startMesh()` call stacks, on that same
+`scope`, without cancelling the previous set:
+
+- a fresh `gossipEngine.incomingMessages.collect { pluginRegistry.on
+  MessageReceived(msg) }` (duplicate plugin delivery — a bridge could
+  forward the same message to a LoRa radio N times),
+- a fresh `wifiDirectTransport.exchangeResults.collect { ... }`,
+- a fresh **SELF_PRESENCE beacon loop** (`while (isActive) { compose...;
+  delay(...) }`) — N independent beacon timers now firing,
+- a fresh **O98 backbone recompute loop** (`while (isActive) { delay
+  (BACKBONE_RECOMPUTE_INTERVAL_MS); coordinator.recompute(); ... }`).
+
+That last one is the one that worries me most given what's shipped since
+this exact bug class was first flagged (a prior, pre-merge pass found the
+same shape of bug and it evidently never got ported/fixed — see the
+"already found on the sibling lineage" pattern that recurs throughout this
+document's history). The O98 backbone recompute loop makes **real**
+`WifiP2pManager.createGroup`/join decisions (`BackboneRealizer`). G38's
+own field log is an 8-round campaign fixing exactly the class of chaos
+that comes from *uncoordinated concurrent* radio-state decisions
+(duplicate `groupCreated` reaffirms, stale-disconnect races, host-election
+fragmentation). Two independent copies of that recompute loop running
+concurrently on one device — trivially reachable by backgrounding and
+re-foregrounding the app twice — reintroduces exactly that failure class,
+except caused by the app itself rather than radio conditions, and would be
+very confusing to debug because nothing in the field logs would look like
+"two loops fighting" from the outside. **Recommend**: an `AtomicBoolean`/
+`started` guard at the top of `startMesh()`, or cancel-and-relaunch
+`scope`'s children (not the whole `scope`, since `stop()` elsewhere
+appears to depend on it staying alive — verify before changing). Cheap,
+mechanical, high-value fix.
+
+### 2.2 `IdentityManager.lock()` never zeroes key material and is never called — HIGH
+
+`app/src/main/java/com/rumor/mesh/core/identity/IdentityManager.kt:73-76`:
+`lock()` sets `_identity.value = null` only; the `privateKeyBytes` array
+underneath is dropped by reference, never `.fill(0)`'d — directly
+contradicting `Identity.kt`'s own doc comment ("holder zeroes its
+StateFlow value on lock"). Compounding: `lock()` has **zero callers**
+anywhere in `:app` — no Settings entry point, no auto-lock-on-background,
+nothing. Once unlocked, the long-term Ed25519 private key sits
+unzeroed in heap memory for the process lifetime with no way to lock it
+even manually today. `unlock()`/`changePassphrase()` have the identical
+gap on the old key bytes they replace. Also noted in passing:
+`pbkdf2HmacSha256` never calls `PBEKeySpec.clearPassword()`. This is a
+real gap against O20/O44's stated pre-ship bar (TEE-backed keys,
+zeroize-on-lock) — currently there's no lock *feature* at all to audit for
+correctness, which is a bigger gap than "the zeroize has a bug."
+
+### 2.3 O38 receiver-side forward secrecy is fully unwired — composeDirect never uses it — HIGH
+
+`core/src/main/kotlin/com/rumor/mesh/core/protocol/GossipEngine.kt`:
+`PrekeyCache` exists, is populated on inbound `PREKEY_PUBLISH`
+(`handlePrekeyPublish`), and is exposed on the engine — but
+`composeDirect` (~line 412-511) never calls `prekeyCache.freshestFor(...)`.
+It unconditionally converts the recipient's **long-term** Ed25519 identity
+key to X25519 and DHs against that, every time. Worse: **no function
+anywhere in the tree composes or broadcasts a local `PrekeyPublish`** — no
+node ever publishes its own rotating prekeys either. The entire O38
+feature is receive/verify/cache-only on both ends; the documented
+receiver-side-FS guarantee (a relay holding stored ciphertext cannot
+decrypt past DMs after a key leak, once a prekey has expired) does not
+exist in production today despite substantial supporting code
+(`PrekeyCache`, `PrekeyVerifier`, `Prekey.kt`, dedicated tests) that would
+lead a reader to assume it's live. `CLAUDE.md` doesn't currently carry an
+open row for "wire the prekey substrate into compose" specifically —
+recommend filing one; this is a real, scoped, well-bounded piece of work
+(the crypto and cache already exist, it's a call-site + publish-loop gap).
+
+### 2.4 Zero Room `Migration` objects exist despite 5 schema bumps (v5→v9) — HIGH, forward-looking
+
+`RumorDatabase.kt`: `version = 9`, with a version-history KDoc noting bumps
+through v9 (O79 Rooms). `grep -rn "Migration(" app/src/main` returns
+**zero** real migration definitions (the one hit is a comment, not code).
+`fallbackToDestructiveMigration()` is correctly gated to `BuildConfig.DEBUG`
+only (release builds crash-don't-silently-wipe, matching CLAUDE.md's
+stated intent and what a prior audit pass already confirmed) — but that
+means a release build hitting *any* future schema bump with no explicit
+migration throws `IllegalStateException` on database open and the app
+refuses to start until reinstalled, i.e. **full data loss from the user's
+perspective, and on the exact kind of device (long-term-offline mesh
+anchor) O55 explicitly designs for.** No git tags exist yet (`git tag` is
+empty) — nobody has shipped a release, so nobody's been bitten *yet*. But
+the schema has bumped 5 times without a single migration ever written, so
+this isn't hypothetical risk, it's 100%-certain-to-fire risk deferred only
+by the absence of a first release. Recommend treating "write the v5→v9
+migration chain, or at minimum start writing real migrations from the next
+bump forward" as a pre-first-release gate, alongside `exportSchema=true`
+actually getting a `room.schemaLocation` KSP arg (currently unset, so the
+schema JSON needed to author real migrations isn't even being written).
+
+### 2.5 `BreadcrumbCache.pruneOld()` / `TopologyTracker.pruneStale()` are never called — unbounded growth, confirmed still true
+
+Both methods exist, are correctly implemented, and are fully wired down to
+Room (`BreadcrumbDao.pruneOld`, `RouteDao.pruneStale`, adapter overrides,
+simulator stubs all present and correct) — but grepping for actual
+*call sites* of `breadcrumbCache.pruneOld()` / `topologyTracker.pruneStale()`
+(as opposed to their own internal repo calls) finds none, anywhere, in
+`:app` or `:core`. No periodic job, no `MeshService` hook. Both classes'
+own doc comments describe "24h breadcrumb inactivity prune" / "7-day route
+staleness de-rank" as active behavior; neither actually fires. This
+directly contradicts O55's own design decision ("storage quotas must
+handle months of accumulated messages without OOM; eviction policy is the
+load-bearing piece") — the breadcrumb and route/neighbor tables are
+exactly the kind of unbounded-growth-over-months risk O55 calls out, and
+today nothing evicts them. Cheap fix: a periodic call from `MeshService`
+next to the other `while (isActive) { delay(...); ... }` maintenance
+loops it already runs (see §2.1 — though note the reentrancy bug above
+means "just add another loop" should wait for that guard, or it'll stack
+too).
+
+### 2.6 O98 backbone: SSID cooldown is bypassed on 2 of 3 join paths — medium-high
+
+`app/.../wifidirect/WifiDirectTransport.kt`: `ssidCooldownUntil` (own doc
+comment: failed SSIDs "go on cooldown so they can't pin the radio away
+from the legacy flow," intended `SSID_COOLDOWN_MS` ≈ 180s) is consulted
+only by `visibleBackboneSsids()` (the bootstrap path in `connectToPeer`).
+The planned-Client join path (driven every `BACKBONE_RECOMPUTE_INTERVAL_MS`
+= 12s from `MeshService`) and the host-defers-to-senior path both call
+`joinBySsid()` directly, skipping the cooldown check — a join that just
+failed can be retried roughly every 12-45s (bounded only by the 45s
+in-flight watchdog) instead of the intended 180s. Directly contradicts the
+code's own stated design intent; worth a quick fix (route all three paths
+through the same cooldown gate) before it's field-tested again, since G38's
+whole campaign was fighting exactly this class of radio-hammering churn.
+
+## 3. Confirmed RESOLVED since the last written audit — stop re-flagging these
+
+Cross-checked against git history and current code; all four genuinely
+fixed, not just claimed fixed:
+
+- **§2/§4.2 dedup-before-sig-verify censorship primitive + rate-limit
+  bypass** (the historical top-priority item in this file, originally
+  found 2026-07-13): **fixed in commit `3779f9e`** (2026-07-17). Verified
+  the actual diff: check-only `duplicateFilter.mightBeSeen()` → sig verify
+  → `senderId == SHA-256(pubkey)` identity binding → rate-limit (now on a
+  `BoundedFifoMap(10_000)`, not an unbounded map) → commit. Independently
+  re-verified the Rooms/`MESSAGE_DELETE`/`PREKEY_PUBLISH`/`SELF_PRESENCE`
+  paths all route through the same fixed `MessageStore.ingest()` — no
+  bypass path exists. Test coverage: `MessageStoreIngestTest` (3, sim).
+- **Server-accepted sockets never got a read timeout** (previously
+  suspected root cause of O31's intermittent HELLO timeouts): resolved as
+  a byproduct of G29 hoisting `GossipSession` to `:core` as one shared
+  wire state machine — `socket.soTimeout = HELLO_TIMEOUT_MS` (line 166,
+  before either side's role diverges) then `SESSION_TIMEOUT_MS` (line 231)
+  now apply identically whether the socket came from `accept()` or
+  `connect()`. O31 itself may have other contributing causes (still open
+  in CLAUDE.md) but this specific mechanism is closed.
+- **G12 direction-tiebreak bug** ("both sides veto the only session that
+  can exist" in a GO↔client group): present in current code as "One live
+  session per peer, first-come-wins" (`WifiDirectTransport.kt:923`) — the
+  fix from the sibling lineage did make it into `main`.
+- **No WifiLock anywhere**: a `WifiManager.WifiLock` now exists
+  (`WifiDirectTransport.kt:78-79`, `WIFI_MODE_FULL_HIGH_PERF`). Separately
+  noted elsewhere in this file (O94) that this mode is a no-op on API 34 —
+  that's a real, already-tracked limitation, but "doesn't exist at all"
+  is no longer accurate.
+- **`CLAUDE.md`'s own G28 row** ("MessagesScreen.kt has a third, simpler
+  copy of formatElapsed") is now itself stale — `MessagesScreen.kt`
+  imports the shared `ui.formatElapsed` today, no private copy remains.
+  Small, but flag it so the next session doesn't go looking for a bug
+  that's already gone.
+- **`IDENTITY_ROTATION`**: fully removed, zero dangling references
+  anywhere in `.kt` source (two independent agents confirmed this by
+  grep). `docs/GLOSSARY.md` has NOT caught up — see §5.
+
+## 4. Full findings catalog by subsystem (condensed from the 8 parallel passes)
+
+### Crypto / identity (beyond §2.2/§2.3 above)
+- `CryptoManager.x25519Agreement`'s KDoc still describes the derivation as
+  "PBKDF2 with the 'RumorDH' salt, single iteration" — the actual
+  implementation is HMAC-SHA256/HKDF-extract (the G20 fix). A re-
+  implementer (iOS/Linux, told elsewhere to be "bit-identical") reading
+  only this comment would build the wrong primitive. **Med, doc-only.**
+- `platformDeriveAesKey` reimplements HKDF-extract via a raw `javax.
+  crypto.Mac` call instead of calling the already-correct `HkdfSha256.
+  extract` — not a security bug (both do the same HMAC), but two code
+  paths now have to stay byte-identical by convention instead of by
+  construction. **Low, consolidate.**
+- `x25519Agreement` already folds in a domain-keyed HMAC before
+  returning, and `SealedSenderKey.derive` then runs a *second* full
+  HKDF on top as if the input were raw ECDH output. Functionally safe
+  (double-KDF doesn't weaken anything) but easy to misreason about
+  domain separation between DM crypto and O53 sealed-sender. **Low.**
+
+### Sync / dedup / RBSR
+- `RbsrWire.kt`'s `Fingerprint.fp` field comment still says "XOR
+  fingerprint" — the implementation is the additive-mod-2^256 scheme that
+  specifically replaced XOR because it was forgeable. Impl is correct;
+  comment is stale. **Low.**
+- `BloomFilterData`'s OOM handling (`deserializeOrNull` catching
+  `OutOfMemoryError`) is real and correct (O13/G26), but `expectedItems`
+  is never pre-clamped before allocation — a peer can pick a value large
+  enough to force heavy allocation/GC pressure without actually throwing,
+  a "slow DoS" the existing crash-hardening doesn't cover. **Med.**
+- RBSR's round loop has no cumulative-size ceiling across a session's
+  rounds (only a 4MB per-frame cap) — a malicious peer sending near-max
+  frames across all 12 rounds accumulates tens of MB in `peerHas`/
+  `peerNeeds` sets with no matching hardening to the bloom path's. **Med.**
+- `SortedListRbsrStorage.items()` does a linear `.filter` scan of the
+  *entire* list per range query rather than a binary-search-bounded
+  slice — real cost trends toward O(N·branches) across the 16-way
+  bisection, not the O(N log N) the design assumes. Worth profiling
+  before the O55/O98 large-anchor-store regime this is meant to serve.
+  **Med, perf not correctness.**
+- `CLAUDE.md`'s G31 row cites a `core/src/commonTest/...` path for
+  `TwoTierDuplicateFilterTest` — `:core` is plain JVM now, the real path
+  is `core/src/test/kotlin/...`. KMP-era doc residue. **Low.**
+
+### O98 persistence / backbone (beyond §2.6)
+- `GroupCredentials.kt`'s class KDoc still calls `rumor-o98-psk-v1:`
+  "reserved forever" — the shipped code uses `-v2:` (v1 retired same-day
+  per `RENAMED_FIELDS_NEVER_REUSE.md`, correctly recorded there). Doc
+  wasn't updated when v2 shipped. **Low.**
+- Host-role retries are grace-windowed + budget-capped (45s/3 retries);
+  Client-role retries are explicitly uncapped with a comment claiming
+  the connect watchdog naturally rate-limits it — which, given §2.6, it
+  doesn't reach the intended magnitude. Comment describes intent, not
+  current behavior.
+- Pre-Android-10 legacy negotiated-pairing path: verified correctly
+  gated (`Build.VERSION.SDK_INT < Q → return` on every backbone call) —
+  **not** dead-weight risk, the field narrative checks out.
+- Core algorithms (`PersistencePlanner`, `PersistenceReconciler`,
+  `BackboneRealizer`, `MeshViewTracker`, `ChannelSelector`) hand-traced
+  and found correct, deterministic, internally consistent with their own
+  docstrings. No new bugs there.
+
+### Gossip engine / protocol invariants (beyond §2.5)
+- `BreadcrumbCache` records DM breadcrumb `hopCount` using
+  `DEFAULT_BROADCAST_HOPS` (7) unconditionally, even for DIRECT messages
+  whose real budget is 15 (`GossipEngine.kt:992`) — every DM's stored
+  hopCount is meaningless (usually clamped to 1 via `coerceAtLeast(1)`).
+  Low current impact (routing doesn't consume this field yet per a prior
+  pass) but a landmine for whoever next builds on top of it. **Med,
+  still present, easy one-line fix once someone needs the field to be
+  real.**
+- Core invariants (relay never touches blocklist, BRIDGED never
+  re-relayed including for Rooms/BRIDGE_VOUCHED, BRIDGE_UNSIGNED gated to
+  LOCAL_BRIDGE only, no MAC-as-identity) all independently re-verified
+  directly against `GossipEngine.kt` — hold exactly as documented.
+- `MessageStore`/`GossipEngine` — the two most central protocol classes —
+  still have thin dedicated coverage (`MessageStoreIngestTest` now exists
+  post-§2-fix with 3 cases, but no broad `GossipEngineTest.kt`). Given
+  how much rides on ingest ordering specifically, worth more direct
+  coverage rather than relying on `SourceInvariantTest`'s regex checks.
+
+### Rooms (O79) — newest feature, least field-tested
+- **`docs/O79_PROTOCOL_SPEC.md`'s "Known gaps" section is stale**: it
+  claims Ed25519→X25519 derivation "isn't wired" and a client "cannot
+  exchange ENCRYPTED room messages... until O91 is closed." **O91 is
+  closed** (`AppModule.kt:166-187`, `SimNode.kt:89-108` both derive a
+  real X25519 static via `CryptoManager.ed25519ToX25519PrivateSeed`, and
+  `RoomEndToEndIntegrationTest` exercises real encrypt→decrypt for 3
+  recipients + a correctly-excluded non-recipient). This is a re-
+  implementer-facing spec doc (its stated audience is iOS/Linux/MCU
+  ports) — a stale "you can't interop yet" claim has real cost to anyone
+  building against it. **Independently found by two of the eight agents
+  plus my own direct check — high confidence.**
+- **`docs/ROOMS_THREAT_MODEL.md` overclaims write-permission enforcement
+  as currently live.** It states in the present tense that "every honest
+  peer fails the structural check and drops the message" for an
+  unauthorized channel post. In reality `RoomPostingCertVerifier.verify()`
+  is never called from anywhere in `:core`/`:app`/`:simulator` (confirmed
+  by grep — zero call sites outside its own file and its own test);
+  `RoomAction`/`RoomCreate`/`RoomInvite` have no `MessageType` wire entry
+  at all, so moderation and posting-policy can't even travel on the wire
+  yet. `CLAUDE.md`'s own O89 row is honest about this (`[TODO/CODE]`,
+  "write enforcement only," open) — the standalone threat-model doc is
+  the one place this reads as shipped. Given the doc's own stated rule
+  ("if a policy can't be [structurally] expressed, document the limit
+  honestly and don't pretend it's enforceable") this is a direct
+  violation of the doc's own standard. Recommend a one-line "NOT YET
+  ENFORCED — tracked as O89" banner until it's wired.
+
+### Plugins / bridges
+- **New**: `MeshtasticProtobuf.Reader.readSubMessage` has zero bounds
+  validation, unlike its siblings `readBytes`/`skipField` which both
+  `require(pos + len <= end)`. `readSubMessage` builds a sub-`Reader`
+  and advances `pos` unconditionally — an adversarial length can
+  integer-overflow `pos + len` negative (silent truncation, a worse
+  failure mode than a crash) or desync the *outer* reader's bounds for
+  every subsequent field. Currently masked by the call-site `runCatching`,
+  same as the already-known `readInt()`/`readBytes()` gap, but strictly
+  larger. Given this session found two concrete bounds-check gaps in the
+  hand-rolled codec (not just the abstract "should use Wire someday"
+  concern CLAUDE.md already records), I'd mildly upgrade the priority: a
+  small targeted patch (`require(pos + len in pos..end)` before
+  constructing the sub-reader, plus a `len >= 0` guard on the varint
+  path) is cheap and doesn't require the bigger Square-Wire-migration
+  decision to be revisited.
+- `DmEnvelope.selfAuthenticating` — documented as O5a's constraint #1
+  security gate — is never actually read anywhere in production code.
+  Today's safety is an emergent property of `injectBridgedDm` only being
+  reachable from app-internal `PluginContextImpl`, not an explicit check
+  on the field the docs point to. Not exploitable today; nothing pins
+  the invariant against a future refactor that starts branching on it.
+  (The other five O5a constraints were all directly re-verified as
+  correctly and explicitly enforced — this is the one gap.)
+- Neither bridge (Meshtastic, MeshCore) reconnects after a BLE
+  disconnect — `ready` flips `false` only in `onDetach()`, never on a
+  `STATE_DISCONNECTED` GATT callback. Radio out of range/reboot → silent
+  permanent failure until the user manually toggles the plugin.
+- MeshCore never negotiates a larger BLE MTU (`Meshtastic` does,
+  `requestMtu(517)`) despite `MeshCoreFrames.MAX_TEXT_BYTES = 120` —
+  outbound text beyond roughly 14 characters likely truncates/drops
+  silently against the default ~20-byte ATT payload.
+- Both bridges assign a **fresh random UUID per decode** rather than
+  deriving an id from the radio packet — a BLE/LoRa retransmission of
+  one physical packet produces N distinct "novel" messages in the feed;
+  dedup can't catch a bridged replay. Bounded blast radius (BRIDGED,
+  never re-relayed) but a real gap against O5a constraint #5.
+- O48 (migrate MeshCore's synthetic userId from name-hash to pubkey-hash
+  before DM bridging ships) remains genuinely unaddressed — no
+  half-finished code found either way.
+- **Clean**: O67 keyword filters and O76 compression+padding, both new
+  since the last audit pass, hold up well — `Compression.inflate` has an
+  explicit zip-bomb cap, `Unpad.unpad` validates length against actual
+  buffer size, `originalLength` rides in AEAD-protected AAD rather than
+  trust-on-read `_ext`.
+
+### App UI / DI / storage (beyond §2.1/§2.4)
+- `PersistenceCoordinator` (O98) is constructed manually inside
+  `MeshService` rather than via a Koin `single{}` — likely intentional
+  given its lifecycle is tied to mesh start/stop, but it means
+  `AppModuleTest`'s Koin `verify()` never exercises its constructor
+  wiring. Worth a comment noting this is a deliberate DI-rule exception,
+  if it is one.
+- O79 (Rooms), O90 (thread/mention), O67 (keyword filters) all have
+  complete protocol + persistence + DI wiring but **zero UI surface** —
+  confirmed by grep across `app/.../ui/` for Room/mention/keyword-filter
+  terms, zero hits. Matches what `CLAUDE.md` already tracks as `[PART]`
+  rows, so not new drift, but worth stating plainly: these three
+  features are backend-complete and invisible to a user today.
+- O40 (`MESSAGE_DELETE`) is fully implemented and tested at the protocol
+  layer with zero call sites from any ViewModel/screen — matches
+  `CLAUDE.md`'s own G33 note, confirmed accurate.
+- No FLAG_SECURE gaps found (no plaintext-identity-export screen exists
+  yet to need one); `ChangePassphraseScreen` correctly masks input
+  throughout.
+
+### iOS port + cross-platform docs
+- **`ios/RumorCryptoBridge.swift` has silently drifted from its own
+  spec.** `docs/IOS_SWIFT_BRIDGE_SPEC.md` (2026-06-04) added an `aad`
+  parameter to `aesGcmEncrypt`/`Decrypt` (needed for O76 compression-
+  length binding) and two new methods, `ed25519ToX25519PrivateSeed`/
+  `ed25519ToX25519Public` (needed for O91 DM key derivation). The
+  vendored Swift file (2026-06-05, one day later) implements neither.
+  Per the spec's own text, without those conversions "real Rumor users
+  cannot DM each other on iOS." Neither file has been touched in the six
+  weeks since — the gap has just sat there unreconciled.
+- `ios/README.md` and `docs/IOS_SWIFT_BRIDGE_SPEC.md` both still
+  describe a KMP source layout (`core/src/iosMain/...`, `expect`/`actual`
+  stubs, `commonTest`) that no longer exists — the archimedes merge
+  deliberately flattened `:core` back to plain JVM (CLAUDE.md's own G30/
+  O63 note records this explicitly). Neither iOS doc acknowledges that a
+  KMP split was already built, tested, and intentionally reverted for
+  reasons unrelated to iOS — a contributor resuming from these docs cold
+  would re-derive that history the hard way.
+- **`docs/GLOSSARY.md:92-93` documents a removed feature as live**:
+  "Identity rotation (O41) — migrate to a new key with a continuity
+  signature... contacts rebind under the new id." This was **removed
+  entirely** six weeks ago (commit `806c885`, per `CLAUDE.md`'s own G9
+  entry: auto-rebind-on-rotation turns a stolen old key into permanent
+  impersonation). `GLOSSARY.md` was last touched 2026-07-15 — a cleanup
+  pass that ran *after* the removal and *after* CLAUDE.md was corrected
+  — and the stale entry survived that pass anyway. Highest-confidence
+  single doc-drift finding of the session: a contributor trusting the
+  glossary would believe a security-relevant migration flow exists when
+  it was deliberately deleted for security reasons.
+- Two more stale comments in the same family: `GroupCredentials.kt`
+  (psk-v1 vs shipped v2, see above) and `core/.../model/GossipPacket.kt`
+  telling future readers to "mirror the rbsr-v1 / rbsr-v2 capability-
+  gated pattern" — `rbsr-v2` doesn't exist anywhere in the codebase; it
+  was the forgeable raw-id-sum variant the archimedes merge deliberately
+  dropped. The comment models a nonexistent sibling feature.
+- `docs/wire-format.md` and `docs/RENAMED_FIELDS_NEVER_REUSE.md`: no
+  drift found — every current `MessageType`, all 21 domain tags (see
+  below), and the O79 byte formulas match code exactly.
+
+### Wire-format / domain-tag bookkeeping
+- `DomainTagInvariantTest` asserts 20 reserved domain tags; the code
+  actually emits 21. `"rumor-dm-recipient-tag-v1:"` (O53) and
+  `"rumor-room-posting-cert-v1:"` (O89) are both correctly listed in
+  `RENAMED_FIELDS_NEVER_REUSE.md` but neither has the build-time
+  assertion pinning it that the guard exists specifically to provide —
+  exactly the gap class the test was written to catch, now present in
+  the test itself. `docs/wire-format.md` §6 has the same two omissions.
+  **Low severity, but a 2-line fix and it defeats the guard's purpose
+  until fixed.**
+
+### README.md — still self-contradictory, unaddressed since first flagged
+Re-verified directly (this is a re-confirmation, not new): `README.md:25`
+still says "split into 14 modules" (actual: 3 Gradle modules, matching
+`CLAUDE.md`); `README.md:494` still says both bridges "exist as stubs
+with clearly marked TODOs," contradicted by the same file's own "Known
+limitations" section describing working BLE codecs; the "Unit test
+coverage" table (line ~154) still lists a handful of classes against an
+actual current count of **77** `*Test.kt` files across the three modules.
+All three claims were already flagged in this file previously and remain
+unfixed five days later — cheap, high-visibility fix (it's the first
+thing anyone reads) whenever someone's next in this file for something
+else.
+
+## 5. Prebuilt-vs-handrolled assessment (per the standing policy in
+   `CLAUDE.md`'s "Design decisions recorded" section)
+
+The policy is being followed well overall — BouncyCastle for Ed25519/
+X25519, `commons-codec` MurmurHash3 for the bloom filter (verified: zero
+hand-rolled hash remnants), real `java.security.MessageDigest` SHA-256 for
+the O98 SSID/passphrase derivation, `HkdfSha256`/`HmacSha256` are correct
+RFC 5869/2104 implementations. The one place I'd revisit the existing
+"not worth touching yet" calculus: **the hand-rolled Meshtastic protobuf
+codec now has two concrete, session-found bounds-check gaps** (§4,
+`readSubMessage` + the pre-existing `readInt`/`readBytes` negative-length
+path) rather than the purely-theoretical "a silent field-number bug
+happened once" framing CLAUDE.md currently records. A full migration to
+Square Wire codegen is still the right *eventual* answer and still not
+worth doing as a big-bang change today — but the two specific bounds
+checks above are cheap, low-risk, targeted patches that don't require
+committing to the bigger migration, and would close real (if currently
+masked) gaps. Nothing else rose to the level of "should use a library
+instead" — the DIY code elsewhere (schedulers, planners, gossip engine,
+transports) is exactly the app-specific glue the policy says is fine to
+hand-write.
+
+## 6. Suggested priority order, if picking one thing at a time
+
+1. **§2.1 — `MeshService.startMesh()` reentrancy guard.** Small, mechanical
+   fix; the O98 backbone-loop stacking risk it prevents is the kind of
+   bug that costs a multi-hour field-debugging session to diagnose from
+   symptoms alone (see G38's own war story for what that looks like).
+2. **§1 — O12 single-threaded-dispatcher fix for the flaky sim tests.**
+   No longer hypothetical; it's failing in real CI right now, and it's
+   masking the project's actual safety net.
+3. **§2.5 — wire up the prune loops.** One function call, closes a
+   real unbounded-growth gap that contradicts the project's own
+   long-term-deployment design intent.
+4. **§2.2 — give `IdentityManager.lock()` a caller and make it actually
+   zero.** Currently there's no lock feature to audit, which is worse
+   than "the zeroize has a bug."
+5. **§2.4 — Room migrations**, before the first tagged release rather
+   than after (100%-certain-to-fire once it fires).
+6. **§2.6 — SSID cooldown gate**, before the next field campaign hits it.
+7. Everything else in §4 is real and verified but lower urgency — mostly
+   doc drift (cheap, low-risk, do opportunistically) or scoped follow-up
+   work (§2.3's prekey wiring, the bridge reconnect/MTU/replay gaps)
+   that doesn't block anything else.
+
+---
+
 # Handoff — O80 mode auto-fire shipped, O57 closed (2026-07-17, session 3)
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
