@@ -942,14 +942,20 @@ class GossipEngine(
         fromPeerId: String? = null,
     ) {
         // A message we authored, handed back to us by a peer, is always an echo —
-        // never news. Drop it before ingest so we don't re-store it, re-relay it,
+        // never news. Drop it before the handlers below so we don't re-relay it
         // or (for SELF_PRESENCE) record our own presence as if it were a peer's.
-        // ingestOwn already dedups our persisted broadcasts, but ephemeral control
-        // traffic (SELF_PRESENCE) isn't persisted, so this is the single guard that
-        // covers every self-authored type uniformly.
+        // BUT record the id (after full verification — §2: never record an
+        // unverified id, or a forged "self" message could blackhole a real one):
+        // an unrecorded echo id stays out of our summaries and RBSR snapshot, so
+        // peers re-ship the same echoes every round, forever (field-found
+        // 2026-07-18: ~400KB/round between two phones, driven by the RBSR diff
+        // over beacon ids the author itself never held).
         if (source == MessageSource.PEER &&
             rawMsg.senderId == identityProvider.identity.value?.userId
-        ) return
+        ) {
+            messageStore.ingest(clampTtl(rawMsg), persist = false)
+            return
+        }
 
         val clamped = clampTtl(rawMsg)
         // Per-transport trust gate. The BRIDGE_UNSIGNED sentinel is honored only
@@ -960,7 +966,11 @@ class GossipEngine(
         val isNew = if (bridged) {
             duplicateFilter.recordAndCheck(clamped.id)
         } else {
-            messageStore.ingest(clamped)
+            // SELF_PRESENCE is ephemeral control traffic: full verify + dedup
+            // record + tracker + relay, but never archived — MeshViewTracker
+            // holds the (6-min-fresh) state it feeds, and persisting every 90s
+            // beacon made stores 99% bloat and pushed them over the RBSR gate.
+            messageStore.ingest(clamped, persist = clamped.type != MessageType.SELF_PRESENCE)
         }
         if (!bridged && !isNew && messageStore.sigFailureCount > sigFailuresBefore) {
             canaryMetrics.recordSigFailure()

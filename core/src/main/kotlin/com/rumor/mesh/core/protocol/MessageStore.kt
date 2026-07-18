@@ -114,7 +114,15 @@ class MessageStore(
      * Ingest a message from a gossip exchange.
      * Returns true if the message was new and should be forwarded/flooded.
      */
-    suspend fun ingest(msg: RumorMessage): Boolean {
+    /**
+     * [persist] = false runs the full verify pipeline and records the id as
+     * seen but skips the durable store — for ephemeral control traffic
+     * (SELF_PRESENCE) and verified self-echoes, where "known" matters for
+     * summaries/want-sets but archiving is pure bloat (field-found 2026-07-18:
+     * stores were 99% beacons, and unrecorded echoes re-shipped ~400KB/round
+     * forever via the RBSR diff).
+     */
+    suspend fun ingest(msg: RumorMessage, persist: Boolean = true): Boolean {
         // §2 ORDERING IS SECURITY-CRITICAL. Nothing keyed on unverified wire data
         // may commit persistent state before the Ed25519 check. In particular the
         // dedup filter is only *checked* (not recorded) here — recording an id
@@ -163,6 +171,7 @@ class MessageStore(
 
         // 5. Commit: only now is it safe to mark the id permanently seen and store.
         duplicateFilter.recordAndCheck(msg.id)
+        if (!persist) return true
         ensureContact(msg.senderId, msg.senderPublicKey)
         messageRepo.insert(msg)
         evictIfOverCap()
