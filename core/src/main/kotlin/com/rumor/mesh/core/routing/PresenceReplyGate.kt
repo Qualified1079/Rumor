@@ -44,7 +44,9 @@ class PresenceReplyGate(
     }
 
     companion object {
-        const val DEFAULT_COOLDOWN_MS = 2 * 60_000L
+        // 30s: repeat scan taps feel responsive; a probe-spammer still gets at
+        // most 2 tiny CONTROL replies/min/peer (and only while stale in our view).
+        const val DEFAULT_COOLDOWN_MS = 30_000L
         const val DEFAULT_MAX_PEERS = 2000
     }
 }

@@ -27,8 +27,8 @@ android {
         // Bump BOTH on every flashed change so asymmetric installs across the
         // test fleet are detectable via `dumpsys package … | grep version`
         // (G7 also enforces monotonic versionCode at release-tag time).
-        versionCode = 25
-        versionName = "0.6.4-o124-solicit"
+        versionCode = 26
+        versionName = "0.6.5-cooldown-30s"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
