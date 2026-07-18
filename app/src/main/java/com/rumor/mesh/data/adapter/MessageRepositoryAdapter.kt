@@ -6,8 +6,12 @@ import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.sync.RbsrItem
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.wire.WireJson
 import com.rumor.mesh.data.MessageDao
 import com.rumor.mesh.data.MessageEntity
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.JsonElement
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -41,7 +45,7 @@ class MessageRepositoryAdapter(private val dao: MessageDao) : MessageRepository 
         dao.observeAllDirect(userId, limit).map { it.map(MessageEntity::toMessage) }
 }
 
-private fun RumorMessage.toEntity() = MessageEntity(
+internal fun RumorMessage.toEntity() = MessageEntity(
     id = id, senderId = senderId, senderPublicKey = senderPublicKey,
     sequenceNumber = sequenceNumber, sentAtMs = sentAtMs, type = type, hopsToLive = hopsToLive,
     contentType = payload?.contentType, content = payload?.content,
@@ -49,13 +53,15 @@ private fun RumorMessage.toEntity() = MessageEntity(
     sizeBytes = payload?.sizeBytes ?: 0, encryptedPayload = encryptedPayload,
     recipientId = recipientId, signature = signature, receivedAtMs = receivedAtMs,
     isRead = isRead, wasRelayed = wasRelayed,
+    ext = ext?.let { WireJson.encodeToString(it) },
 )
 
-private fun MessageEntity.toMessage() = RumorMessage(
+internal fun MessageEntity.toMessage() = RumorMessage(
     id = id, senderId = senderId, senderPublicKey = senderPublicKey,
     sequenceNumber = sequenceNumber, sentAtMs = sentAtMs, type = type, hopsToLive = hopsToLive,
     payload = if (content != null && contentType != null)
         MessagePayload(contentType, content, filename, mimeType, sizeBytes) else null,
     encryptedPayload = encryptedPayload, recipientId = recipientId,
     signature = signature, receivedAtMs = receivedAtMs, isRead = isRead, wasRelayed = wasRelayed,
+    ext = ext?.let { runCatching { WireJson.decodeFromString<Map<String, JsonElement>>(it) }.getOrNull() },
 )

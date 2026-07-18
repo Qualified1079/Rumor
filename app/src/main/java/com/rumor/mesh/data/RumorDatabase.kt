@@ -53,8 +53,11 @@ import com.rumor.mesh.BuildConfig
     // v9: added RoomSubscriptionEntity for O79 room-subscription
     //     persistence (flat field shape — routing material only;
     //     decryption material stays in IdentityManager).
+    // v10: added MessageEntity.ext (JSON blob of the O37 `_ext` map) —
+    //      dropping it stripped compression-AAD flags from stored DMs,
+    //      which then failed AES-GCM tag checks at display time.
     // Dev uses fallbackToDestructiveMigration so no migration code needed.
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

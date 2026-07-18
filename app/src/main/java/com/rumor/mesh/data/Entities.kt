@@ -35,6 +35,10 @@ data class MessageEntity(
     val receivedAtMs: Long,
     val isRead: Boolean,
     val wasRelayed: Boolean,
+    // O37 `_ext` map as a JSON blob. Dropping it here silently stripped the
+    // O76 compression-AAD flags (and every other `_ext` rider) from stored
+    // and relayed messages — DMs then failed the GCM tag check at display.
+    val ext: String?,
 )
 
 @Entity(
