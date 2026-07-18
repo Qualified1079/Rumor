@@ -184,9 +184,14 @@ class WifiDirectTransport(
     private val connectWatchdog = Runnable {
         RumorLog.d(TAG, "Connect watchdog expired — clearing in-flight flag")
         // A credential join that never produced a connection: cool the SSID
-        // down so it can't pin the radio away from the legacy flow.
+        // down so it can't pin the radio away from the legacy flow. Blind
+        // joins are exempt — "group not up yet" is their expected failure,
+        // and a cooldown here would lock the client out for 3 min right when
+        // the host finally arrives (their pacing is the role-retry structure).
         pendingJoinSsid?.let {
-            ssidCooldownUntil[it] = System.currentTimeMillis() + SSID_COOLDOWN_MS
+            if (!pendingJoinBlind) {
+                ssidCooldownUntil[it] = System.currentTimeMillis() + SSID_COOLDOWN_MS
+            }
             pendingJoinSsid = null
         }
         connectAttemptInFlight = false
@@ -242,6 +247,7 @@ class WifiDirectTransport(
     @Volatile private var backboneRetriesLeft = 0
     /** SSID of an in-flight credential join — cooled down if the watchdog fires. */
     @Volatile private var pendingJoinSsid: String? = null
+    @Volatile private var pendingJoinBlind = false
     private val ssidCooldownUntil = ConcurrentHashMap<String, Long>()
     /** Converts a negotiated legacy GO group to the credentialed backbone group. */
     private var legacyGoConversionJob: Job? = null
@@ -505,10 +511,16 @@ class WifiDirectTransport(
         if (groupConnected) { verifyClientGroup(hostUserId); return }
         val name = GroupCredentials.forHost(hostUserId).networkName
         if (!ssidVisible(name)) {
-            // Nothing to join yet — the host hasn't (or hasn't yet) realized
-            // its side. Nudge a scan and let the legacy flow keep the radio.
-            RumorLog.d(TAG, "O98 backbone group $name not on air yet — waiting")
+            // G38 scan-throttle fix: don't wait for the SSID to show up in
+            // scan results (foreground scans are throttled to 4/2min — a node
+            // can stay blind to a live group for minutes). The credentials
+            // derive from the host's userId, so attempt the join blind; if the
+            // group isn't up yet the attempt fails without cooling the SSID
+            // and the role-retry structure paces the next one. The scan nudge
+            // stays only to keep seniority/deferral ground truth fresh.
+            RumorLog.d(TAG, "O98 backbone group $name not in scan results — joining blind")
             runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+            joinBySsid(name, blind = true)
             return
         }
         joinBySsid(name)
@@ -522,7 +534,7 @@ class WifiDirectTransport(
      * networks matching the pattern, stale scans) go on cooldown so they can't
      * pin the radio away from the legacy flow.
      */
-    private fun joinBySsid(networkName: String) {
+    private fun joinBySsid(networkName: String, blind: Boolean = false) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         if (groupConnected || connectAttemptInFlight) return
         val p2pCfg = WifiP2pConfig.Builder()
@@ -531,19 +543,22 @@ class WifiDirectTransport(
             .build()
         connectAttemptInFlight = true
         pendingJoinSsid = networkName
+        pendingJoinBlind = blind
         backboneAttemptAtMs = System.currentTimeMillis()
         handler.removeCallbacks(connectWatchdog)
         handler.postDelayed(connectWatchdog, CONNECT_WATCHDOG_MS)
         enqueueCommand {
             wifiP2pManager?.connect(channel, p2pCfg, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
-                    RumorLog.i(TAG, "O98 joining backbone group $networkName")
+                    RumorLog.i(TAG, "O98 joining backbone group $networkName${if (blind) " (blind)" else ""}")
                 }
                 override fun onFailure(reason: Int) {
                     RumorLog.w(TAG, "O98 backbone join failed: ${p2pError(reason)}")
                     // BUSY means the framework was mid-command, not that the
                     // group is absent — retry without penalizing the SSID.
-                    if (reason != WifiP2pManager.BUSY) {
+                    // Blind joins never cool: "not up yet" is their expected
+                    // failure and the role-retry structure paces them.
+                    if (reason != WifiP2pManager.BUSY && !blind) {
                         ssidCooldownUntil[networkName] = System.currentTimeMillis() + SSID_COOLDOWN_MS
                     }
                     pendingJoinSsid = null

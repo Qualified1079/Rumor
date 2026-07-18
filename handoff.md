@@ -1,3 +1,42 @@
+# Handoff — O93 LAN transport + O98 blind join + §5 guard (2026-07-18)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+Branch `main`, versionCode 22 / **0.6.1-o93-lan**, all suites green, APK
+assembles. **Code-complete, NOT yet flashed** — the G40 row in CLAUDE.md is
+the full record. Three pieces in this build:
+
+1. **O93 same-LAN transport** — `core/transport/lan/LanTransport.kt` (pure
+   JVM: JmDNS + TCP + the untouched GossipSession) + Android
+   `LanTransportManager` (up exactly while STA-associated, MulticastLock,
+   new CHANGE_WIFI_MULTICAST_STATE permission). LAN exchanges feed the
+   engine but deliberately NOT the O98 coordinator (planner realizes P2P
+   groups — wrong tool for LAN-reachable peers).
+2. **O98 blind derived-SSID join** — clients no longer wait for throttled
+   scan results; blind joins are exempt from the 3-min SSID cooldown.
+3. **§5 startMesh reentrancy guard** (`meshStarted` latch) — closes the
+   audit's collector-stacking/receiver-leak finding.
+
+**Field round to run (task #3):** flash fleet; (a) two phones on the same
+AP → `source=LAN` sessions in logs, messages flowing with Wi-Fi Direct
+idle; (b) backbone convergence latency vs 0.5.6 (blind join should kill
+the minutes-long scan blindness; watch that a blind join against a
+genuinely absent host doesn't pin the radio — bounded by role retries);
+(c) background/foreground cycling mid-mesh (§5); (d) O80 auto-mode from
+the 0.6.0 build (plug in on Auto → STATIC, screen off → FREE).
+**New standing directive: OS testing is orthogonal to hardware testing** —
+a LineageOS/de-Googled pass is owed on top of the OEM-skin fleet (recorded
+in O56's testing note).
+
+**Next after the field round:** O95 HLC — but SIMULATION FIRST (user
+directive): sweep clock skew (0/minutes/64 days), node counts, partition/
+disruption; measure causal misordering wall-clock vs HLC; numbers before
+any wire change (task #4). A parallel audit session pushed rounds 1–3
+below the same day — its §2.6 SSID-cooldown flag is addressed by the
+blind-join exemption in this build; the rest of its punch list stands.
+
+---
+
 # Handoff — overnight research/audit session (2026-07-18), continued — round 3 (small)
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**

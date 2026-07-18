@@ -108,6 +108,16 @@ class MeshService : Service(), MeshController {
     private val pluginCatalog: PluginCatalog by inject()
     private val modeState: ModeState by inject()
     private val modeOrchestrator: com.rumor.mesh.core.policy.ModeOrchestrator by inject()
+
+    /**
+     * O93 LAN path. Built at [startMesh] like the coordinator (needs the
+     * unlocked identity); null until the mesh is running.
+     */
+    @Volatile private var lanTransportManager: com.rumor.mesh.core.transport.lan.LanTransportManager? = null
+    private var lanCollectJob: kotlinx.coroutines.Job? = null
+
+    /** §5: true while the mesh wiring is live — see the guard in [startMesh]. */
+    @Volatile private var meshStarted = false
     private val contactRepo: com.rumor.mesh.core.data.ContactRepository by inject()
     private val contactDao: ContactDao by inject()
     private val transferSender: TransferSender by inject()
@@ -163,6 +173,14 @@ class MeshService : Service(), MeshController {
             updateNotification("Locked — unlock the app to connect")
             return
         }
+
+        // §5 reentrancy guard: onStartCommand re-fires on every foreground
+        // transition; without this every cycle stacked a fresh set of flow
+        // collectors (duplicate message processing, double-forwarding bridges)
+        // and orphaned transport state. Latched only once identity is unlocked
+        // so a locked start still retries.
+        if (meshStarted) return
+        meshStarted = true
 
         // O92: rehydrate the volatile scheduler + dedup filter from the durable
         // store so a restarted phone actually offers its buffered messages on the
@@ -301,6 +319,36 @@ class MeshService : Service(), MeshController {
             }
         }
 
+        // ── O93: same-LAN transport ──────────────────────────────────────────
+        // Up exactly while STA-associated (where Wi-Fi Direct discovery is
+        // dead). LAN exchanges feed the engine like any other, but NOT the
+        // O98 coordinator: the backbone planner realizes P2P groups, and
+        // planning links for peers already reachable over the LAN would make
+        // the transport fight the very AP association this path exists for.
+        val lanManager = com.rumor.mesh.core.transport.lan.LanTransportManager(applicationContext, {
+            com.rumor.mesh.core.transport.lan.LanTransport(
+                com.rumor.mesh.core.transport.lan.LanTransport.Config(
+                    localUserId = identity.userId,
+                    localPublicKey = Base64.getEncoder().encodeToString(identity.publicKeyBytes),
+                    signer = identityManager::sign,
+                    messageProvider = gossipEngine::messagesForExchange,
+                    messagesByIds = gossipEngine::messagesByIds,
+                    knownIdsProvider = gossipEngine::knownMessageIds,
+                    onlineUsersProvider = onlineStatusTracker::currentSnapshot,
+                    onExchangeFailed = gossipEngine::onExchangeFailed,
+                    rbsrItemsProvider = gossipEngine::rbsrSnapshot,
+                )
+            )
+        })
+        lanManager.onTransportUp = { t ->
+            lanCollectJob?.cancel()
+            lanCollectJob = scope.launch {
+                t.exchangeResults.collect { result -> gossipEngine.onExchange(result) }
+            }
+        }
+        lanManager.start()
+        lanTransportManager = lanManager
+
         // ── O80: mode auto-fire ──────────────────────────────────────────────
         // Plug/screen/battery/network signals → ModeProfile → setMode. Applies
         // only while the user's mode selection is "Auto" (manual wins, O57).
@@ -344,6 +392,11 @@ class MeshService : Service(), MeshController {
     }
 
     private fun stopMesh() {
+        meshStarted = false
+        lanTransportManager?.stop()
+        lanTransportManager = null
+        lanCollectJob?.cancel()
+        lanCollectJob = null
         modeOrchestrator.stop()
         messageScheduler.stop()
         pluginRegistry.unregisterAll()

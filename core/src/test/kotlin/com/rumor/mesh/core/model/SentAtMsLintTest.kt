@@ -64,6 +64,8 @@ class SentAtMsLintTest {
         "core/src/test/kotlin/com/rumor/mesh/core/model/TrafficClassInvariantTest.kt",
         // ours (check-online): loopback wire-harness fixtures stamp sentAtMs directly.
         "core/src/test/kotlin/com/rumor/mesh/core/transport/wifidirect/GossipSessionWireTest.kt",
+        // O93 LAN-transport loopback fixture stamps sentAtMs at compose time
+        "core/src/test/kotlin/com/rumor/mesh/core/transport/lan/LanTransportLoopbackTest.kt",
         "core/src/test/kotlin/com/rumor/mesh/core/fuzz/SeedCorpusTest.kt",
         // O76 ext-helper test stamps a blank RumorMessage with sentAtMs=0L
         "core/src/test/kotlin/com/rumor/mesh/core/wire/CompressedPaddedExtTest.kt",

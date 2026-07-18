@@ -53,6 +53,8 @@ data class PeerExchangeResult(
 enum class ExchangeSource {
     /** Normal Wi-Fi Direct gossip session. */
     WIFI_DIRECT,
+    /** Same-LAN mDNS/TCP gossip session (O93). */
+    LAN,
     /** Message injected by a bridge plugin (Meshtastic, MeshCore, etc.). */
     PLUGIN,
     /** Message composed locally by the user. */

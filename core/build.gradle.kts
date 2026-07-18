@@ -35,6 +35,11 @@ dependencies {
     // wasn't murmur despite the name. Pure Java, tiny, F-Droid compatible.
     implementation("commons-codec:commons-codec:1.22.0")
 
+    // O93 LAN transport — mDNS service discovery. Pure JVM (works on Android
+    // with a MulticastLock and on the :node desktop target), Apache-2.0,
+    // F-Droid compatible. Per the prebuild policy: never hand-roll mDNS.
+    implementation("org.jmdns:jmdns:3.6.3")
+
     // Testing
     // kotlin.test — the archimedes-era tests (ported from KMP commonTest) assert
     // through it; runs on the JUnit5 platform below.
