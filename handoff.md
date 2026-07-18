@@ -1,3 +1,45 @@
+# Handoff — overnight research/audit session (2026-07-18), continued — round 3 (small)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+Closing out the two items round 2 flagged as "not re-verified" rather than
+leaving them open-ended. No source-code changes.
+
+- **PBKDF2 iteration count is still 100,000** (`CryptoManager.kt:142`,
+  `pbkdf2HmacSha256(..., iterations = 100_000, ...)`), and
+  `PlatformCrypto.pbkdf2HmacSha256` still never calls `spec.
+  clearPassword()` (`PlatformCrypto.kt:109-113`) — the `PBEKeySpec`'s
+  internal char-array copy of the passphrase sits unzeroed after use.
+  Confirmed both parts of the original finding. Note the deeper limit
+  underneath: even a `clearPassword()` fix only clears the `PBEKeySpec`'s
+  internal copy — the `passphrase: String` parameter itself is a JVM
+  `String` (immutable, interned, unclearable) all the way from wherever
+  the UI first reads it. Closing that fully means threading `CharArray`
+  through the passphrase-entry UI down to this call, not just a one-line
+  fix here; the `clearPassword()` call is still a cheap, real, partial
+  improvement worth doing on its own.
+- **The `PluginRegistry` disable-boundary race is real, mechanism
+  confirmed.** `plugins` is a `CopyOnWriteArrayList` (`PluginRegistry.
+  kt:36`) — thread-safe against `ConcurrentModificationException`, but
+  its iterators snapshot the backing array at iteration start. A plugin
+  captured in that snapshot by `onMessageReceived`'s `plugins.forEach`
+  (line 88) will still have `.onMessageReceived()` invoked on it even if
+  `unregister()` (line 71-79, which cancels its scope and runs
+  `onDetach()`) completes concurrently on another thread — the object
+  doesn't stop existing just because it left the live list. **Mitigating
+  factor worth noting** (not visible from a code-shape read alone): the
+  call is wrapped in `try/catch` (line 89-92), so a post-teardown plugin
+  throwing doesn't crash the app or the collector — worst case is
+  whatever a specific plugin does when called on already-torn-down
+  state, logged and swallowed. Confirms the finding but narrows "medium-
+  high confidence, blast radius depends on per-plugin behavior" to
+  "confirmed mechanism, bounded blast radius by the existing catch."
+
+Both are now fully closed out from "flagged, not verified" to "confirmed
+against current code" — nothing left dangling from this session's list.
+
+---
+
 # Handoff — overnight research/audit session (2026-07-18), continued — round 2
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
