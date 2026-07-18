@@ -639,9 +639,19 @@ class WifiDirectTransport(
         // produced the field-observed churn of junk pairings — O(N) of them
         // per hub flap at mesh scale. If the host is truly gone, the view's
         // recency decay clears the role (≤6 min) and legacy returns.
+        //
+        // Escape hatch (field 2026-07-18: ~3-min blackout after a host died —
+        // client parked here until view decay while nobody hosted): if NO
+        // backbone SSID has been on the air for the whole memory window, the
+        // host's group is dead, not flapping — fall through to the bootstrap
+        // decision below instead of waiting out the role. A wrong call here
+        // self-resolves: junior-yields collapses a double-host.
         if (backboneRole is BackboneRealizer.Role.Client) {
-            runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
-            return
+            if (System.currentTimeMillis() - backboneSeenAtMs < BACKBONE_MEMORY_MS) {
+                runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+                return
+            }
+            RumorLog.i(TAG, "O98 client role but no backbone on air ${BACKBONE_MEMORY_MS / 1000}s — bootstrapping")
         }
 
         // Backbone memory: a backbone SSID seen on air moments ago means the
@@ -795,6 +805,12 @@ class WifiDirectTransport(
             if (!linked) {
                 RumorLog.w(TAG, "All client connect attempts exhausted")
                 removeGroup()
+                // Field 2026-07-18: a dead group must not leave the client
+                // passive — clear the attempt grace and kick discovery so the
+                // bootstrap decision (blind-join a live backbone or host a new
+                // one) runs on the next peers-changed instead of minutes later.
+                backboneAttemptAtMs = 0L
+                rediscoverPeers()
                 return@launch
             }
 
