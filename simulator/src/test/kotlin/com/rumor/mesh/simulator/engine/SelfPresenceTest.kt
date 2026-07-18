@@ -34,13 +34,21 @@ class SelfPresenceTest {
         a.flushSchedulerToRepo()
 
         SimTransport(a, b).exchange(kotlin.random.Random(1))
-        awaitUntil { b.knownMessages().any { it.id == beacon.id } }
+        awaitUntil { beacon.id in b.gossipEngine.knownMessageIds() }
 
-        val received = b.knownMessages().firstOrNull { it.id == beacon.id }
-        assertNotNull("B must receive A's entry pulse", received)
-        val payloadJson = received!!.payload!!.content
-        val payload = WireJson.decodeFromString<SelfPresencePayload>(payloadJson)
-        assertEquals(UserMode.FREE, payload.mode)
+        // New contract (echo-loop fix): the beacon is verified and dedup-known,
+        // feeds the receiver's mesh view, but is ephemeral — never archived.
+        assert(beacon.id in b.gossipEngine.knownMessageIds()) {
+            "B must have verified and recorded A's entry pulse"
+        }
+        assert(b.knownMessages().none { it.id == beacon.id }) {
+            "SELF_PRESENCE must not be persisted in B's message store"
+        }
+        assertEquals(
+            "A's declared mode must land in B's assembled mesh view",
+            UserMode.FREE,
+            b.meshView.assembleView("b", UserMode.MOBILE, emptyList()).modes[a.userId],
+        )
     }
 
     @Test

@@ -15,6 +15,7 @@ import com.rumor.mesh.MainActivity
 import com.rumor.mesh.R
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.logging.RumorLog
+import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.mode.ModeState
@@ -119,6 +120,7 @@ class MeshService : Service(), MeshController {
     /** §5: true while the mesh wiring is live — see the guard in [startMesh]. */
     @Volatile private var meshStarted = false
     private val contactRepo: com.rumor.mesh.core.data.ContactRepository by inject()
+    private val messageRepo: com.rumor.mesh.core.data.MessageRepository by inject()
     private val contactDao: ContactDao by inject()
     private val transferSender: TransferSender by inject()
     // Injected for side effect — its constructor subscribes to incoming gossip.
@@ -193,6 +195,13 @@ class MeshService : Service(), MeshController {
         // path now drops self-authored echoes before ingest). Purge any such row
         // on every start so existing installs self-heal and the invariant holds.
         scope.launch { contactRepo.delete(identity.userId) }
+
+        // SELF_PRESENCE is ephemeral (verified, dedup-known, tracker-fed, never
+        // archived) as of the echo-loop fix, but builds ≤0.6.1 persisted every
+        // received beacon — stores grew 99% beacons, tripping the RBSR gate and
+        // re-shipping the same diff forever. Purge the accumulated rows on every
+        // start; re-received ids from unflashed peers no longer persist.
+        scope.launch { messageRepo.deleteByType(MessageType.SELF_PRESENCE) }
 
         // O98 Phase 3: the coordinator turns inbound SELF_PRESENCE beacons (fed
         // into meshViewTracker by the engine) into a stable backbone plan. Its

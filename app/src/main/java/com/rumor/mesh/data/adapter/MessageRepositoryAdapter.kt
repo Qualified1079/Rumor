@@ -2,6 +2,7 @@ package com.rumor.mesh.data.adapter
 
 import com.rumor.mesh.core.data.MessageRepository
 import com.rumor.mesh.core.model.ContentType
+import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.sync.RbsrItem
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.RumorMessage
@@ -19,6 +20,7 @@ class MessageRepositoryAdapter(private val dao: MessageDao) : MessageRepository 
     override suspend fun markRead(id: String) = dao.markRead(id)
     override suspend fun markRelayed(id: String) = dao.markRelayed(id)
     override suspend fun deleteById(id: String) = dao.deleteById(id)
+    override suspend fun deleteByType(type: MessageType) = dao.deleteByType(type)
 
     override suspend fun offerable(limit: Int): List<RumorMessage> =
         dao.offerable(limit).map(MessageEntity::toMessage)

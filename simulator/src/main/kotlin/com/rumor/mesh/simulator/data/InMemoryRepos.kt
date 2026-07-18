@@ -56,6 +56,10 @@ class InMemoryMessageRepository : MessageRepository {
         messages.remove(id)
         _flow.value = messages.values.toList()
     }
+    override suspend fun deleteByType(type: com.rumor.mesh.core.model.MessageType) {
+        messages.values.filter { it.type == type }.forEach { messages.remove(it.id) }
+        _flow.value = messages.values.toList()
+    }
 
     override suspend fun offerable(limit: Int): List<RumorMessage> =
         messages.values

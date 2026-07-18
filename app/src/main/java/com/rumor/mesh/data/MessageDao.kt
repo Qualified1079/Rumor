@@ -1,6 +1,7 @@
 package com.rumor.mesh.data
 
 import androidx.room.*
+import com.rumor.mesh.core.model.MessageType
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -76,6 +77,9 @@ interface MessageDao {
     /** O40 — purge a specific id (signed-DELETE flow). No-op if id is absent. */
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM messages WHERE type = :type")
+    suspend fun deleteByType(type: MessageType)
 
     @Query("SELECT COUNT(*) FROM messages")
     suspend fun count(): Int

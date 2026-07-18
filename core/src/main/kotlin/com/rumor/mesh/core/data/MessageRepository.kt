@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.data
 
+import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.sync.RbsrItem
 import kotlinx.coroutines.flow.Flow
@@ -38,6 +39,13 @@ interface MessageRepository {
     suspend fun markRelayed(id: String)
     /** O40 — purge a specific id (signed-DELETE flow). No-op if id is absent. */
     suspend fun deleteById(id: String)
+
+    /**
+     * Purge every message of one type. Start-time repair for ephemeral types
+     * that older builds persisted (SELF_PRESENCE beacon bloat — the echo-loop
+     * fix stops new ones persisting; this clears the accumulated rows).
+     */
+    suspend fun deleteByType(type: MessageType)
 
     /**
      * Offer-eligible content for gossip reseed (O92): BROADCAST/DIRECT with

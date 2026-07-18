@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.identity.IdentityManager
+import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.identity.LocalIdentity
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.PeerPresence
@@ -162,7 +163,10 @@ class ThreadViewModel(
                         bytes = decrypted,
                         originalLength = msg.compressionOriginalLength,
                         maxOutputBytes = PaddingBuckets.MAX_SINGLE_MESSAGE,
-                    ) ?: return "[decompression failed]"
+                    ) ?: run {
+                        RumorLog.w("ThreadViewModel", "DM decompress failed for msg ${msg.id}")
+                        return "[decompression failed]"
+                    }
                     inflated.decodeToString()
                 } else {
                     decrypted.toString(Charsets.UTF_8)
@@ -172,5 +176,8 @@ class ThreadViewModel(
                 // long-term static — caller owns its lifecycle; we don't touch it.
                 sharedKey.fill(0)
             }
-        }.getOrElse { "[decryption failed]" }
+        }.getOrElse {
+            RumorLog.w("ThreadViewModel", "DM decrypt failed for msg ${msg.id}", it)
+            "[decryption failed]"
+        }
 }
