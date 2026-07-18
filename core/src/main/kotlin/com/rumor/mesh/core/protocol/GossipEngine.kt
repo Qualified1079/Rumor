@@ -1115,6 +1115,15 @@ class GossipEngine(
     /** O38 — exposed for sender-side consultation in composeDirect (follow-up). */
     val prekeyCache: PrekeyCache = PrekeyCache()
 
+    /**
+     * O124 — host-wired on-demand pulse (composes a SELF_PRESENCE with the
+     * host's current mode + adjacency). Null disables solicited replies.
+     * Self-echoes never reach [handleSelfPresence] (dropped upstream) and
+     * dedup fires the handler at most once per beacon, so this cannot loop.
+     */
+    var presencePulse: (() -> Unit)? = null
+    private val presenceReplyGate = com.rumor.mesh.core.routing.PresenceReplyGate(clock)
+
     private fun handleSelfPresence(msg: RumorMessage) {
         val tracker = meshView ?: return
         val json = msg.payload?.content ?: return
@@ -1124,7 +1133,13 @@ class GossipEngine(
         // Subject is the beacon author. authorizedAtMs is the beacon's own
         // timestamp; MeshViewTracker clamps a future value and applies decay.
         // recentlyExchangedWith is the author's advertised adjacency.
+        val wasFresh = tracker.hasFresh(msg.senderId)
         tracker.record(msg.senderId, payload.mode, payload.recentlyExchangedWith, payload.authorizedAtMs)
+        // O124 solicited response: a pulse from an unknown-or-stale peer gets our
+        // own pulse back (they're as blind to us as we were to them), gated
+        // per-peer by OUR clock so probe spam can't force reply spam.
+        val pulse = presencePulse ?: return
+        if (presenceReplyGate.shouldReply(msg.senderId, wasFresh)) pulse()
     }
 
     private fun handlePrekeyPublish(msg: RumorMessage) {

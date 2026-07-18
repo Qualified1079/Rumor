@@ -256,6 +256,12 @@ class MeshService : Service(), MeshController {
             }
         }
 
+        // O124: answer a pulse from an unknown-or-stale peer with our own
+        // (engine-gated per-peer cooldown; see PresenceReplyGate).
+        gossipEngine.presencePulse = {
+            gossipEngine.composeSelfPresence(modeState.mode.value, coordinator.beaconNeighbors())
+        }
+
         // ── O98: SELF_PRESENCE beacon loop ───────────────────────────────────
         // Advertise our mode + recent-exchange adjacency so every node's view can
         // span us into the backbone. See MOBILE_BEACON_FLOOR_MS for why MOBILE
@@ -452,6 +458,13 @@ class MeshService : Service(), MeshController {
         bleDiscovery.stop()
         bleDiscovery.start()
         wifiDirectTransport.rediscoverPeers()
+        // O124: announce, don't just listen — a node with no completed exchange
+        // is invisible to the mesh regardless of radio state; an immediate pulse
+        // rides the next exchange instead of waiting out the beacon timer.
+        gossipEngine.composeSelfPresence(
+            modeState.mode.value,
+            persistenceCoordinator?.beaconNeighbors() ?: emptyList(),
+        )
     }
 
     override fun isServiceRunning() = true

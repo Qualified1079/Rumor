@@ -74,6 +74,11 @@ class MeshViewTracker(
         true
     }
 
+    /** True if we hold a non-stale beacon entry for [peerUserId] (O124 solicited-reply gate). */
+    fun hasFresh(peerUserId: String): Boolean = synchronized(this) {
+        peers[peerUserId]?.let { !isStale(it) } == true
+    }
+
     /**
      * The peer's effective mode now. Fresh beacon → its declared mode; stale or
      * unknown → [UserMode.MOBILE] (the conservative "not a reliable anchor"
