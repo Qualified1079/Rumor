@@ -92,6 +92,17 @@ class HlcClock(
     fun current(): HlcTimestamp = synchronized(this) { last }
 
     companion object {
+        /**
+         * Why 10 years (SHTF drift model, 2026-07-18): quartz RTC physics buys
+         * only ±1–4 h over a ~5-year device half-life (±20–50 ppm crystal,
+         * cold-bias ~-13 ppm, aging ±1–3 ppm/yr). The dominant real errors are
+         * discrete and BACKWARD — dead RTC power resets to epoch (~56 y) or
+         * ROM build date (the 64-day field phone) — which the max-fold handles
+         * unbounded by design. Forward errors are only manual-set mistakes
+         * (≤ ~1 y) since hardware never fails forward; 10 y sits an order of
+         * magnitude past the worst organic forward error while still killing
+         * the Long.MAX-pin attack this bound exists for.
+         */
         const val DEFAULT_MAX_DRIFT_MS = 10 * 365 * 24 * 3600_000L
         /** Counter sanity ceiling — bounds Int-overflow games from a hostile stamp. */
         const val MAX_COUNTER = 1_000_000
