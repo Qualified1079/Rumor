@@ -30,6 +30,7 @@ Key invariants:
 - No premature abstractions. Three similar lines beats a helper. No feature flags.
 - Coined project terms are defined in `docs/GLOSSARY.md`; wire history in `docs/RENAMED_FIELDS_NEVER_REUSE.md`.
 - Room schema changes: bump `RumorDatabase.version`. Uses `fallbackToDestructiveMigration()` in dev. Current version: **9** (see the version history KDoc in `RumorDatabase.kt`).
+- **Git (user directive 2026-07-19): commit and push directly to `main` — do NOT create a feature branch.** This overrides the default "branch first on the default branch" reflex. Force-push stays denied.
 
 ## DI (Koin) wiring
 
