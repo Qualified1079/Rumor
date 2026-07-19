@@ -307,3 +307,40 @@ These are not resolvable from the web at this hour; recording them so they don't
 - [KMP supported platforms](https://kotlinlang.org/docs/multiplatform/supported-platforms.html)
 - [ACINQ/secp256k1-kmp](https://github.com/ACINQ/secp256k1-kmp)
 - [Compose Multiplatform iOS stable 2025](https://www.kmpship.app/blog/compose-multiplatform-ios-stable-2025)
+
+## 12. O54/O4/O5 — Radio transport for inter-island bridging: drivers + legality (2026-07-19)
+
+Scope note (user directive): NOT a hardware shopping list — people use whatever radio works. This is the *driver/software* reality and the *legal landscape as guidance only* (default-legal shipped posture, but the architecture must NOT forbid other bands, since in true SHTF the laws don't apply and a community may need other spectrum).
+
+### The legality gate — points cleanly at ISM/LoRa, not ham
+- **Amateur (ham) bands forbid encryption.** FCC Part 97 §97.113(a)(4) bans "messages in codes or ciphers intended to obscure the meaning." Rumor is E2E-encrypted by design, so its traffic is **not legal on ham bands** (2m/70cm packet, AX.25-on-VHF/UHF, VARA, Winlink). The petition to allow emergency encryption (RM-11699) was dismissed. It's intent-based: an "unspecified digital code" is legal only if not meant to obscure meaning — encryption fails that test by definition.
+- **Unlicensed ISM (Part 15) EXPECTS encryption.** LoRa 902–928 MHz (US), 863–870 MHz (EU), plus WiFi 2.4/5 GHz — encrypted payloads are routine and intended here. **This is exactly Meshtastic's legal basis** and the precedent Rumor follows: an encrypted mesh belongs on ISM, license-free, no ham ticket. Caveat from the sources: "915 MHz is LoRa" does not auto-answer the legal question — the *station* must be operated under Part-15 device rules, not amateur rules.
+- **Design principle (user directive):** ship legal by default (ISM/LoRa + WiFi), but do NOT bake a band whitelist into the wire or architecture. The transport-plugin SPI (O107) carries opaque frames and stays band-agnostic; which radio/band a plugin drives is the plugin's and operator's concern, never something core structurally forbids. Compliance is the default posture, not a hard gate.
+
+### Driver/software reality (what a node can actually drive — the only hardware question that matters)
+- **Android phone → USB-serial radio: viable and mature.** `mik3y/usb-serial-for-android` drives CDC/ACM + FTDI + others over USB-OTG, no root, Android 4.2+, pure-Java (AOSP/F-Droid-safe, no proprietary blob); CDC/ACM auto-detected by interface type since v3.5. This is the software path for **O4 (bridge USB transport)** — a phone talks to a USB LoRa modem directly. Precedent app: USBRFMApp. (BLE LoRa already works via the existing Meshtastic/MeshCore bridges.)
+- **Linux anchor node → LoRa as KISS TNC: rich, kernel-native.** Consumer LoRa radios become KISS modems over `/dev/ttyUSB*` (MeshTNC, kiss-lora, sh123's Arduino KISS modem), feeding the Linux kernel's mature AX.25/KISS/6PACK stack. An O106 :node drives LoRa with off-the-shelf serial + kernel networking, no custom driver. (The AX.25 *stack* is reusable software; running it as encrypted ISM LoRa rather than ham packet is what keeps it legal.)
+- **SDR/TNC** (rtl-sdr/SoapySDR) exist but sit outside the kernel AX.25 path — heavier, later, not needed for the first radio transport.
+
+### Bandwidth reality — shapes what the radio lane is FOR
+- LoRa is a **trickle**: 0.3–27 kbit/s (SF12→SF7). US 915 MHz = 400 ms dwell / frequency-hopping (relatively permissive); EU 868 MHz = **1% duty cycle ≈ 36 s of airtime per hour** → as few as ~36 SF12 packets/hour on a sub-band, ~900/hour at SF7.
+- **Implication for O54/O5 design:** the LoRa inter-island link is a **text/control lane, not a file pipe.** Bridge signed text + routing/presence + tiny control frames; never chunked media. This makes **O76 compression load-bearing on the radio path** (every byte counts against duty cycle) and argues for a *store-and-forward digest* across islands rather than live relay. WiFi-directional long-haul (the other laptop affordance) is the higher-bandwidth island link where line-of-sight exists; LoRa is the low-bandwidth, non-line-of-sight fallback.
+
+### How many Rumor texts actually cross a 1% duty-cycle LoRa link?
+Effective bitrate = raw LoRa bitrate × 1% duty (EU 868). Raw = SF × (BW/2^SF) × CR; at BW=125 kHz, CR=4/5: SF7 ≈ 5.5 kbps, SF12 ≈ 0.29 kbps. So the *airtime budget* is 36 s/hour, and average throughput is:
+- **SF12 (max range — the reason you'd use LoRa for distance):** ~2.9 bps avg → **~1.3 KB/hour.**
+- **SF7 (short range):** ~55 bps avg → **~25 KB/hour.**
+
+Against message size (per-packet preamble/header overhead makes small packets a bit worse than the raw KB/hr implies):
+- Today's **JSON-wire signed text ≈ 400–500 bytes** (the Ed25519 sig alone is 64 B ≈ 88 base64 chars, incompressible; plus 64-hex sender id, UUID, field names). → SF12: **~3 texts/hour**; SF7: **~50 texts/hour**.
+- A hypothetical **compact binary framing ≈ 120–140 bytes** (sig 64 + sender ref 32 + compressed text/meta ~30). → SF12: **~8–10 texts/hour**; SF7: **~150–185 texts/hour**.
+
+**US 915 MHz** has no 1% cap (400 ms dwell + frequency hopping), so it runs materially higher — hundreds/hour at SF7, still bandwidth-bound but far better than EU at SF12.
+
+**Headline:** at long range you get *single digits to ~10 short texts per hour*; at short range, tens to low-hundreds. This is a **store-and-forward digest lane**, full stop — and it makes three things load-bearing on the radio path specifically: (1) a **compact binary framing** (not the JSON wire) — it ~3×'s the message count; (2) O76 **compression**; (3) **amortizing signatures** by batching several messages under one signed envelope, since the 64-byte sig dominates a short text. None of this touches the phone-P2P wire — it's a radio-transport-plugin concern.
+
+### Takeaway for the backlog
+- First radio transport under O54: **LoRa over serial/USB**, ISM-legal, KISS on the Linux node + usb-serial-for-android on the phone, framed as a low-bandwidth text/control transport behind the O107 SPI. The Meshtastic/MeshCore BLE bridges already prove the pattern; this extends it to USB + the Linux anchor.
+- Owed if pursued: EU-vs-US duty-cycle handling in the scheduler (a radio transport must respect airtime budgets — ties to O43 token-bucket work), and whether to reuse Meshtastic's on-air framing vs a Rumor-native LoRa format.
+
+Sources: [FCC/ARRL encryption prohibition](https://www.arrl.org/news/fcc-dismisses-encryption-petition), [encryption intent nuance](https://www.amateurradio.com/encryption-is-already-legal-its-the-intention-thats-not/), [Meshtastic/MeshCore 868 & the ham trap](https://shop.rf.guru/pages/meshtastic-meshcore-868-mhz-and-the-ham-radio-trap), [MeshCore/Meshtastic FAQ](https://nodakmesh.org/faq), [usb-serial-for-android](https://github.com/mik3y/usb-serial-for-android), [MeshTNC (LoRa→KISS)](https://github.com/datapartyjs/MeshTNC), [Linux AX.25 HOWTO](https://tldp.org/HOWTO/AX25-HOWTO/x495.html), [TTN EU868 duty cycle](https://www.thethingsnetwork.org/docs/lorawan/regional-parameters/eu868/), [LoRa time-on-air calculator](https://embedwise.com/calculators/lora-time-on-air/).
