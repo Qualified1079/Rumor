@@ -1,7 +1,5 @@
 # Handoff — marathon field+fix session (2026-07-18 evening): echo loop dead, DM crypto fixed, O114+O95 closed, fleet on 0.6.8
 
-**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
-
 Everything committed AND pushed; all suites green; fleet (Samsung R58M30FSJKE /
 Moto ZY22KP7F59 / OnePlus ec5b0707) flashed **0.6.8-hlc-long-counter (vc29)**
 together. No known-failing tests, no partial fixes in flight — clean stop.
@@ -58,11 +56,6 @@ together. No known-failing tests, no partial fixes in flight — clean stop.
 
 ## Standing directives recorded this session
 
-- **Do NOT reflash the Samsung S10e to LineageOS** — it is the only repro
-  platform for the new **O94 observation**: Samsung-as-client churns
-  connect→session→P2P-disconnect→rejoin on a ~11s cycle (delivery unaffected;
-  OnePlus holds fine in the same group; first time Samsung was a client).
-  LineageOS pass happens on a DIFFERENT spare (O56 note updated).
 - **Prebuilt-first reflex** (memory `prebuilt-first-reflex`): before coding
   anything new, check for a tested existing impl; say so at plan time.
   (Session origin: LocalOnlyHotspot-vs-O98 review — verdict: LOHO is
