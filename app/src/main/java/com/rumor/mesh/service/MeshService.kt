@@ -263,11 +263,11 @@ class MeshService : Service(), MeshController {
         gossipEngine.hlc.restore(
             com.rumor.mesh.core.time.HlcTimestamp(
                 hlcPrefs.getLong("wallMs", 0L),
-                hlcPrefs.getInt("counter", 0),
+                hlcPrefs.getLong("counter", 0L),
             )
         )
         gossipEngine.hlc.onAdvance = { ts ->
-            hlcPrefs.edit().putLong("wallMs", ts.wallMs).putInt("counter", ts.counter).apply()
+            hlcPrefs.edit().putLong("wallMs", ts.wallMs).putLong("counter", ts.counter).apply()
         }
 
         // O124: answer a pulse from an unknown-or-stale peer with our own

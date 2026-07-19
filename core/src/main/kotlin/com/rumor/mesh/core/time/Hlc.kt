@@ -21,7 +21,7 @@ import kotlinx.atomicfu.locks.synchronized
  * append the message id (concurrent events have no true order — the
  * tiebreak just has to be the same on every node).
  */
-data class HlcTimestamp(val wallMs: Long, val counter: Int) : Comparable<HlcTimestamp> {
+data class HlcTimestamp(val wallMs: Long, val counter: Long) : Comparable<HlcTimestamp> {
     override fun compareTo(other: HlcTimestamp): Int {
         val w = wallMs.compareTo(other.wallMs)
         return if (w != 0) w else counter.compareTo(other.counter)
@@ -104,7 +104,15 @@ class HlcClock(
          * the Long.MAX-pin attack this bound exists for.
          */
         const val DEFAULT_MAX_DRIFT_MS = 10 * 365 * 24 * 3600_000L
-        /** Counter sanity ceiling — bounds Int-overflow games from a hostile stamp. */
-        const val MAX_COUNTER = 1_000_000
+        /**
+         * Counter sanity ceiling — bounds overflow games from a hostile stamp.
+         * Long + astronomical ceiling on purpose: under a wall pin (the
+         * accepted G42 attack) EVERY node's counter increments on every event
+         * for years — an Int-scale ceiling gets crossed by a busy relay in
+         * weeks, after which peers reject its legit stamps and causality
+         * breaks. 1e15 is ~31,000 years of 1kHz events: unreachable honestly,
+         * still 4 orders of magnitude under Long overflow.
+         */
+        const val MAX_COUNTER = 1_000_000_000_000_000L
     }
 }

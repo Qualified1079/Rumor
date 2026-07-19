@@ -26,7 +26,7 @@ val RumorMessage.hlcTimestamp: HlcTimestamp?
         val sep = raw.indexOf(':')
         if (sep <= 0) return null
         val wall = raw.substring(0, sep).toLongOrNull() ?: return null
-        val counter = raw.substring(sep + 1).toIntOrNull() ?: return null
+        val counter = raw.substring(sep + 1).toLongOrNull() ?: return null
         return HlcTimestamp(wall, counter)
     }
 
