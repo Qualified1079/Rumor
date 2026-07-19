@@ -62,6 +62,8 @@ class SentAtMsLintTest {
         "app/src/main/java/com/rumor/mesh/data/MessageDao.kt",
         // Test fixtures (stamping demo messages, fuzz seed JSON literals)
         "core/src/test/kotlin/com/rumor/mesh/core/model/TrafficClassInvariantTest.kt",
+        // O95 wire-carrier test fixture (message constructor literal only)
+        "core/src/test/kotlin/com/rumor/mesh/core/wire/HlcExtTest.kt",
         // ours (check-online): loopback wire-harness fixtures stamp sentAtMs directly.
         "core/src/test/kotlin/com/rumor/mesh/core/transport/wifidirect/GossipSessionWireTest.kt",
         // O93 LAN-transport loopback fixture stamps sentAtMs at compose time

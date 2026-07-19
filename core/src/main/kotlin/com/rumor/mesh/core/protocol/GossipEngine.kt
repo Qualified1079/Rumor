@@ -42,6 +42,8 @@ import com.rumor.mesh.core.platform.Uuid
 import com.rumor.mesh.core.platform.ConcurrentMap
 import com.rumor.mesh.core.platform.AtomicCounter
 import com.rumor.mesh.core.wire.WireJson
+import com.rumor.mesh.core.wire.hlcTimestamp
+import com.rumor.mesh.core.wire.withHlc
 import com.rumor.mesh.core.wire.withCompressionMetadata
 import com.rumor.mesh.core.wire.withMentions
 import com.rumor.mesh.core.wire.withReplyTo
@@ -990,6 +992,11 @@ class GossipEngine(
         }
         val msg = clamped.copy(trustLevel = finalTrust)
 
+        // O95: fold the sender's HLC stamp into local state — after full
+        // verification (a forged message must not advance our clock) and
+        // drift-clamped inside HlcClock against adversarial far-future values.
+        msg.hlcTimestamp?.let { hlc.update(it) }
+
         // O29 Tier 1: record a breadcrumb pointing back through the peer that
         // delivered this message. Bridged messages are skipped because the
         // synthetic senderId doesn't map to a Rumor-mesh path. The cost of
@@ -1114,6 +1121,15 @@ class GossipEngine(
 
     /** O38 — exposed for sender-side consultation in composeDirect (follow-up). */
     val prekeyCache: PrekeyCache = PrekeyCache()
+
+    /**
+     * O95 — the node's Hybrid Logical Clock. Stamped into `_ext.hlc` on every
+     * compose, folded on every verified receive. Public so the host can wire
+     * persistence (restore at start, onAdvance → durable store) — HLC state
+     * must survive restart or a behind-clock node composes below its own
+     * pre-restart stamps.
+     */
+    val hlc = com.rumor.mesh.core.time.HlcClock { clock.now() }
 
     /**
      * O124 — host-wired on-demand pulse (composes a SELF_PRESENCE with the
@@ -1337,7 +1353,9 @@ class GossipEngine(
             signature = "",
         )
         val sig = CryptoManager.sign(messageStore.signableBytes(unsigned), identity.privateKeyBytes).toBase64()
-        return unsigned.copy(signature = sig)
+        // O95: HLC stamp rides _ext (unsigned, like every _ext field) so it can
+        // be applied after signing without invalidating the sig.
+        return unsigned.copy(signature = sig).withHlc(hlc.tick())
     }
 
     companion object {

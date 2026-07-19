@@ -53,6 +53,52 @@ class HlcTest {
     }
 
     @Test
+    fun `adversarial far-future remote is drift-clamped, human-scale skew passes`() {
+        val now = 1_700_000_000_000
+        val clock = HlcClock { now }
+        clock.tick()
+        // Human-scale clock damage passes untouched — from a 64-day-slow node's
+        // viewpoint every CORRECT peer looks +64d, so this must never clamp.
+        val legit = now + 64L * 24 * 3600 * 1000
+        assertEquals(legit, clock.update(HlcTimestamp(legit, 0)).wallMs)
+        // Absurd (adversarial) values are bounded at now + 10y.
+        val r = clock.update(HlcTimestamp(now + 20L * 365 * 24 * 3600 * 1000, 0))
+        assertEquals(now + HlcClock.DEFAULT_MAX_DRIFT_MS, r.wallMs)
+    }
+
+    @Test
+    fun `nonsense remote stamps are ignored outright`() {
+        val clock = HlcClock { 1_000L }
+        val before = clock.tick()
+        assertEquals(before, clock.update(HlcTimestamp(-5, 0)))
+        assertEquals(before, clock.update(HlcTimestamp(2_000, -1)))
+        assertEquals(before, clock.update(HlcTimestamp(2_000, HlcClock.MAX_COUNTER + 1)))
+    }
+
+    @Test
+    fun `restore is a max-merge and never moves the clock backward`() {
+        val clock = HlcClock { 1_000L }
+        clock.restore(HlcTimestamp(50_000, 3))
+        assertEquals(HlcTimestamp(50_000, 3), clock.current())
+        clock.restore(HlcTimestamp(10, 0))
+        assertEquals(HlcTimestamp(50_000, 3), clock.current())
+        // Next local event sorts after the restored point.
+        assertTrue(clock.tick() > HlcTimestamp(50_000, 3))
+    }
+
+    @Test
+    fun `onAdvance fires with every new value`() {
+        var now = 1_000L
+        val clock = HlcClock { now }
+        val seen = mutableListOf<HlcTimestamp>()
+        clock.onAdvance = { seen += it }
+        clock.tick()
+        now = 2_000
+        clock.update(HlcTimestamp(3_000, 1))
+        assertEquals(listOf(HlcTimestamp(1_000, 0), HlcTimestamp(3_000, 2)), seen)
+    }
+
+    @Test
     fun `comparability is lexicographic`() {
         assertTrue(HlcTimestamp(1, 5) < HlcTimestamp(2, 0))
         assertTrue(HlcTimestamp(2, 0) < HlcTimestamp(2, 1))

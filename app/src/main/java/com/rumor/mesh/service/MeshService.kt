@@ -256,6 +256,20 @@ class MeshService : Service(), MeshController {
             }
         }
 
+        // O95: HLC state must survive restart — a behind-clock node would
+        // otherwise compose below its own pre-restart stamps. Restore is a
+        // max-merge (never moves the clock backward); every advance persists.
+        val hlcPrefs = getSharedPreferences("rumor_hlc", MODE_PRIVATE)
+        gossipEngine.hlc.restore(
+            com.rumor.mesh.core.time.HlcTimestamp(
+                hlcPrefs.getLong("wallMs", 0L),
+                hlcPrefs.getInt("counter", 0),
+            )
+        )
+        gossipEngine.hlc.onAdvance = { ts ->
+            hlcPrefs.edit().putLong("wallMs", ts.wallMs).putInt("counter", ts.counter).apply()
+        }
+
         // O124: answer a pulse from an unknown-or-stale peer with our own
         // (engine-gated per-peer cooldown; see PresenceReplyGate).
         gossipEngine.presencePulse = {

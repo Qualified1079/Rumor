@@ -12,7 +12,9 @@ import com.rumor.mesh.core.model.PeerPresence
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.MessageStore
 import com.rumor.mesh.core.routing.OnlineStatusTracker
+import com.rumor.mesh.core.model.displayTimeMs
 import com.rumor.mesh.core.wire.CompressedPaddedCodec
+import com.rumor.mesh.core.wire.hlcTimestamp
 import com.rumor.mesh.core.wire.PaddingBuckets
 import com.rumor.mesh.core.wire.compressionAad
 import com.rumor.mesh.core.wire.compressionOriginalLength
@@ -77,7 +79,23 @@ class ThreadViewModel(
                     flowOf(emptyList())
                 } else {
                     messageStore.observeThread(identity.userId, peerId).map { msgs ->
-                        msgs.map { msg -> msg.toDisplay(identity) }
+                        // O95: display order is (hlc, id) — causal, survives broken
+                        // wall clocks. Pre-HLC messages fall back to displayTimeMs
+                        // (≈ HLC wall for accurate clocks, so mixing is coherent).
+                        // The hlc wall is clamped against receivedAtMs (local ground
+                        // truth) so a forged far-future stamp can't pin a message to
+                        // the bottom of the thread — preserves the G32 property the
+                        // raw stamp would lose. 48h slack covers legit sender skew.
+                        msgs.sortedWith(
+                            compareBy(
+                                {
+                                    val h = it.hlcTimestamp?.wallMs ?: return@compareBy it.displayTimeMs
+                                    minOf(h, it.receivedAtMs + HLC_DISPLAY_SLACK_MS)
+                                },
+                                { it.hlcTimestamp?.counter ?: 0 },
+                                { it.id },
+                            )
+                        ).map { msg -> msg.toDisplay(identity) }
                     }
                 }
             }
@@ -180,4 +198,8 @@ class ThreadViewModel(
             RumorLog.w("ThreadViewModel", "DM decrypt failed for msg ${msg.id}", it)
             "[decryption failed]"
         }
+
+    companion object {
+        const val HLC_DISPLAY_SLACK_MS = 48 * 3600_000L
+    }
 }
