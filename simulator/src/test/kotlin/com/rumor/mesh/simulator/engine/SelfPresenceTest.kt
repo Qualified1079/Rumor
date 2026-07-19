@@ -35,6 +35,11 @@ class SelfPresenceTest {
 
         SimTransport(a, b).exchange(kotlin.random.Random(1))
         awaitUntil { beacon.id in b.gossipEngine.knownMessageIds() }
+        // The dedup id is recorded at ingest, the mesh-view entry a moment later
+        // in the handler — await the LAST effect before asserting on any of them.
+        awaitUntil {
+            b.meshView.assembleView("b", UserMode.MOBILE, emptyList()).modes[a.userId] == UserMode.FREE
+        }
 
         // New contract (echo-loop fix): the beacon is verified and dedup-known,
         // feeds the receiver's mesh view, but is ephemeral — never archived.

@@ -27,19 +27,22 @@ class SolicitedPresenceReplyTest {
             b.gossipEngine.composeSelfPresence(UserMode.MOBILE)
         }
 
-        // First pulse: A is unknown to B → one reply.
+        // First pulse: A is unknown to B → one reply. The dedup id is recorded
+        // before the handler's reply fires — await the reply itself, not the id.
         val beacon1 = a.gossipEngine.composeSelfPresence(UserMode.FREE)!!
         a.flushSchedulerToRepo()
         SimTransport(a, b).exchange(kotlin.random.Random(1))
-        awaitUntil { beacon1.id in b.gossipEngine.knownMessageIds() }
+        awaitUntil { replies == 1 }
         assertEquals("first pulse from an unknown peer must solicit one reply", 1, replies)
 
         // Second pulse right after: A is now fresh in B's view AND inside the
-        // cooldown → no further reply.
+        // cooldown → no further reply. Absence needs a settle window after the
+        // id lands (the would-be reply fires right after the id record).
         val beacon2 = a.gossipEngine.composeSelfPresence(UserMode.FREE)!!
         a.flushSchedulerToRepo()
         SimTransport(a, b).exchange(kotlin.random.Random(2))
         awaitUntil { beacon2.id in b.gossipEngine.knownMessageIds() }
+        kotlinx.coroutines.delay(300)
         assertEquals("repeat probe must not force another reply", 1, replies)
     }
 

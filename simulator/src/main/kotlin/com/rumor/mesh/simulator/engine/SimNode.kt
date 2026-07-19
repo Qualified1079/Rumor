@@ -34,7 +34,7 @@ import kotlinx.coroutines.launch
  */
 class SimNode(
     val index: Int,
-    private val scope: CoroutineScope,
+    parentScope: CoroutineScope,
     /**
      * O29 A/B toggle. When false, GossipEngine is constructed with
      * breadcrumbs=null and the routing-bias + per-peer filter become no-ops —
@@ -50,6 +50,20 @@ class SimNode(
      */
     val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
 ) {
+    /**
+     * O12/O114 escalation — per-node serialized execution. GossipEngine's
+     * internal handlers race under a parallel dispatcher, making handler order
+     * (and thus totalMessages / drop counts) vary run-to-run; that variance
+     * caused the first real CI failure (PerPeerRoutingTest). A parallelism-1
+     * view of the parent dispatcher serializes each node's handlers without
+     * spawning a thread per node (500-node sims stay cheap). Nodes still run
+     * concurrently with each other — only intra-node order is pinned.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val scope = CoroutineScope(
+        parentScope.coroutineContext + kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)
+    )
+
     /**
      * O98 — this node's declared [UserMode]. Scenarios set it before composing
      * self-presence beacons (`composeSelfPresence(mode, …)`); it feeds the
