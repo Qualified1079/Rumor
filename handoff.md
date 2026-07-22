@@ -30,10 +30,19 @@ backlog intake:
    broadcast A→B, converged to overlap=1.0. Run:
    `./gradlew :node:installDist && node/build/install/node/bin/node`.
 
-**Next:** field check — phone on the same Wi-Fi exchanges with the node
-(`source=LAN` in logcat; user drives phone UI per workflow memory). Then use
-the node to repro open protocol items (O126 HLC crash path, O124/O127
-presence behavior) before fixing them. Product node (O106 d/e) stays parked.
+**Field check DONE (same day):** the OnePlus on the same Wi-Fi hit the O126
+HLC prefs crash on unlock — *exactly* as the audit predicted (§17). Fixed
+(defensive `getLong`→`getInt` fallback with one-time rewrite), shipped as
+**0.6.9-hlc-prefs-guard (vc30)**, installed in-place over the poisoned prefs,
+unlock started the mesh cleanly, and the phone exchanged with the laptop node
+over LAN to overlap=1.0 (node: peers=1, stored=14). O126 → G43. **The node
+paid for itself on day one** — the field check and a real bug repro/fix were
+the same session. Other fleet phones still run vc29; flash vc30 at next
+convenience (crash only affects devices that ran the intermediate putInt
+builds).
+
+**Next:** use the node to repro O124/O127 presence behavior; O100 remains the
+next queue feature. Product node (O106 d/e) stays parked.
 
 ---
 

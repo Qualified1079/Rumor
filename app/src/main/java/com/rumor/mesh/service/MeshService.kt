@@ -180,9 +180,20 @@ class MeshService : Service(), MeshController {
             modeProvider = { modeState.mode.value },
             beaconIntervalMsProvider = { modeState.envelope.presenceBeaconIntervalMs },
             hlcStore = object : com.rumor.mesh.core.runtime.HlcStore {
+                // O126: builds between 386832d and 83258e9 wrote these keys with
+                // putInt; getLong on an Int-typed key throws ClassCastException,
+                // crashing every startMesh() on in-place upgrades (field-hit on
+                // the OnePlus 2026-07-22). Read defensively, rewrite as Long so
+                // the fallback runs once per key.
+                private fun readLong(key: String): Long = try {
+                    hlcPrefs.getLong(key, 0L)
+                } catch (e: ClassCastException) {
+                    val v = hlcPrefs.getInt(key, 0).toLong()
+                    hlcPrefs.edit().remove(key).putLong(key, v).apply()
+                    v
+                }
                 override fun load() = com.rumor.mesh.core.time.HlcTimestamp(
-                    hlcPrefs.getLong("wallMs", 0L),
-                    hlcPrefs.getLong("counter", 0L),
+                    readLong("wallMs"), readLong("counter"),
                 )
                 override fun save(ts: com.rumor.mesh.core.time.HlcTimestamp) {
                     hlcPrefs.edit().putLong("wallMs", ts.wallMs).putLong("counter", ts.counter).apply()
