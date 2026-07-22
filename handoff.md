@@ -41,8 +41,43 @@ the same session. Other fleet phones still run vc29; flash vc30 at next
 convenience (crash only affects devices that ran the intermediate putInt
 builds).
 
-**Next:** use the node to repro O124/O127 presence behavior; O100 remains the
-next queue feature. Product node (O106 d/e) stays parked.
+**Then — first real use of the node as an adversarial instrument (2026-07-22):**
+
+- **O124 verified on hardware:** search-button tap fires an immediate
+  SELF_PRESENCE (announce half); fresh/unknown node gets solicited-replied
+  (solicit half). Both confirmed.
+- **O127 measured → severity DOWNGRADED.** `:node --sybil` harness (mints N
+  ephemeral identities, one SELF_PRESENCE each): 20 sybils → **20 phone pulse
+  fires (1:1 — fresh-identity gate bypass is real)** but only **~4-5 reply
+  broadcasts propagate** to a 1-hop peer (ephemeral SELF_PRESENCE eviction
+  self-limits). Audit's "mesh-wide amplification" overstated; real cost is
+  **local sign/battery**, not a network storm. Row reframed to battery/DoS
+  hardening. Measurement method = the new `GossipEngine` "presence
+  solicit-reply →" debug line + harness.
+- **O112 hostile strings — protocol/storage layer PASSES.** Fired
+  null/SQL/format-string/RTL-override/zero-width/emoji-control/json/500KB
+  broadcasts through the real compose path at the phone: all ingested,
+  verified, stored, **zero FATAL/OOM/ANR**, link recovered to overlap=1.0.
+  **Remaining: display-layer** (Compose rendering of RTL/zero-width) needs
+  eyeballs on the phone feed — can't observe via logcat.
+- **Two robustness fixes shipped** (committed `aff4038`): LanTransport now
+  re-targets a peer loop when mDNS re-resolves a NEW port (field-hit: app
+  reflash → new ephemeral port → peers blind for minutes; pinned by a
+  loopback test); node `pickLanAddress` skips virtual bridges (was
+  nondeterministically binding virbr0).
+- **O126 fixed & field-verified** → G43, 0.6.9-hlc-prefs-guard (vc30).
+- **O131 filed:** contacts-list scroll jank (UX pass at UI time).
+
+**Next adversarial targets (not yet run):** O108/O109 transfer-metadata OOM
+(audit #2, highest severity, remotely triggerable — but likely crashes the app
+app, which IS the finding; needs a hand-crafted signed TRANSFER_METADATA
+driver); O128 HLC/OnlineStatus future-timestamp poison. O100 remains the next
+queue *feature*. Product node (O106 d/e) parked.
+
+**Fleet:** OnePlus on 0.6.9 (vc30) WITH presence instrumentation; Samsung/Moto
+still vc29. Phone gets a new LAN port on every reflash — the port-refresh fix
+means peers now auto-recover, but MY test drivers still look the port up from
+the observer node's `LAN peer … at 10.0.0.25:PORT` log line.
 
 ---
 
