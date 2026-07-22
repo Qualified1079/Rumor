@@ -1,4 +1,43 @@
-# Handoff — overnight research/audit session (2026-07-19); no code changes
+# Handoff — :node headless test node shipped (2026-07-22)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+
+Session executed `docs/NODE_KICKOFF.md` end-to-end plus the 2026-07-19 audit
+backlog intake:
+
+1. **Audit intake:** O126–O130 filed in CLAUDE.md Tier 4 (HLC prefs crash,
+   sybil reply-storm, OnlineStatusTracker clamp, vacuous room test, residue
+   grab-bag); §15 Rooms-enforcement finding folded into O89/O79 row bodies.
+2. **MeshRuntime extraction (`core/runtime/MeshRuntime.kt`):** host-agnostic
+   orchestration out of `MeshService.startMesh()` — reseed, startup purges,
+   PersistenceCoordinator + beacon/recompute loops, HLC persistence behind an
+   `HlcStore` port, incoming-sink + backbone-realizer lambdas.
+   `onExchange(result, feedsCoordinator)` is the transport seam (LAN passes
+   false per O93). MeshService now builds the runtime and keeps only Android
+   edges (transports, notifications, BLE loop, plugins, binder). Behavior
+   byte-identical by construction; `:core`+`:simulator`+`:app` suites green.
+3. **`:node` module (4th Gradle module):** real engine + MeshRuntime over the
+   G40 `LanTransport`, in-memory repos (`InMemoryRepos.kt` moved
+   `:simulator/data` → `core/data/memory/` — pure git-mv + package rename),
+   file-backed identity + HLC in `~/.rumor-node` (unencrypted, test
+   instrument only), STATIC mode, localhost status page on
+   `http://127.0.0.1:8180/` (JDK HttpServer, zero new deps: peers, stored
+   messages, event log, send-broadcast form; `/status` one-liner + `POST
+   /send` for scripted driving). Console: any stdin line broadcasts; EOF
+   parks headless.
+4. **Verified on this machine:** two node instances mDNS-discovered each
+   other, ran signed HELLO + gossip sessions, delivered an HTTP-composed
+   broadcast A→B, converged to overlap=1.0. Run:
+   `./gradlew :node:installDist && node/build/install/node/bin/node`.
+
+**Next:** field check — phone on the same Wi-Fi exchanges with the node
+(`source=LAN` in logcat; user drives phone UI per workflow memory). Then use
+the node to repro open protocol items (O126 HLC crash path, O124/O127
+presence behavior) before fixing them. Product node (O106 d/e) stays parked.
+
+---
+
+# Prior handoff — overnight research/audit session (2026-07-19); no code changes
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
 

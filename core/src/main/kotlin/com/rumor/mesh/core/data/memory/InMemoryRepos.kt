@@ -1,4 +1,4 @@
-package com.rumor.mesh.simulator.data
+package com.rumor.mesh.core.data.memory
 
 import com.rumor.mesh.core.data.BlockEntryRepository
 import com.rumor.mesh.core.data.BlocklistEntryRepository

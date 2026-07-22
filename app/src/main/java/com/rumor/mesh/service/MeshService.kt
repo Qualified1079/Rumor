@@ -15,7 +15,6 @@ import com.rumor.mesh.MainActivity
 import com.rumor.mesh.R
 import com.rumor.mesh.core.identity.IdentityManager
 import com.rumor.mesh.core.logging.RumorLog
-import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.mode.ModeState
@@ -72,30 +71,14 @@ class MeshService : Service(), MeshController {
     private val NOTIFICATION_ID = 1
     /** Gossip-round cadence while a Rumor peer is BLE-visible. */
     private val GOSSIP_ROUND_INTERVAL_MS = 15_000L
-    /**
-     * O98: how often the coordinator recomputes the backbone from gossiped
-     * beacons. Fast enough to react to a peer joining within a couple of gossip
-     * rounds; the reconciler's hysteresis absorbs the churn.
-     */
-    private val BACKBONE_RECOMPUTE_INTERVAL_MS = 12_000L
-    /**
-     * O98: SELF_PRESENCE floor even in MOBILE. The ModeEnvelope leaves MOBILE at
-     * `presenceBeaconIntervalMs = null` ("mode-change pulses only" per O30/O57 to
-     * avoid advertising as an anchor), but the backbone planner needs every
-     * participating node visible in the view or its edges get dropped — a MOBILE
-     * phone that never beacons can't be spanned into the backbone at all. The
-     * beacon is a tiny CONTROL message that rides existing gossip rounds (no extra
-     * radio wake), so a conservative floor is cheap; it only sets adjacency
-     * freshness, well under MeshViewTracker's 6-min stale window.
-     */
-    private val MOBILE_BEACON_FLOOR_MS = 90_000L
 
     /**
-     * O98 Phase 3 coordinator (brain). Built at [startMesh] from the unlocked
-     * identity; drives the backbone plan the transport's isPriorityPeer gate
-     * consults. Null until the mesh is running.
+     * O106: the host-agnostic orchestration (reseed, purges, coordinator,
+     * beacon/recompute loops, HLC persistence, incoming→plugins). Built at
+     * [startMesh] from the unlocked identity; null until the mesh is running.
+     * This service is one host of it — the :node desktop runtime is another.
      */
-    @Volatile private var persistenceCoordinator: com.rumor.mesh.core.routing.PersistenceCoordinator? = null
+    @Volatile private var meshRuntime: com.rumor.mesh.core.runtime.MeshRuntime? = null
 
     private val bleDiscovery: BleDiscoveryManager by inject()
     private val wifiDirectTransport: WifiDirectTransport by inject()
@@ -184,34 +167,32 @@ class MeshService : Service(), MeshController {
         if (meshStarted) return
         meshStarted = true
 
-        // O92: rehydrate the volatile scheduler + dedup filter from the durable
-        // store so a restarted phone actually offers its buffered messages on the
-        // next exchange (otherwise: "0 sent, 0 received" with a full repo).
-        scope.launch { gossipEngine.reseedFromStore() }
-
-        // Invariant: a node's own identity is never a contact. An older build
-        // could persist one when a self-authored message echoed back through a
-        // relay and hit MessageStore.ingest → ensureContact(self) (the receive
-        // path now drops self-authored echoes before ingest). Purge any such row
-        // on every start so existing installs self-heal and the invariant holds.
-        scope.launch { contactRepo.delete(identity.userId) }
-
-        // SELF_PRESENCE is ephemeral (verified, dedup-known, tracker-fed, never
-        // archived) as of the echo-loop fix, but builds ≤0.6.1 persisted every
-        // received beacon — stores grew 99% beacons, tripping the RBSR gate and
-        // re-shipping the same diff forever. Purge the accumulated rows on every
-        // start; re-received ids from unflashed peers no longer persist.
-        scope.launch { messageRepo.deleteByType(MessageType.SELF_PRESENCE) }
-
-        // O98 Phase 3: the coordinator turns inbound SELF_PRESENCE beacons (fed
-        // into meshViewTracker by the engine) into a stable backbone plan. Its
-        // backbonePeers set gates which links the transport holds persistent.
-        val coordinator = com.rumor.mesh.core.routing.PersistenceCoordinator(
-            selfId = identity.userId,
+        // O106: everything host-agnostic (reseed, purges, coordinator, beacon +
+        // recompute loops, HLC persistence, incoming→plugins) lives in the
+        // shared MeshRuntime; this service supplies only the Android edges.
+        val hlcPrefs = getSharedPreferences("rumor_hlc", MODE_PRIVATE)
+        val runtime = com.rumor.mesh.core.runtime.MeshRuntime(
+            gossipEngine = gossipEngine,
+            identityProvider = identityManager,
+            contactRepo = contactRepo,
+            messageRepo = messageRepo,
             meshView = meshViewTracker,
-            selfMode = { modeState.mode.value },
+            modeProvider = { modeState.mode.value },
+            beaconIntervalMsProvider = { modeState.envelope.presenceBeaconIntervalMs },
+            hlcStore = object : com.rumor.mesh.core.runtime.HlcStore {
+                override fun load() = com.rumor.mesh.core.time.HlcTimestamp(
+                    hlcPrefs.getLong("wallMs", 0L),
+                    hlcPrefs.getLong("counter", 0L),
+                )
+                override fun save(ts: com.rumor.mesh.core.time.HlcTimestamp) {
+                    hlcPrefs.edit().putLong("wallMs", ts.wallMs).putLong("counter", ts.counter).apply()
+                }
+            },
+            incomingSink = { msg -> pluginRegistry.onMessageReceived(msg) },
+            backboneRealizer = { role -> wifiDirectTransport.applyBackboneRole(role) },
         )
-        persistenceCoordinator = coordinator
+        meshRuntime = runtime
+        runtime.start(scope)
 
         // ── Wire transport → gossip engine ───────────────────────────────────
         // TransportConfig is immutable — no mutable vars on WifiDirectTransport.
@@ -227,7 +208,7 @@ class MeshService : Service(), MeshController {
             // addition to any manually-pinned contact. This is the seam the
             // planner uses to control persistent-link retention.
             isPriorityPeer      = { userId ->
-                persistenceCoordinator?.backbonePeers?.contains(userId) == true ||
+                meshRuntime?.coordinator?.backbonePeers?.contains(userId) == true ||
                     contactRepo.getById(userId)?.isPriorityPeer == true
             },
             onExchangeFailed    = gossipEngine::onExchangeFailed,
@@ -239,73 +220,13 @@ class MeshService : Service(), MeshController {
             rbsrItemsProvider   = gossipEngine::rbsrSnapshot,
         )
 
-        // ── Wire gossip engine output → plugins ──────────────────────────────
-        scope.launch {
-            gossipEngine.incomingMessages.collect { msg ->
-                pluginRegistry.onMessageReceived(msg)
-            }
-        }
-
         // ── Wire transport output → gossip engine ────────────────────────────
+        // O98: a completed P2P exchange is a realizable backbone edge — the
+        // runtime records it so we advertise it in our own beacon and budget
+        // our degree (feedsCoordinator defaults true).
         scope.launch {
             wifiDirectTransport.exchangeResults.collect { result ->
-                gossipEngine.onExchange(result)
-                // O98: a completed exchange is a realizable backbone edge — record
-                // it so we advertise it in our own beacon and budget our degree.
-                coordinator.onExchanged(result.peerUserId)
-            }
-        }
-
-        // O95: HLC state must survive restart — a behind-clock node would
-        // otherwise compose below its own pre-restart stamps. Restore is a
-        // max-merge (never moves the clock backward); every advance persists.
-        val hlcPrefs = getSharedPreferences("rumor_hlc", MODE_PRIVATE)
-        gossipEngine.hlc.restore(
-            com.rumor.mesh.core.time.HlcTimestamp(
-                hlcPrefs.getLong("wallMs", 0L),
-                hlcPrefs.getLong("counter", 0L),
-            )
-        )
-        gossipEngine.hlc.onAdvance = { ts ->
-            hlcPrefs.edit().putLong("wallMs", ts.wallMs).putLong("counter", ts.counter).apply()
-        }
-
-        // O124: answer a pulse from an unknown-or-stale peer with our own
-        // (engine-gated per-peer cooldown; see PresenceReplyGate).
-        gossipEngine.presencePulse = {
-            gossipEngine.composeSelfPresence(modeState.mode.value, coordinator.beaconNeighbors())
-        }
-
-        // ── O98: SELF_PRESENCE beacon loop ───────────────────────────────────
-        // Advertise our mode + recent-exchange adjacency so every node's view can
-        // span us into the backbone. See MOBILE_BEACON_FLOOR_MS for why MOBILE
-        // still beacons here despite the null envelope interval.
-        scope.launch {
-            while (isActive) {
-                gossipEngine.composeSelfPresence(modeState.mode.value, coordinator.beaconNeighbors())
-                delay(modeState.envelope.presenceBeaconIntervalMs ?: MOBILE_BEACON_FLOOR_MS)
-            }
-        }
-
-        // ── O98: backbone recompute loop ─────────────────────────────────────
-        // Fold the assembled view through planner + reconciler on a fixed tick.
-        // Logs every change so the coordinator-free convergence is observable in
-        // logcat during multi-device testing.
-        scope.launch {
-            while (isActive) {
-                delay(BACKBONE_RECOMPUTE_INTERVAL_MS)
-                val s = coordinator.recompute()
-                if (s.changed || s.backbonePeers.isNotEmpty()) {
-                    RumorLog.i(
-                        TAG,
-                        "O98 backbone: view=${s.viewNodes}n/${s.viewEdges}e planned=${s.plannedLinks} " +
-                            "held=${s.heldLinks} peers=${s.backbonePeers.map { it.take(8) }} " +
-                            "+${s.added.size}/-${s.removed.size}",
-                    )
-                }
-                // Phase 3b: realize the held backbone as actual radio state.
-                // Idempotent while healthy; the transport owns retry/fallback.
-                wifiDirectTransport.applyBackboneRole(coordinator.selfRole())
+                runtime.onExchange(result)
             }
         }
 
@@ -344,7 +265,7 @@ class MeshService : Service(), MeshController {
                 // so peers re-weight this node's routing role without waiting for
                 // the next beacon interval (entry AND exit — a MOBILE beacon is the
                 // demotion pulse).
-                gossipEngine.composeSelfPresence(newMode, coordinator.beaconNeighbors())
+                runtime.pulseNow(newMode)
             }
         }
 
@@ -372,7 +293,9 @@ class MeshService : Service(), MeshController {
         lanManager.onTransportUp = { t ->
             lanCollectJob?.cancel()
             lanCollectJob = scope.launch {
-                t.exchangeResults.collect { result -> gossipEngine.onExchange(result) }
+                // feedsCoordinator=false: see the O93 note above — LAN links are
+                // not backbone-realizable P2P edges.
+                t.exchangeResults.collect { result -> runtime.onExchange(result, feedsCoordinator = false) }
             }
         }
         lanManager.start()
@@ -431,7 +354,8 @@ class MeshService : Service(), MeshController {
         pluginRegistry.unregisterAll()
         bleDiscovery.stop()
         wifiDirectTransport.stop()
-        persistenceCoordinator = null
+        meshRuntime?.stop()
+        meshRuntime = null
     }
 
     // ── MeshController (exposed to UI via binder) ─────────────────────────────
@@ -475,10 +399,7 @@ class MeshService : Service(), MeshController {
         // O124: announce, don't just listen — a node with no completed exchange
         // is invisible to the mesh regardless of radio state; an immediate pulse
         // rides the next exchange instead of waiting out the beacon timer.
-        gossipEngine.composeSelfPresence(
-            modeState.mode.value,
-            persistenceCoordinator?.beaconNeighbors() ?: emptyList(),
-        )
+        meshRuntime?.pulseNow()
     }
 
     override fun isServiceRunning() = true

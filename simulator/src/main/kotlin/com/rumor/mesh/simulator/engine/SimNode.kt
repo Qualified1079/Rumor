@@ -13,15 +13,15 @@ import com.rumor.mesh.core.scheduler.Scheduler
 import com.rumor.mesh.core.transfer.AssembledTransfer
 import com.rumor.mesh.core.transfer.TransferAssembler
 import com.rumor.mesh.core.transfer.TransferSender
-import com.rumor.mesh.simulator.data.InMemoryBlockEntryRepository
-import com.rumor.mesh.simulator.data.InMemoryBlocklistEntryRepository
-import com.rumor.mesh.simulator.data.InMemoryBreadcrumbRepository
-import com.rumor.mesh.simulator.data.InMemoryChunkRepository
-import com.rumor.mesh.simulator.data.InMemoryContactRepository
-import com.rumor.mesh.simulator.data.InMemoryMessageRepository
-import com.rumor.mesh.simulator.data.InMemoryRouteRepository
-import com.rumor.mesh.simulator.data.InMemorySubscribedBlocklistRepository
-import com.rumor.mesh.simulator.data.InMemoryTransferRepository
+import com.rumor.mesh.core.data.memory.InMemoryBlockEntryRepository
+import com.rumor.mesh.core.data.memory.InMemoryBlocklistEntryRepository
+import com.rumor.mesh.core.data.memory.InMemoryBreadcrumbRepository
+import com.rumor.mesh.core.data.memory.InMemoryChunkRepository
+import com.rumor.mesh.core.data.memory.InMemoryContactRepository
+import com.rumor.mesh.core.data.memory.InMemoryMessageRepository
+import com.rumor.mesh.core.data.memory.InMemoryRouteRepository
+import com.rumor.mesh.core.data.memory.InMemorySubscribedBlocklistRepository
+import com.rumor.mesh.core.data.memory.InMemoryTransferRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,7 +82,7 @@ class SimNode(
     private val chunkRepo       = InMemoryChunkRepository()
     private val blockEntryRepo  = InMemoryBlockEntryRepository()
     /** O79 — per-node room-subscription store, in-memory. Exposed so scenarios can add subscriptions. */
-    val roomSubscriptionRepo    = com.rumor.mesh.simulator.data.InMemoryRoomSubscriptionRepository()
+    val roomSubscriptionRepo    = com.rumor.mesh.core.data.memory.InMemoryRoomSubscriptionRepository()
     private val subscribedRepo  = InMemorySubscribedBlocklistRepository()
     private val blocklistRepo   = InMemoryBlocklistEntryRepository()
 

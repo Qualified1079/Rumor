@@ -152,7 +152,7 @@ class PerPeerRoutingTest {
         )
     }
 
-    private fun SimNode.contactRepoForTest(): com.rumor.mesh.simulator.data.InMemoryContactRepository =
+    private fun SimNode.contactRepoForTest(): com.rumor.mesh.core.data.memory.InMemoryContactRepository =
         this::class.java.getDeclaredField("contactRepo").apply { isAccessible = true }
-            .get(this) as com.rumor.mesh.simulator.data.InMemoryContactRepository
+            .get(this) as com.rumor.mesh.core.data.memory.InMemoryContactRepository
 }

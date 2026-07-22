@@ -1,5 +1,11 @@
 # :node kickoff — headless test node first (2026-07-19)
 
+> **STATUS 2026-07-22: DONE.** Both steps shipped — `core/runtime/MeshRuntime.kt`
+> (MeshService hosts it, behavior-preserving, all suites green) and the `:node`
+> module (LAN transport + in-memory repos + file identity/HLC + localhost status
+> page). Two-node loopback exchange verified end-to-end; phone-on-LAN field check
+> is the remaining verification. See the O106 row for the durable record.
+
 Self-contained starter so a fresh instance can begin the `:node` work (O106) without
 inheriting a long conversation. Read this + the O106 row + `CLAUDE.md`.
 

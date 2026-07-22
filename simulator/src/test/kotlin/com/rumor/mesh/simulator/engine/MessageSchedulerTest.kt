@@ -1,8 +1,8 @@
 package com.rumor.mesh.simulator.engine
 
 import com.rumor.mesh.core.scheduling.MessageScheduler
-import com.rumor.mesh.simulator.data.InMemoryContactRepository
-import com.rumor.mesh.simulator.data.InMemoryScheduledMessageRepository
+import com.rumor.mesh.core.data.memory.InMemoryContactRepository
+import com.rumor.mesh.core.data.memory.InMemoryScheduledMessageRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

@@ -5,7 +5,7 @@ package com.rumor.mesh.core.data
  *
  * Pure interface. Impls live in:
  *  - `:app/data/adapter/RoomSubscriptionRepositoryAdapter.kt`     (Room/SQLite)
- *  - `:simulator/data/InMemoryRoomSubscriptionRepository`         (in-memory stub)
+ *  - `:core/data/memory/InMemoryRoomSubscriptionRepository`         (in-memory stub)
  *
  * **Conceptual model:** the user is subscribed to zero or more
  * [RoomSubscription] records. Each subscription pins (a) the

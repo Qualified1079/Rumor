@@ -8,8 +8,8 @@ import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.DuplicateFilter
 import com.rumor.mesh.core.protocol.MessageStore
-import com.rumor.mesh.simulator.data.InMemoryContactRepository
-import com.rumor.mesh.simulator.data.InMemoryMessageRepository
+import com.rumor.mesh.core.data.memory.InMemoryContactRepository
+import com.rumor.mesh.core.data.memory.InMemoryMessageRepository
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

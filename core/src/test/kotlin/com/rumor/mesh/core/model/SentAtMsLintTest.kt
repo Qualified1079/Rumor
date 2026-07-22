@@ -55,7 +55,7 @@ class SentAtMsLintTest {
         // Simulator compose + RBSR ordering key
         "simulator/src/main/kotlin/com/rumor/mesh/simulator/engine/SimTransport.kt",
         // O92 offerable/knownIds ordering + O42 RbsrItem keys — RBSR/scheduler ordering, not display.
-        "simulator/src/main/kotlin/com/rumor/mesh/simulator/data/InMemoryRepos.kt",
+        "core/src/main/kotlin/com/rumor/mesh/core/data/memory/InMemoryRepos.kt",
         "simulator/src/main/kotlin/com/rumor/mesh/simulator/engine/MessageGenerator.kt",
         // Room entity column + DAO ordering query (the O64-safe `MIN(sentAtMs, receivedAtMs)`)
         "app/src/main/java/com/rumor/mesh/data/Entities.kt",

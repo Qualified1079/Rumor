@@ -1,9 +1,9 @@
 package com.rumor.mesh.simulator.engine
 
 import com.rumor.mesh.core.block.BlockManager
-import com.rumor.mesh.simulator.data.InMemoryBlockEntryRepository
-import com.rumor.mesh.simulator.data.InMemoryBlocklistEntryRepository
-import com.rumor.mesh.simulator.data.InMemorySubscribedBlocklistRepository
+import com.rumor.mesh.core.data.memory.InMemoryBlockEntryRepository
+import com.rumor.mesh.core.data.memory.InMemoryBlocklistEntryRepository
+import com.rumor.mesh.core.data.memory.InMemorySubscribedBlocklistRepository
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

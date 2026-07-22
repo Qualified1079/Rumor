@@ -2,6 +2,7 @@ package com.rumor.mesh.simulator.data
 
 import com.rumor.mesh.core.data.RoomSubscription
 import com.rumor.mesh.core.data.RoomSubscriptionMode
+import com.rumor.mesh.core.data.memory.InMemoryRoomSubscriptionRepository
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
