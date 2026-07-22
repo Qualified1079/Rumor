@@ -1155,7 +1155,13 @@ class GossipEngine(
         // own pulse back (they're as blind to us as we were to them), gated
         // per-peer by OUR clock so probe spam can't force reply spam.
         val pulse = presencePulse ?: return
-        if (presenceReplyGate.shouldReply(msg.senderId, wasFresh)) pulse()
+        if (presenceReplyGate.shouldReply(msg.senderId, wasFresh)) {
+            // O124/O127 instrumentation: one line per solicited pulse fire, so a
+            // sybil-storm harness can count amplification directly instead of
+            // inferring it from evictable downstream broadcasts.
+            RumorLog.d(TAG, "presence solicit-reply → ${msg.senderId.take(8)} (wasFresh=$wasFresh)")
+            pulse()
+        }
     }
 
     private fun handlePrekeyPublish(msg: RumorMessage) {

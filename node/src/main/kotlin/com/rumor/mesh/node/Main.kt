@@ -53,6 +53,13 @@ fun main(args: Array<String>) {
     val opts = parseArgs(args)
     RumorLog.debugMode = !opts.quiet
 
+    // O127 test harness — mint N sybil identities against a target phone, then exit.
+    if (opts.sybilTarget != null) {
+        val (ip, port) = opts.sybilTarget.split(":").let { it[0] to it[1].toInt() }
+        SybilDriver(ip, port, opts.sybilCount, opts.sybilDelayMs).run()
+        return
+    }
+
     val dataDir = File(opts.dataDir)
     val identityProvider = NodeIdentityProvider(dataDir)
     val identity = identityProvider.identity.value ?: error("identity init failed")
@@ -132,6 +139,7 @@ fun main(args: Array<String>) {
         hlcStore = FileHlcStore(dataDir),
         incomingSink = { msg ->
             status.record("RECV ${msg.type} from ${msg.senderId.take(12)}…")
+            status.tally(msg.id, msg.type.name, msg.senderId.take(8))
         },
         // LAN-only host: no P2P group to realize.
         backboneRealizer = {},
@@ -179,6 +187,9 @@ private data class Opts(
     val httpPort: Int = 8180,
     val dataDir: String = System.getProperty("user.home") + "/.rumor-node",
     val quiet: Boolean = false,
+    val sybilTarget: String? = null,
+    val sybilCount: Int = 20,
+    val sybilDelayMs: Long = 200,
 )
 
 private fun parseArgs(args: Array<String>): Opts {
@@ -190,17 +201,29 @@ private fun parseArgs(args: Array<String>): Opts {
             "--http" -> { opts = opts.copy(httpPort = args[++i].toInt()) }
             "--data" -> { opts = opts.copy(dataDir = args[++i]) }
             "--quiet" -> { opts = opts.copy(quiet = true) }
-            else -> error("unknown arg ${args[i]} — usage: node [--bind <ip>] [--http <port>] [--data <dir>] [--quiet]")
+            "--sybil" -> { opts = opts.copy(sybilTarget = args[++i]) }
+            "--sybil-count" -> { opts = opts.copy(sybilCount = args[++i].toInt()) }
+            "--sybil-delay" -> { opts = opts.copy(sybilDelayMs = args[++i].toLong()) }
+            else -> error("unknown arg ${args[i]} — usage: node [--bind <ip>] [--http <port>] [--data <dir>] [--quiet] | --sybil <ip:port> [--sybil-count N] [--sybil-delay ms]")
         }
         i++
     }
     return opts
 }
 
-/** First site-local IPv4 on an up, non-loopback interface — the LAN face. */
+/**
+ * First site-local IPv4 on an up, physical LAN interface. Skips virtual
+ * bridges (libvirt virbr, docker, veth, vbox) — those are site-local too but
+ * unreachable by a phone on the real Wi-Fi, and interface enumeration order
+ * isn't stable, so a naive firstOrNull picked virbr0 nondeterministically
+ * (field-hit 2026-07-22). `--bind` overrides this entirely.
+ */
 private fun pickLanAddress(): InetAddress? =
     NetworkInterface.getNetworkInterfaces().asSequence()
-        .filter { runCatching { it.isUp && !it.isLoopback && !it.isVirtual }.getOrDefault(false) }
+        .filter { runCatching { it.isUp && !it.isLoopback && !it.isVirtual && !it.isPointToPoint }.getOrDefault(false) }
+        .filterNot { nif -> VIRTUAL_IFACE_PREFIXES.any { nif.name.startsWith(it) } }
         .flatMap { it.inetAddresses.asSequence() }
         .filterIsInstance<Inet4Address>()
         .firstOrNull { it.isSiteLocalAddress }
+
+private val VIRTUAL_IFACE_PREFIXES = listOf("virbr", "docker", "veth", "vboxnet", "br-", "vmnet")

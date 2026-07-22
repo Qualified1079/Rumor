@@ -132,6 +132,7 @@ class LanTransport(
         runCatching { serverSocket?.close() }
         serverSocket = null
         peerLoops.clear()
+        peerTarget.clear()
         activePeerSessions.clear()
         _peerCount.value = 0
         scope?.cancel()
@@ -146,6 +147,7 @@ class LanTransport(
 
         override fun serviceRemoved(event: ServiceEvent) {
             peerLoops.remove(event.name)?.cancel()
+            peerTarget.remove(event.name)
             _peerCount.value = peerLoops.size
         }
 
@@ -157,22 +159,35 @@ class LanTransport(
         }
     }
 
+    /** Last resolved endpoint per peer name — so a re-resolve to a NEW port re-targets. */
+    private val peerTarget = ConcurrentHashMap<String, String>()
+
     /**
      * Starts (or keeps) the round loop for a located peer. Exposed so tests
      * can drive the session path over loopback without multicast.
+     *
+     * A re-resolve carrying a *different* endpoint (address:port) cancels the
+     * stale loop and starts a fresh one: a peer that restarts gets a new
+     * ephemeral port every time (field-observed on app reflash 2026-07-22), and
+     * the old loop would otherwise keep dialing a dead port until its failure
+     * budget expired — minutes of blindness to a peer that's actually back.
      */
     internal fun onPeerLocated(name: String, address: InetAddress, port: Int) {
         val s = scope ?: return
+        val endpoint = "${address.hostAddress}:$port"
         peerLoops.compute(name) { _, existing ->
-            if (existing?.isActive == true) return@compute existing
+            if (existing?.isActive == true && peerTarget[name] == endpoint) return@compute existing
+            existing?.cancel()
+            peerTarget[name] = endpoint
             s.launch {
-                RumorLog.i(TAG, "LAN peer $name at ${address.hostAddress}:$port")
+                RumorLog.i(TAG, "LAN peer $name at $endpoint")
                 var failures = 0
                 while (isActive && failures < MAX_ROUND_FAILURES) {
                     failures = if (runRound(address, port)) 0 else failures + 1
                     delay(ROUND_INTERVAL_MS)
                 }
                 peerLoops.remove(name)
+                peerTarget.remove(name)
                 _peerCount.value = peerLoops.size
             }
         }

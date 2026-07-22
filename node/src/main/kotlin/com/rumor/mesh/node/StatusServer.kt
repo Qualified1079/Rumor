@@ -31,6 +31,19 @@ class StatusServer(
     /** Rolling operational event log (exchanges, inbox arrivals) — newest first. */
     val events = ConcurrentLinkedDeque<String>()
 
+    /** Cumulative distinct-message tally keyed by "TYPE" and "TYPE from <prefix>". */
+    private val counts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val seenIds = java.util.Collections.newSetFromMap(
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>(),
+    )
+
+    /** Tally a distinct inbound message. Ignores re-deliveries of the same id. */
+    fun tally(id: String, type: String, senderPrefix: String) {
+        if (!seenIds.add(id)) return
+        counts.merge(type, 1, Int::plus)
+        counts.merge("$type from $senderPrefix", 1, Int::plus)
+    }
+
     private val timeFmt = SimpleDateFormat("HH:mm:ss")
     private var server: HttpServer? = null
 
@@ -46,6 +59,13 @@ class StatusServer(
             ex.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
             ex.sendResponseHeaders(200, bytes.size.toLong())
             ex.responseBody.use { it.write(bytes) }
+        }
+        s.createContext("/counts") { ex ->
+            val body = counts.entries.sortedByDescending { it.value }
+                .joinToString("\n") { "${it.value}\t${it.key}" }
+                .plus("\n").toByteArray()
+            ex.sendResponseHeaders(200, body.size.toLong())
+            ex.responseBody.use { it.write(body) }
         }
         s.createContext("/status") { ex ->
             val body = "userId=$userId lan=${lanInfo()} peers=${peerCount()} stored=${storedMessages().size}\n"
