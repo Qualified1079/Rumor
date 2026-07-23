@@ -235,6 +235,40 @@ class SourceInvariantTest {
         }
     }
 
+    /**
+     * **Architecture invariant 6 (O121a / O5a constraint 1): `DmEnvelope.selfAuthenticating`
+     * has NO production reader until O5 DM bridging wires it — and when it does, the
+     * reader must gate on `MessageSource.LOCAL_BRIDGE`.**
+     *
+     * Today the flag is a documented contract with zero call sites; the actual
+     * security gate is invariant 2 (BRIDGE_UNSIGNED ⇒ LOCAL_BRIDGE only). The
+     * dangerous future change is someone consulting selfAuthenticating on the
+     * PEER receive path to skip Ed25519 — a downgrade attack surface. This guard
+     * pins today's emergent safety: any new production reference outside the
+     * interface definition fails the build until the author (a) implements the
+     * LOCAL_BRIDGE source gate alongside it and (b) updates this test to assert
+     * the gate's real shape instead.
+     */
+    @Test
+    fun `selfAuthenticating has no production reader outside its definition`() {
+        val roots = listOf("core/src/main", "app/src/main", "simulator/src/main", "node/src/main")
+        val offenders = roots.map { File(findRepoRoot(), it) }
+            .filter { it.isDirectory }
+            .flatMap { root -> root.walkTopDown().filter { it.extension == "kt" }.toList() }
+            .filter { it.name != "DmEnvelope.kt" && it.readText().contains("selfAuthenticating") }
+        if (offenders.isNotEmpty()) {
+            fail(
+                """
+                |`selfAuthenticating` is now referenced in production code: ${offenders.map { it.name }}.
+                |Per O5a constraint 1 it may only be honored for MessageSource.LOCAL_BRIDGE —
+                |peer transport must verify Ed25519 regardless. If you are wiring O5 DM
+                |bridging: add the source gate, then replace this guard with one asserting
+                |the gate's shape (like invariant 2 does for BRIDGE_UNSIGNED).
+                |""".trimMargin()
+            )
+        }
+    }
+
     /** Walk up from cwd looking for the repo root (settings.gradle.kts marker). */
     private fun findRepoRoot(): File {
         var dir: File? = File(".").canonicalFile

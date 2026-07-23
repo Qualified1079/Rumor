@@ -1053,10 +1053,16 @@ class GossipEngine(
         // recording every signed inbound is one upsert + prune per message —
         // dwarfed by signature verification already done in MessageStore.ingest.
         if (!bridged && fromPeerId != null && fromPeerId != msg.senderId) {
+            // O121(b): traversed hops = the type's own starting budget minus
+            // what's left. Using the broadcast budget for DIRECTs (budget 15)
+            // made every DM breadcrumb clamp to the floor — meaningless once
+            // routing consumes hopCount.
+            val startBudget =
+                if (msg.type == MessageType.DIRECT) DEFAULT_DIRECT_HOPS else DEFAULT_BROADCAST_HOPS
             breadcrumbs?.record(
                 targetUserId = msg.senderId,
                 fromPeerId = fromPeerId,
-                hopCount = (DEFAULT_BROADCAST_HOPS - msg.hopsToLive).coerceAtLeast(1),
+                hopCount = (startBudget - msg.hopsToLive).coerceAtLeast(1),
             )
         }
 

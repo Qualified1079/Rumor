@@ -95,9 +95,6 @@ interface MessageDao {
         )
     """)
     suspend fun evictOldest(count: Int)
-
-    @Query("DELETE FROM messages WHERE id = :id")
-    suspend fun delete(id: String)
 }
 
 /** Projection row for [MessageDao.rbsrItems]. */

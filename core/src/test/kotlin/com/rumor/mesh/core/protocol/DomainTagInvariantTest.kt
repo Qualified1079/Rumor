@@ -253,6 +253,29 @@ class DomainTagInvariantTest {
         )
     }
 
+    @Test
+    fun `O53 sealed-sender key HKDF info prefix is rumor-dm-recipient-tag-v1`() {
+        assertContainsTag(
+            file = "core/src/main/kotlin/com/rumor/mesh/core/protocol/SealedSenderKey.kt",
+            tag = "rumor-dm-recipient-tag-v1:",
+            purpose = "HKDF info prefix deriving the per-contact sealed-sender " +
+                "tag key from the static-static X25519 agreement. Drift means " +
+                "sender and recipient derive different tag keys and every " +
+                "delivery-tag match silently fails.",
+        )
+    }
+
+    @Test
+    fun `O89 room posting-cert signable-bytes domain tag is rumor-room-posting-cert-v1`() {
+        assertContainsTag(
+            file = "core/src/main/kotlin/com/rumor/mesh/core/model/RoomPostingCert.kt",
+            tag = "rumor-room-posting-cert-v1:",
+            purpose = "Posting-certificate signature scope (mod-signed write " +
+                "permission). Separate domain from the other Room structs so " +
+                "a cert sig can't be lifted onto an action or invite.",
+        )
+    }
+
     // ── O42 RBSR set reconciliation ───────────────────────────────────────────
 
     @Test

@@ -595,6 +595,7 @@ This table is the union of every tag emitted by `:core` commonMain code. Drift g
 | `"rumor-room-invite-v1:"` | RoomInvite signature (O79) | `roomInviteSignableBytes` |
 | `"rumor-room-action-v1:"` | RoomAction signature (O79: REMOVE_MESSAGE / KICK_USER / BAN_USER / UNBAN_USER) | `roomActionSignableBytes` |
 | `"rumor-room-envelope-v1:"` | MultiRecipientEnvelope outer sender signature (O79 ENCRYPTED room body) | `multiRecipientEnvelopeSignableBytes` |
+| `"rumor-room-posting-cert-v1:"` | Posting-certificate mod signature (O89 write permission; verifier not yet wired — see O89) | `RoomPostingCert.kt` |
 
 ### HMAC / HKDF / AEAD AAD prefixes (non-signature)
 
@@ -607,6 +608,7 @@ This table is the union of every tag emitted by `:core` commonMain code. Drift g
 | `"rumor-room-routing-key-v1"` | HKDF info: per-room routing-key derivation (O79) | `RoomRoutingTag.deriveEncryptedRoomRoutingKey` |
 | `"rumor-room-wrap-v1:"` | HKDF info prefix: per-recipient wrap-key derivation (O79) | `MultiRecipientEnvelopeCodec` |
 | `"rumor-o76:"` | AES-GCM AAD prefix: binds `_ext.cl` originalLength to the tag (O76) | `compressionAad` |
+| `"rumor-dm-recipient-tag-v1:"` | HKDF info prefix: per-contact sealed-sender tag key from static-static X25519 (O53) | `SealedSenderKey.derive` |
 
 ### Retired tags
 

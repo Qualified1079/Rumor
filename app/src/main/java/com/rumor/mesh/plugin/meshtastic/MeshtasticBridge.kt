@@ -157,7 +157,7 @@ class MeshtasticBridge(
             // side, plus for deduplication across hops — collisions are
             // statistically harmless at 32 bits over the time window the
             // network remembers.
-            id       = java.security.SecureRandom().nextInt(),
+            id       = kotlin.random.Random.nextInt(), // non-secret packet id; no CSPRNG needed
         )
         val frame = MeshtasticMessages.encodeToRadioPacket(packet)
         val ok = client.writeFrame(frame)
