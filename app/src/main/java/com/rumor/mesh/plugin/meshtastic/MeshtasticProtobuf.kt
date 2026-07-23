@@ -71,7 +71,9 @@ internal object MeshtasticProtobuf {
 
         fun readBytes(): ByteArray {
             val len = readInt()
-            require(pos + len <= end) { "Truncated length-delimited at pos=$pos len=$len" }
+            // O118: len >= 0 first — a negative varint length would pass the
+            // sum check and rewind pos (silent desync, worse than a crash).
+            require(len >= 0 && pos.toLong() + len <= end) { "Truncated length-delimited at pos=$pos len=$len" }
             val out = bytes.copyOfRange(pos, pos + len)
             pos += len
             return out
@@ -82,6 +84,11 @@ internal object MeshtasticProtobuf {
         /** Parse a sub-message via [block] inside a length-delimited boundary. */
         fun <T> readSubMessage(block: (Reader) -> T): T {
             val len = readInt()
+            // O118: unvalidated here while every sibling checked — an
+            // adversarial len could overflow pos+len negative (sub-reader with
+            // end < pos = silent truncation) or desync the outer reader for
+            // every subsequent field.
+            require(len >= 0 && pos.toLong() + len <= end) { "Truncated sub-message at pos=$pos len=$len" }
             val sub = Reader(bytes, pos, pos + len)
             pos += len
             return block(sub)
@@ -96,7 +103,7 @@ internal object MeshtasticProtobuf {
             when (wireType) {
                 0 -> readVarint()
                 1 -> { require(pos + 8 <= end); pos += 8 }
-                2 -> { val len = readInt(); require(pos + len <= end); pos += len }
+                2 -> { val len = readInt(); require(len >= 0 && pos.toLong() + len <= end); pos += len }
                 5 -> { require(pos + 4 <= end); pos += 4 }
                 else -> error("Unsupported wireType $wireType (legacy group?) — cannot skip")
             }
