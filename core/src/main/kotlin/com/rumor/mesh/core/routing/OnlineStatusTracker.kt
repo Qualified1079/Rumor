@@ -12,6 +12,16 @@ import kotlinx.coroutines.flow.asStateFlow
 private const val ONLINE_WINDOW_MS = 5 * 60 * 1000L
 private const val RECENTLY_WINDOW_MS = 30 * 60 * 1000L
 
+// O128: peer-asserted timestamps are clamped to now + this budget. Without it a
+// single far-future lastSeen propagates hop-to-hop (each merge keeps the max)
+// and pins a user "online" mesh-wide indefinitely. Same shape as the G42 HLC
+// display clamp: honest clock skew passes, poison decays like any real entry.
+private const val REMOTE_SKEW_BUDGET_MS = 2 * 60 * 1000L
+
+// O120: entries past this age are AWAY and excluded from snapshots — keeping
+// them only grows the map without bound over months of uptime.
+private const val PRUNE_RETENTION_MS = 24 * 60 * 60 * 1000L
+
 /**
  * Tracks the per-userId "last seen" timestamp and derives a coarse
  * [PeerPresence] for each known peer:
@@ -52,11 +62,19 @@ class OnlineStatusTracker : SynchronizedObject() {
     }
 
     fun mergeRemoteStatus(remoteUsers: Map<String, Long>) = synchronized(this) {
+        val ceiling = SystemClock.now() + REMOTE_SKEW_BUDGET_MS
         for ((id, ts) in remoteUsers) {
+            val clamped = minOf(ts, ceiling)
             val existing = lastSeen[id]
-            if (existing == null || ts > existing) lastSeen[id] = ts
+            if (existing == null || clamped > existing) lastSeen[id] = clamped
         }
         recompute()
+    }
+
+    /** O120: drop entries too old to ever surface again. Call from the host's maintenance tick. */
+    fun pruneStale(retentionMs: Long = PRUNE_RETENTION_MS) = synchronized(this) {
+        val cutoff = SystemClock.now() - retentionMs
+        if (lastSeen.entries.removeAll { it.value < cutoff }) recompute()
     }
 
     fun currentSnapshot(): Map<String, Long> = synchronized(this) {

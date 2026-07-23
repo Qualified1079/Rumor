@@ -119,6 +119,43 @@ class OnlineStatusTrackerTest {
     }
 
     @Test
+    fun `merge clamps far-future timestamp to skew budget`() {
+        val tracker = OnlineStatusTracker()
+        val farFuture = System.currentTimeMillis() + 365 * 24 * HOUR_MS
+        tracker.mergeRemoteStatus(mapOf("mallory" to farFuture))
+
+        val stored = tracker.currentSnapshot()["mallory"]
+        assertNotNull(stored)
+        // 2-min skew budget + generous test slack; the poison must not survive as-is.
+        assertTrue(
+            "stored ts must be clamped near now, was ${stored!! - System.currentTimeMillis()}ms ahead",
+            stored <= System.currentTimeMillis() + 3 * MINUTE_MS
+        )
+    }
+
+    @Test
+    fun `clamped future entry still counts as ONLINE now`() {
+        val tracker = OnlineStatusTracker()
+        val slightlyAhead = System.currentTimeMillis() + 30_000 // honest clock skew
+        tracker.mergeRemoteStatus(mapOf("alice" to slightlyAhead))
+        assertEquals(OnlineStatus.ONLINE, tracker.statusFor("alice"))
+    }
+
+    @Test
+    fun `pruneStale removes entries past retention and keeps fresh ones`() {
+        val tracker = OnlineStatusTracker()
+        val ancient = System.currentTimeMillis() - 25 * HOUR_MS
+        tracker.mergeRemoteStatus(mapOf("old" to ancient))
+        tracker.recordDirectContact("fresh")
+
+        tracker.pruneStale()
+
+        val snapshotAll = tracker.statuses.value
+        assertNull(snapshotAll["old"])
+        assertNotNull(snapshotAll["fresh"])
+    }
+
+    @Test
     fun `multiple users tracked independently`() {
         val tracker = OnlineStatusTracker()
         tracker.recordDirectContact("alice")

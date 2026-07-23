@@ -966,6 +966,19 @@ class GossipEngine(
         RumorLog.i(TAG, "Reseeded ${offerable.size} messages into scheduler on start")
     }
 
+    /**
+     * O120: one periodic hygiene entry point for every subsystem that accretes
+     * state — three of them shipped prunes that nothing ever called, so tables
+     * grew without bound over exactly the months-long uptimes O55 targets.
+     * MeshRuntime owns the tick; keep any new prunable state hooked in HERE so
+     * the next orphan can't happen (PruneWiringInvariantTest greps for this).
+     */
+    fun pruneMaintenance() {
+        breadcrumbs?.pruneOld()
+        topologyTracker.pruneStale()
+        onlineStatusTracker.pruneStale()
+    }
+
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private suspend fun processIncoming(

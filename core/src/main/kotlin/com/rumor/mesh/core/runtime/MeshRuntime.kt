@@ -127,6 +127,16 @@ class MeshRuntime(
             }
         }
 
+        // ── O120: state-hygiene loop ─────────────────────────────────────────
+        // Breadcrumbs, routes/neighbors, and online-status all accrete without
+        // this; their prunes existed for months with zero callers.
+        scope.launch {
+            while (isActive) {
+                delay(PRUNE_INTERVAL_MS)
+                gossipEngine.pruneMaintenance()
+            }
+        }
+
         // ── O98: backbone recompute loop ─────────────────────────────────────
         // Fold the assembled view through planner + reconciler on a fixed tick.
         // Logs every change so the coordinator-free convergence is observable
@@ -197,5 +207,11 @@ class MeshRuntime(
          * 6-min stale window.
          */
         const val MOBILE_BEACON_FLOOR_MS = 90_000L
+
+        /**
+         * O120: hygiene cadence. The prunes' own retention windows are 24h/7d,
+         * so hourly is generous; the calls are cheap fire-and-forget deletes.
+         */
+        const val PRUNE_INTERVAL_MS = 60 * 60 * 1000L
     }
 }
