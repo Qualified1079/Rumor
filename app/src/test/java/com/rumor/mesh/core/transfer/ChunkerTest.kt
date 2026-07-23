@@ -118,6 +118,65 @@ class ChunkerTest {
     }
 
     @Test
+    fun `missingIndicesWindowed never materializes more than the window`() {
+        // O109: a lying totalChunks must not build a giant list. Window=4.
+        val missing = Chunker.missingIndicesWindowed(
+            received = emptySet(), totalChunks = Int.MAX_VALUE, window = 4,
+        )
+        assertEquals(listOf(0, 1, 2, 3), missing)
+    }
+
+    @Test
+    fun `missingIndicesWindowed skips received and fills the window from the front`() {
+        val missing = Chunker.missingIndicesWindowed(
+            received = setOf(0, 1, 2), totalChunks = 100, window = 3,
+        )
+        assertEquals(listOf(3, 4, 5), missing)
+    }
+
+    @Test
+    fun `missingIndicesWindowed returns fewer than window near the end`() {
+        val missing = Chunker.missingIndicesWindowed(
+            received = setOf(0), totalChunks = 3, window = 1024,
+        )
+        assertEquals(listOf(1, 2), missing)
+    }
+
+    @Test
+    fun `isPlausibleMetadata accepts a self-consistent claim`() {
+        // 1500 bytes / 600-byte chunks = 3 chunks.
+        assertTrue(Chunker.isPlausibleMetadata(totalChunks = 3, chunkSize = 600, totalBytes = 1500))
+    }
+
+    @Test
+    fun `isPlausibleMetadata rejects Int-MAX chunk count`() {
+        // The O108 OOM shape: tiny bytes, absurd chunk count.
+        assertTrue(!Chunker.isPlausibleMetadata(Int.MAX_VALUE, chunkSize = 600, totalBytes = 1500))
+    }
+
+    @Test
+    fun `isPlausibleMetadata rejects inconsistent chunk-count vs bytes`() {
+        // Consistent value would be 3; claiming 1 is a lie that would truncate.
+        assertTrue(!Chunker.isPlausibleMetadata(totalChunks = 1, chunkSize = 600, totalBytes = 1500))
+    }
+
+    @Test
+    fun `isPlausibleMetadata rejects zero and oversize fields`() {
+        assertTrue(!Chunker.isPlausibleMetadata(0, 600, 1500))
+        assertTrue(!Chunker.isPlausibleMetadata(3, 0, 1500))
+        assertTrue(!Chunker.isPlausibleMetadata(3, 600, 0))
+        assertTrue(!Chunker.isPlausibleMetadata(3, Chunker.MAX_CHUNK_SIZE + 1, 1500))
+        assertTrue(!Chunker.isPlausibleMetadata(3, 600, Chunker.MAX_TOTAL_BYTES + 1))
+    }
+
+    @Test
+    fun `chunk output round-trips through isPlausibleMetadata`() {
+        // Whatever the chunker itself produces must always be plausible.
+        val (meta, _) = Chunker.chunk(ByteArray(5_000) { 7 }, ContentType.FILE)
+        assertTrue(Chunker.isPlausibleMetadata(meta.totalChunks, meta.chunkSize, meta.totalBytes))
+    }
+
+    @Test
     fun `metadata fields are populated correctly`() {
         val data = ByteArray(1_500) { 42 }
         val (meta, _) = Chunker.chunk(

@@ -30,6 +30,11 @@ private const val NACK_INITIAL_DELAY_MS = 60_000L
 private const val NACK_DELAY_CAP_MS = 600_000L
 private const val NACK_MAX_RETRIES = 5
 
+// O108: per-sender concurrent receiving-transfer cap (process-scoped). Sybil
+// identities defeat any per-identity cap (O27 floor) — this bounds the lazy
+// single-identity flood; the aggregate bound is storage quota + eviction (O23).
+private const val MAX_ACTIVE_PER_SENDER = 8
+
 /**
  * Receive side of chunked transfers. Buffers incoming metadata and chunks,
  * fires CHUNK_REQUEST NACKs with exponential backoff for missing chunks,
@@ -42,6 +47,13 @@ class TransferAssembler(
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val watchdogs = ConcurrentMap<String, Job>()
+
+    /**
+     * O108: active receiving transferId → senderId, for the per-sender cap and
+     * for evidence-gating (metadata alone registers here; the watchdog + NACK
+     * machinery only arms when the first real chunk arrives).
+     */
+    private val activeBySender = ConcurrentMap<String, String>()
 
     /**
      * O18: transferIds the user paused locally. Incoming CHUNKs for these are
@@ -69,6 +81,7 @@ class TransferAssembler(
         // senderId is nullable on the repo record (legacy: it can be unknown
         // for inbound transfers whose metadata was lost). Without a sender we
         // can't tell anyone to stop, but we still drop local state.
+        activeBySender.remove(transferId)
         transfer.senderId?.let { gossipEngine.composeTransferCancel(transferId, it) }
         transferRepo.upsert(transfer.copy(
             status = TransferStatus.ABANDONED,
@@ -104,6 +117,24 @@ class TransferAssembler(
 
     private suspend fun handleMetadata(meta: TransferMetadata, senderUserId: String) {
         if (transferRepo.getById(meta.transferId) != null) return
+        // O108: reject inconsistent or absurd claims before committing any state.
+        // A signed-but-lying metadata (totalChunks = Int.MAX_VALUE) previously
+        // armed a watchdog and sized the whole receive path off the claim.
+        if (!Chunker.isPlausibleMetadata(meta.totalChunks, meta.chunkSize, meta.totalBytes)) {
+            RumorLog.w(
+                TAG,
+                "Rejecting transfer ${meta.transferId.take(8)}…: implausible metadata " +
+                    "(chunks=${meta.totalChunks} size=${meta.chunkSize} bytes=${meta.totalBytes})",
+            )
+            return
+        }
+        // O108: per-sender concurrency cap. Excess metadata is dropped, not
+        // queued — the sender can re-announce once a slot frees up.
+        if (activeBySender.values.count { it == senderUserId } >= MAX_ACTIVE_PER_SENDER) {
+            RumorLog.w(TAG, "Per-sender transfer cap hit for ${senderUserId.take(8)}… — dropping metadata")
+            return
+        }
+        activeBySender[meta.transferId] = senderUserId
         transferRepo.upsert(
             TransferRecord(
                 transferId = meta.transferId,
@@ -123,17 +154,28 @@ class TransferAssembler(
             )
         )
         RumorLog.i(TAG, "Transfer ${meta.transferId.take(8)}… registered (${meta.totalChunks} chunks)")
-        armWatchdog(meta.transferId, meta.totalChunks, senderUserId)
+        // O108 evidence-gating: no watchdog yet — a metadata with no chunk
+        // behind it costs one DB row and nothing else. armWatchdog fires on
+        // the first real chunk (handleChunk).
     }
 
     private suspend fun handleChunk(chunk: Chunk) {
         val transfer = transferRepo.getById(chunk.transferId) ?: return
         if (transfer.status != TransferStatus.IN_PROGRESS) return
+        // O108: bound each chunk by the transfer's own accepted metadata —
+        // out-of-range indices and oversized payloads never become rows.
+        if (chunk.chunkIndex !in 0 until transfer.totalChunks) return
+        val bytes = runCatching { Base64Codec.decode(chunk.data) }.getOrNull() ?: return
+        if (bytes.size > transfer.chunkSize) return
+        // O108 evidence-gating: first real chunk arms the NACK watchdog.
+        if (watchdogs[chunk.transferId] == null && transfer.senderId != null) {
+            armWatchdog(chunk.transferId, transfer.totalChunks, transfer.senderId)
+        }
         chunkRepo.insertOrReplace(
             ChunkRecord(
                 transferId = chunk.transferId,
                 chunkIndex = chunk.chunkIndex,
-                data = Base64Codec.decode(chunk.data),
+                data = bytes,
                 receivedAtMs = SystemClock.now(),
                 ackedAtMs = null,
             )
@@ -164,6 +206,7 @@ class TransferAssembler(
             return
         }
         watchdogs.remove(transferId)?.cancel()
+        activeBySender.remove(transferId)
         transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, SystemClock.now())
         RumorLog.i(TAG, "Transfer ${transferId.take(8)}… complete (${data.size}B)")
         _assembledTransfers.emit(AssembledTransfer(meta, data))
@@ -172,23 +215,42 @@ class TransferAssembler(
     private fun armWatchdog(transferId: String, totalChunks: Int, senderUserId: String) {
         val job = scope.launch {
             var delayMs = NACK_INITIAL_DELAY_MS
-            repeat(NACK_MAX_RETRIES) { retry ->
+            var retriesLeft = NACK_MAX_RETRIES
+            var lastCount = -1
+            while (retriesLeft > 0) {
                 delay(delayMs)
                 val transfer = transferRepo.getById(transferId)
                 if (transfer == null || transfer.status != TransferStatus.IN_PROGRESS) return@launch
                 val received = chunkRepo.getReceivedIndices(transferId).toSet()
                 if (received.size >= totalChunks) { attemptReassembly(transferId); return@launch }
-                val missing = Chunker.missingIndices(received, totalChunks)
-                RumorLog.d(TAG, "NACK retry $retry for ${transferId.take(8)}…: ${missing.size} missing")
+                // Progress refills the retry budget — a large multi-window
+                // transfer keeps going as long as chunks keep landing; only a
+                // genuinely stalled one burns down to abandonment.
+                if (lastCount in 0 until received.size) {
+                    retriesLeft = NACK_MAX_RETRIES
+                    delayMs = NACK_INITIAL_DELAY_MS
+                } else {
+                    retriesLeft--
+                    delayMs = minOf(delayMs * 2, NACK_DELAY_CAP_MS)
+                }
+                lastCount = received.size
+                if (retriesLeft <= 0) break
+                // O109: NACK a bounded window, never the whole missing set.
+                val missing = Chunker.missingIndicesWindowed(received, totalChunks)
+                RumorLog.d(TAG, "NACK for ${transferId.take(8)}…: ${missing.size} missing (windowed)")
                 gossipEngine.composeChunkRequest(transferId, missing, senderUserId)
-                delayMs = minOf(delayMs * 2, NACK_DELAY_CAP_MS)
             }
             val transfer = transferRepo.getById(transferId)
             if (transfer?.status == TransferStatus.IN_PROGRESS) {
-                RumorLog.w(TAG, "Transfer ${transferId.take(8)}… abandoned after $NACK_MAX_RETRIES retries")
+                RumorLog.w(TAG, "Transfer ${transferId.take(8)}… abandoned after $NACK_MAX_RETRIES stalled retries")
                 transferRepo.updateStatus(transferId, TransferStatus.ABANDONED, SystemClock.now())
+                // O108: abandoned transfers release their chunk rows — the
+                // watchdog path previously leaked them forever (cancel() was
+                // the only cleanup).
+                chunkRepo.deleteAllForTransfer(transferId)
             }
             watchdogs.remove(transferId)
+            activeBySender.remove(transferId)
         }
         watchdogs[transferId] = job
     }

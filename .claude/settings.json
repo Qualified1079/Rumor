@@ -37,5 +37,9 @@
       "Bash(git push -f*)"
     ],
     "defaultMode": "dontAsk"
+  },
+  "enabledPlugins": {
+    "github@claude-plugins-official": true,
+    "security-guidance@claude-plugins-official": true
   }
 }
