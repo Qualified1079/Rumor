@@ -22,7 +22,14 @@ Messages spread like rumors — carried further by people who think they're wort
 
 ## Module map
 
-The codebase is split into 14 modules with strict dependency rules. Each module has one job and imports only from modules below it in the stack.
+The codebase is **four Gradle modules** with strict layering:
+
+- **`:core`** — pure JVM/Kotlin, no Android imports. All protocol, crypto, scheduling, routing, and the host-agnostic `MeshRuntime`.
+- **`:app`** — Android. Depends on `:core`. Room DB, ViewModels, Compose UI, BLE + Wi-Fi Direct transports. `MeshService` *hosts* the `MeshRuntime`.
+- **`:simulator`** — JVM CLI. Depends on `:core`. In-memory repos, sim transport, Ktor dashboard, scenario tests at scale.
+- **`:node`** — headless JVM test node. Depends on `:core`. Runs the real engine over the LAN transport with in-memory repos + a localhost status page — a directly-runnable second peer for protocol debugging.
+
+Within those modules, the internal component layers have their own strict dependency rule — arrows point downward only, no layer imports from one above it:
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -84,21 +91,24 @@ The codebase is split into 14 modules with strict dependency rules. Each module 
 
 | Module | Package | Responsibility |
 |---|---|---|
-| Message model | `core/model/` | Wire-format data classes, serialization |
+| Message model | `core/model/` | Wire-format data classes, serialization, traffic-class + size ceilings |
 | Crypto | `core/crypto/` | Ed25519, X25519, AES-GCM, PBKDF2 |
 | Logging | `core/logging/` | Structured ring-buffer log, zero dependencies |
-| Storage | `data/` | Room entities, DAOs, size-based eviction |
-| Identity manager | `core/identity/` | Keypair lifecycle, passphrase lock, device ID |
+| Mesh runtime | `core/runtime/` | Host-agnostic orchestration (reseed, coordinator, beacon/recompute loops, HLC); hosted by `:app` and `:node` |
+| Trust / sybil defense | `core/trust/` | Web-of-trust hops frontier (`TrustGraph`), edge-credit models |
+| Storage | `app/…/data/` (Room) · `core/data/memory/` (in-memory) | Entities, DAOs, size-based eviction; shared repo interfaces |
+| Identity manager | `core/identity/` (interface) · `app/…/identity/` (Android) | Keypair lifecycle, passphrase lock, device ID |
 | BLE discovery | `core/transport/ble/` | Advertise/scan on Rumor service UUID |
 | Wi-Fi Direct | `core/transport/wifidirect/` | Peer connections, gossip sessions, device quirks |
-| Device quirks | `core/transport/DeviceQuirks.kt` | OEM/OS workaround registry |
-| Gossip engine | `core/protocol/` | Protocol logic, flooding, duplicate suppression |
-| Routing engine | `core/routing/` | Breadcrumbs, topology, online status |
-| Plugin API | `plugin/` | `RumorPlugin`, `PluginContext`, `BasePlugin` |
-| Meshtastic bridge | `plugin/meshtastic/` | LoRa bridge stub |
-| MeshCore bridge | `plugin/meshcore/` | LoRa bridge stub |
-| Orchestrator | `service/MeshService.kt` | Wires everything, manages lifecycle |
-| UI | `ui/` | Compose screens and ViewModels |
+| LAN transport | `core/transport/lan/` | Same-Wi-Fi mDNS + TCP path (used by `:app` and `:node`) |
+| Gossip engine | `core/protocol/` | Protocol logic, flooding, dedup, inbox filter, offer batching |
+| Routing engine | `core/routing/` | Breadcrumbs, topology, online status, persistence planner |
+| Plugin API | `app/…/plugin/` | `RumorPlugin`, `PluginContext`, `BasePlugin` |
+| Meshtastic bridge | `app/…/plugin/meshtastic/` | LoRa BLE bridge (v0.1.0, broadcast-only) |
+| MeshCore bridge | `app/…/plugin/meshcore/` | LoRa BLE bridge (v0.1.0, broadcast-only) |
+| Orchestrator | `app/…/service/MeshService.kt` | Android host of `MeshRuntime`; wires transports, plugins, lifecycle |
+| Headless node | `node/…/Main.kt` | JVM host of `MeshRuntime` over the LAN transport + status page |
+| UI | `app/…/ui/` | Compose screens and ViewModels |
 
 ---
 
@@ -147,18 +157,31 @@ The app targets API 23+ (Android 6.0). Wi-Fi Direct and BLE peripheral mode are 
 
 ## Running tests
 
+The suite spans all modules (~80 test files). The `:simulator` scenario tests
+are memory-heavy — run modules separately rather than all at once:
+
 ```bash
-./gradlew test
+./gradlew :core:test        # protocol, crypto, trust-graph, wire-format, fuzz
+./gradlew :simulator:test   # multi-node scenarios over the sim transport
+./gradlew :app:testDebugUnitTest   # DI verify, Room schema, ViewModels
+./gradlew :node:test
 ```
 
-Unit test coverage:
+`:core` covers the scheduler (DRR fairness), chunker, blocklist/keyword-filter
+verifiers, online-status transitions, the trust-graph frontier + sybil
+scenarios, and wire-format fuzzing. `:simulator` drives real `GossipEngine`
+nodes through the transport for gossip convergence, RBSR, rooms, sybil-flood,
+and oversized-message scenarios. **Before writing a scenario test, read
+`docs/SIMULATOR_TESTING.md`** — the negative-control and no-vacuous-green
+conventions.
 
-| Test class | What it covers |
-|---|---|
-| `SchedulerTest` | DRR fairness, starvation prevention, per-flow drop-oldest eviction cap |
-| `ChunkerTest` | Round-trip reassembly, SHA-256 mismatch rejection, missing-chunk null return |
-| `BlocklistVerifierTest` | Valid Ed25519 signatures accepted; tampered snapshot/diff payload rejected |
-| `OnlineStatusTrackerTest` | ONLINE/RECENTLY/AWAY transitions, `currentSnapshot()` 30-minute cutoff |
+### Running the simulator dashboard / headless node
+
+```bash
+./gradlew :simulator:run                    # in-memory N-node sim + Ktor dashboard
+./gradlew :node:installDist                 # then:
+node/build/install/node/bin/node --bind <lan-ip>   # a real peer joinable by a phone
+```
 
 ---
 
@@ -333,7 +356,7 @@ Bridge traffic from Meshtastic/MeshCore nodes uses `signature = "bridge_unsigned
 | RECENTLY | Last seen 5–30 minutes ago | Amber dot |
 | AWAY | Last seen > 30 minutes ago, or never | Grey dot |
 
-`currentSnapshot()` returns only peers seen within the last 30 minutes. Peers older than 30 minutes are pruned from the in-memory map on each update cycle. Status dots appear on contact avatars and DM thread headers.
+`currentSnapshot()` returns only peers seen within the last 30 minutes (the cutoff is applied at read time). Status dots appear on contact avatars and DM thread headers. *Note: the in-memory `lastSeen` map is not yet actively pruned — periodic maintenance is tracked as a known gap (O120).*
 
 ---
 
