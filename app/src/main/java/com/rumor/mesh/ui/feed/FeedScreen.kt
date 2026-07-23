@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.ui.capForDisplay
 import com.rumor.mesh.ui.formatElapsed
 import java.text.SimpleDateFormat
 import java.util.*
@@ -107,7 +108,7 @@ private fun BroadcastCard(
             Spacer(Modifier.height(6.dp))
 
             Text(
-                text = message.payload?.content ?: "",
+                text = (message.payload?.content ?: "").capForDisplay(),
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 20,
                 overflow = TextOverflow.Ellipsis,

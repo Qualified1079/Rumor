@@ -1,5 +1,7 @@
 package com.rumor.mesh.ui.messages
 
+import com.rumor.mesh.ui.capForDisplay
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.crypto.CryptoManager
@@ -141,7 +143,10 @@ class ThreadViewModel(
             isFromMe -> controllerHolder.controller().sentPlaintextFor(id) ?: "[sent]"
             else -> decryptPayload(this, ct, identity.privateKeyBytes)
         }
-        return DisplayMessage(raw = this, body = body, isFromMe = isFromMe)
+        // O112: cap what the composer ever hands to Compose Text — a huge
+        // unbroken payload (plaintext broadcast or decrypted DM) otherwise
+        // wedges the native line-breaker on the main thread (ANR).
+        return DisplayMessage(raw = this, body = body.capForDisplay(), isFromMe = isFromMe)
     }
 
     /**

@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.OnlineStatus
+import com.rumor.mesh.ui.capForDisplay
 import com.rumor.mesh.ui.formatElapsed
 import com.rumor.mesh.ui.theme.AwayGrey
 import com.rumor.mesh.ui.theme.OnlineGreen
@@ -132,6 +133,6 @@ private fun Avatar(initial: Char, statusColor: Color) {
 private fun previewText(msg: com.rumor.mesh.core.model.RumorMessage): String = when {
     msg.encryptedPayload != null -> "[encrypted]"
     msg.type == MessageType.TRANSFER_METADATA -> "[transfer]"
-    else -> msg.payload?.content ?: ""
+    else -> (msg.payload?.content ?: "").capForDisplay()
 }
 
