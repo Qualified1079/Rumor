@@ -63,7 +63,17 @@ object CryptoManager {
         val shared = PlatformCrypto.x25519Agreement(ourPrivateKeyBytes, theirPublicKeyBytes)
         // HKDF-SHA256 would be ideal but PBKDF2 with a constant salt gives a
         // well-understood 256-bit key without pulling in extra dependencies.
-        return deriveAesKey(shared, byteArrayOf(0x52, 0x75, 0x6d, 0x6f, 0x72, 0x44, 0x48))
+        // The salt is a domain tag, NOT the source of per-message key variation
+        // (that comes from the fresh ephemeral key → unique `shared`); a constant
+        // salt in HKDF-extract is exactly per RFC 5869. (O39)
+        try {
+            return deriveAesKey(shared, byteArrayOf(0x52, 0x75, 0x6d, 0x6f, 0x72, 0x44, 0x48))
+        } finally {
+            // O39: zero the raw ECDH secret. The salt is public and constant, so
+            // a leaked `shared` re-derives the AES key — zeroing only the derived
+            // key at the call site is worthless while this survives to GC.
+            shared.fill(0)
+        }
     }
 
     // ── Ed25519 → X25519 derivation (O91) ───────────────────────────────────

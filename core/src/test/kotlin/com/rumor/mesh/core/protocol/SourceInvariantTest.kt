@@ -269,6 +269,41 @@ class SourceInvariantTest {
         }
     }
 
+    /**
+     * **Architecture invariant 7 (O39): `x25519Agreement` zeros the raw ECDH
+     * shared secret before returning the derived key.**
+     *
+     * The KDF salt (`"RumorDH"`) is constant and public, so a leaked raw ECDH
+     * secret re-derives the AES key trivially. Every call site diligently zeros
+     * the *derived* key it receives — but that's worthless if the raw secret
+     * `shared` survives to GC inside this function. A memory dump taken between
+     * the DH and the next GC would recover `shared` and decrypt the message.
+     * The `finally { shared.fill(0) }` is what makes the per-message FS real for
+     * every consumer (composeDirect, DM decrypt, sealed-sender, room envelopes).
+     *
+     * If this fails: a refactor dropped the fill. Re-add it in a finally so it
+     * runs even if deriveAesKey throws, then update the pattern.
+     */
+    @Test
+    fun `x25519Agreement zeros the raw shared secret`() {
+        val cryptoManager = File(findRepoRoot(), "core/src/main/kotlin/com/rumor/mesh/core/crypto/CryptoManager.kt").readText()
+        val fn = Regex(
+            """fun x25519Agreement\([^)]*\)\s*:\s*ByteArray\s*\{(.*?)\n    \}""",
+            RegexOption.DOT_MATCHES_ALL,
+        ).find(cryptoManager)?.groupValues?.get(1)
+            ?: fail("x25519Agreement not found in CryptoManager.kt — O39 audit target moved")
+        if (!fn.contains("shared.fill(0)")) {
+            fail(
+                """
+                |x25519Agreement no longer zeros the raw ECDH secret `shared`. The
+                |KDF salt is constant + public, so a leaked `shared` re-derives the
+                |AES key — call-site zeroing of the derived key is worthless without
+                |this. Restore `finally { shared.fill(0) }` (O39).
+                |""".trimMargin()
+            )
+        }
+    }
+
     /** Walk up from cwd looking for the repo root (settings.gradle.kts marker). */
     private fun findRepoRoot(): File {
         var dir: File? = File(".").canonicalFile
