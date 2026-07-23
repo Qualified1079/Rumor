@@ -56,8 +56,10 @@ import com.rumor.mesh.BuildConfig
     // v10: added MessageEntity.ext (JSON blob of the O37 `_ext` map) —
     //      dropping it stripped compression-AAD flags from stored DMs,
     //      which then failed AES-GCM tag checks at display time.
+    // v11: added ContactEntity.friended (O136 — explicit friend bit the
+    //      O135(1) "known peers only" inbox filter keys on).
     // Dev uses fallbackToDestructiveMigration so no migration code needed.
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

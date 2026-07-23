@@ -48,6 +48,13 @@ interface ContactRepository {
     suspend fun setPriorityPeer(userId: String, enabled: Boolean)
     suspend fun getPriorityPeers(): List<Contact>
     /**
+     * O136 — set the explicit friend bit (a deliberate user gesture). No-op if
+     * the contact isn't on file. [isFriended] is the cheap boolean the O135(1)
+     * inbox filter calls per inbound message.
+     */
+    suspend fun setFriended(userId: String, enabled: Boolean)
+    suspend fun isFriended(userId: String): Boolean
+    /**
      * O76 / capability cache — store the peer's HELLO supportedFeatures
      * (JSON-encoded list) for this userId. Called by `GossipSession` on
      * every completed handshake. No-op if the contact isn't on file

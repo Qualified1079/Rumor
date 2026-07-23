@@ -62,6 +62,8 @@ data class ContactEntity(
      * docstring for rationale.
      */
     val lastKnownSupportedFeatures: String = "",
+    /** O136 — explicit friend bit; see `Contact.friended`. */
+    val friended: Boolean = false,
 )
 
 @Entity(

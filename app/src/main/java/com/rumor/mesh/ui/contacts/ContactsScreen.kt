@@ -62,6 +62,7 @@ fun ContactsScreen(
                     ContactRow(
                         cws = cws,
                         onOpenThread = { onOpenThread(cws.contact.userId) },
+                        onSetFriended = { viewModel.setFriended(cws.contact.userId, it) },
                         onSetAutoRelay = { viewModel.setAutoRelay(cws.contact.userId, it) },
                         onSetAlwaysSave = { viewModel.setAlwaysSave(cws.contact.userId, it) },
                         onRename = { viewModel.setDisplayName(cws.contact.userId, it) },
@@ -77,6 +78,7 @@ fun ContactsScreen(
 private fun ContactRow(
     cws: ContactWithStatus,
     onOpenThread: () -> Unit,
+    onSetFriended: (Boolean) -> Unit,
     onSetAutoRelay: (Boolean) -> Unit,
     onSetAlwaysSave: (Boolean) -> Unit,
     onRename: (String) -> Unit,
@@ -138,10 +140,12 @@ private fun ContactRow(
                     ContactMenu(
                         expanded = menuExpanded,
                         onDismiss = { menuExpanded = false },
+                        friended = cws.contact.friended,
                         autoRelay = cws.contact.autoRelay,
                         alwaysSave = cws.contact.alwaysSave,
                         onMessage = { menuExpanded = false; onOpenThread() },
                         onRename = { menuExpanded = false; renameOpen = true },
+                        onSetFriended = onSetFriended,
                         onSetAutoRelay = onSetAutoRelay,
                         onSetAlwaysSave = onSetAlwaysSave,
                     )
@@ -223,10 +227,12 @@ private fun RenameDialog(
 private fun ContactMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
+    friended: Boolean,
     autoRelay: Boolean,
     alwaysSave: Boolean,
     onMessage: () -> Unit,
     onRename: () -> Unit,
+    onSetFriended: (Boolean) -> Unit,
     onSetAutoRelay: (Boolean) -> Unit,
     onSetAlwaysSave: (Boolean) -> Unit,
 ) {
@@ -240,6 +246,17 @@ private fun ContactMenu(
             onClick = onRename,
         )
         HorizontalDivider()
+        // O136 — the explicit friend gesture; the trust signal the "known peers
+        // only" inbox filter (O135) keys on.
+        DropdownMenuItem(
+            text = {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Friend")
+                    Switch(checked = friended, onCheckedChange = null, modifier = Modifier.height(24.dp))
+                }
+            },
+            onClick = { onSetFriended(!friended) },
+        )
         DropdownMenuItem(
             text = {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

@@ -127,6 +127,10 @@ class InMemoryContactRepository : ContactRepository {
         contacts[userId]?.let { contacts[userId] = it.copy(isPriorityPeer = enabled) }
     }
     override suspend fun getPriorityPeers(): List<Contact> = contacts.values.filter { it.isPriorityPeer }
+    override suspend fun setFriended(userId: String, enabled: Boolean) {
+        contacts[userId]?.let { contacts[userId] = it.copy(friended = enabled) }
+    }
+    override suspend fun isFriended(userId: String): Boolean = contacts[userId]?.friended == true
     override suspend fun setSupportedFeatures(userId: String, jsonEncodedFeatures: String) {
         contacts[userId]?.let { contacts[userId] = it.copy(lastKnownSupportedFeatures = jsonEncodedFeatures) }
     }

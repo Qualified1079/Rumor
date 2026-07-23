@@ -48,6 +48,15 @@ class ContactsViewModel(
         viewModelScope.launch { contactDao.setDisplayName(userId, name) }
     }
 
+    /**
+     * O136 — the explicit friend gesture. Sets the [ContactEntity.friended] bit
+     * the O135(1) "known peers only" inbox filter keys on. Deliberate user act,
+     * never automatic.
+     */
+    fun setFriended(userId: String, enabled: Boolean) {
+        viewModelScope.launch { contactDao.setFriended(userId, enabled) }
+    }
+
     private val _isScanning = MutableStateFlow(false)
     /**
      * No end-to-end "discovery complete" signal exists yet (BLE + Wi-Fi Direct

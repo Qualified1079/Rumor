@@ -51,6 +51,12 @@ interface ContactDao {
     @Query("SELECT * FROM contacts WHERE isPriorityPeer = 1")
     suspend fun getPriorityPeers(): List<ContactEntity>
 
+    @Query("UPDATE contacts SET friended = :enabled WHERE userId = :userId")
+    suspend fun setFriended(userId: String, enabled: Boolean)
+
+    @Query("SELECT friended FROM contacts WHERE userId = :userId LIMIT 1")
+    suspend fun isFriended(userId: String): Boolean?
+
     @Query("UPDATE contacts SET lastKnownSupportedFeatures = :json WHERE userId = :userId")
     suspend fun setSupportedFeatures(userId: String, json: String)
 }

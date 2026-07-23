@@ -71,4 +71,12 @@ data class Contact(
      * peer's latest advertised features overwrite any prior value).
      */
     val lastKnownSupportedFeatures: String = "",
+    /**
+     * O136 — the explicit "friend" bit. Set by a deliberate user gesture
+     * (friend/accept action), NEVER by the auto-`ensureContact` that fires for
+     * every exchanged/relayed sender. This is the trust signal the O135(1)
+     * "known peers only" inbox filter keys on — a plain contact is worthless
+     * for that (sybils auto-become contacts, O134); a *friended* contact is not.
+     */
+    val friended: Boolean = false,
 )

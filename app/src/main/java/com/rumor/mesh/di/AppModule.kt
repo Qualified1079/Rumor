@@ -142,7 +142,7 @@ val appModule = module {
     single { TopologyTracker(get(), get()) }
     single { BreadcrumbCache(get()) }
     single { Scheduler(modeState = get<ModeState>()) }
-    single { InboxPolicyManager(androidContext(), get()) }
+    single { InboxPolicyManager(androidContext(), get(), localUserId = { get<IdentityManager>().identity.value?.userId }) }
     single<InboxFilter> { get<InboxPolicyManager>() }
     single { DmEnvelopeRegistry() }
     single { com.rumor.mesh.core.protocol.CanaryMetrics() }
