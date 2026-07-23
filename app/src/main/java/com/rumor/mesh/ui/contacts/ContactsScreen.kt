@@ -250,9 +250,16 @@ private fun ContactMenu(
         // only" inbox filter (O135) keys on.
         DropdownMenuItem(
             text = {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Friend")
-                    Switch(checked = friended, onCheckedChange = null, modifier = Modifier.height(24.dp))
+                Column(Modifier.fillMaxWidth()) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Friend")
+                        Switch(checked = friended, onCheckedChange = null, modifier = Modifier.height(24.dp))
+                    }
+                    Text(
+                        "Trusted contact — the only senders who reach you when “Known peers only” is on.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
                 }
             },
             onClick = { onSetFriended(!friended) },
