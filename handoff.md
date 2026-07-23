@@ -412,11 +412,29 @@ read-only pass per the task; no tests were run.
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
 **Git: commit + push directly to `main`, no feature branch.** Everything below
-is committed AND pushed (`c3a99e5` at handoff time; tree clean). All suites
+is committed AND pushed (`b7b8409` at handoff time; tree clean). All suites
 green (`:core` / `:app` / `:simulator` / `:node` compile+test).
 
 > **Build note for a fresh instance:** there is NO `java` on `PATH`. Export
 > `JAVA_HOME=~/jdk17` before any `./gradlew`. (Cost me the first build.)
+
+> ### 🚨 FLEET MUST REFLASH to `0.6.14-o144-sigv2` (vc35) — WIRE-BREAKING
+> **O144 changed the message signature transcript (v1→v2).** A v1-signed message
+> does NOT verify on a v2 node and vice-versa — BY DESIGN (that's the fix). The
+> 3 test phones are on `0.6.13` and will silently fail to exchange with anything
+> on `0.6.14` until reflashed. Reflash all phones + rebuild `:node` together.
+> Hands-free reflash per O138: `adb -s <dev> install -r <apk>` then
+> `adb -s <dev> shell am start -n com.rumor.mesh.debug/com.rumor.mesh.MainActivity`.
+
+> ### O144 real fix landed (user-approved hard cutover) — the audit's #1 finding
+> The parallel audit found `signableBytes` concatenated fields with no delimiters
+> → a relay could truncate a signed broadcast while keeping a valid signature.
+> **Fixed properly:** v2 length-prefixes each field (`<charLen>:<value>`, self-
+> delimiting) under `rumor-msg-v2:`. User said "obviously do the real fix, Rumor
+> isn't shipped." Hard cutover, v1 retired. Watch for: I fixed TWO stale
+> hand-copied `signableBytes` duplicates (RbsrSimTransportTest, MessageGenerator)
+> that broke at the cutover — both now delegate to the real function. If you add
+> a third copy anywhere, delegate; don't re-hand-roll the transcript.
 
 ## What shipped this session (pure code, no hardware needed — all JVM-testable)
 Foundational audit-residue + Tier-2 blockers, closed most-foundational-first:

@@ -34,6 +34,18 @@ class PluginDisableBoundaryTest {
     }
 
     @Test
+    fun `register rolls back scope and context if onAttach throws`() {
+        // O25/O123: onAttach failure must not leak the scope/context (unregister
+        // can't clean up a plugin that never made it into `plugins`).
+        val hasTryCatch = Regex("""try\s*\{\s*plugin\.onAttach\(ctx\)""").containsMatchIn(source)
+        assertTrue("register() must wrap plugin.onAttach in try/catch", hasTryCatch)
+        val rollsBackScope = source.contains("pluginScopes.remove(plugin.pluginId)?.cancel()")
+        val rollsBackCtx = source.contains("pluginContexts.remove(plugin.pluginId)?.unregisterAllEnvelopes()")
+        assertTrue("onAttach failure must cancel the scope", rollsBackScope)
+        assertTrue("onAttach failure must unregister the plugin's envelopes/context", rollsBackCtx)
+    }
+
+    @Test
     fun `unregister clears alive before tearing down`() {
         // The flag write must precede the scope cancel — otherwise a dispatch
         // in flight can still call the plugin on a cancelled scope.

@@ -71,7 +71,21 @@ class PluginRegistry(
             dmEnvelopeRegistry = dmEnvelopeRegistry,
         )
         pluginContexts[plugin.pluginId] = ctx
-        plugin.onAttach(ctx)
+        // O25/O123: onAttach can throw AFTER launching coroutines / opening a BLE
+        // handle (both bridges do). Without this rollback the scope + context are
+        // already in the maps but the plugin was never added to `plugins`, so
+        // unregister() (gated on finding it there) is a permanent no-op — the
+        // scope/coroutines/handle leak for the process lifetime, surviving even
+        // unregisterAll(). Tear down here and leave the plugin unregistered; a
+        // plugin that fails to attach must not take the host down (crash isolation).
+        try {
+            plugin.onAttach(ctx)
+        } catch (e: Throwable) {
+            RumorLog.w(TAG, "Plugin ${plugin.pluginId} threw in onAttach — rolled back, not registered", e)
+            pluginScopes.remove(plugin.pluginId)?.cancel()
+            pluginContexts.remove(plugin.pluginId)?.unregisterAllEnvelopes()
+            return
+        }
         plugins.add(PluginHolder(plugin))
         RumorLog.i(TAG, "Registered plugin: ${plugin.pluginId} (${plugin.displayName} v${plugin.version})")
     }
