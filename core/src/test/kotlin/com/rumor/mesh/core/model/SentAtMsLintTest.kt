@@ -77,6 +77,8 @@ class SentAtMsLintTest {
         "core/src/test/kotlin/com/rumor/mesh/core/wire/ThreadAndMentionExtTest.kt",
         // O79 room routing tag ext-helper test stamps a blank RumorMessage with sentAtMs=0L
         "core/src/test/kotlin/com/rumor/mesh/core/wire/RoomRoutingTagExtTest.kt",
+        // O130(a) RelayBatcher test fixture stamps a blank RumorMessage with sentAtMs=0L
+        "core/src/test/kotlin/com/rumor/mesh/core/protocol/RelayBatcherTest.kt",
         // This test file itself references the symbol in regex form
         "core/src/test/kotlin/com/rumor/mesh/core/model/SentAtMsLintTest.kt",
     )

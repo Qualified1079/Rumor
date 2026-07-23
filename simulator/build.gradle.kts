@@ -37,7 +37,9 @@ dependencies {
     implementation("io.ktor:ktor-server-status-pages:$ktor")
 
     // Logging
-    implementation("ch.qos.logback:logback-classic:1.4.14")
+    // O130(g): 1.5.x line — the 1.4.x line is EOL (CVE fixes landed only in
+    // 1.3.15 / 1.5.13, never backported). Simulator-only (dashboard logging).
+    implementation("ch.qos.logback:logback-classic:1.5.13")
 
     // Zip for reports
     implementation("org.apache.commons:commons-compress:1.26.0")
