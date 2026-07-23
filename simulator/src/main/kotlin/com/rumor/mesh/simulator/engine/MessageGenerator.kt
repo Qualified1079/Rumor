@@ -53,20 +53,19 @@ class MessageGenerator(
             payload          = MessagePayload(contentType, content),
             signature        = "",
         )
-        val sig = CryptoManager.sign(signableBytes(unsigned), identity.privateKeyBytes).toBase64()
+        val sig = CryptoManager.sign(sbStore.signableBytes(unsigned), identity.privateKeyBytes).toBase64()
         return unsigned.copy(signature = sig)
     }
 
-    // Must match MessageStore.signableBytes — hopsToLive is excluded because
-    // it mutates on every relay and would invalidate the signature otherwise.
-    // The `rumor-msg-v1:` domain tag matches MessageStore.signableBytes (O37).
-    private fun signableBytes(msg: RumorMessage): ByteArray = buildString {
-        append("rumor-msg-v1:")
-        append(msg.id); append(msg.senderId); append(msg.senderPublicKey)
-        append(msg.sequenceNumber); append(msg.sentAtMs); append(msg.type.name)
-        append(msg.payload?.content ?: "")
-        append(msg.encryptedPayload ?: ""); append(msg.recipientId ?: "")
-    }.toByteArray(Charsets.UTF_8)
+    // O144: delegate to the REAL MessageStore.signableBytes rather than a hand-
+    // copied duplicate (which silently went stale at the v1→v2 cutover and made
+    // every generated message fail verification). Throwaway store; the method is
+    // pure over the message.
+    private val sbStore = com.rumor.mesh.core.protocol.MessageStore(
+        com.rumor.mesh.core.data.memory.InMemoryMessageRepository(),
+        com.rumor.mesh.core.data.memory.InMemoryContactRepository(),
+        com.rumor.mesh.core.protocol.DuplicateFilter(),
+    )
 }
 
 /**

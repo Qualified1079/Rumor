@@ -125,16 +125,17 @@ class RbsrSimTransportTest {
             payload = MessagePayload(ContentType.TEXT, "content-$idTag"),
             signature = "",
         )
-        val sig = CryptoManager.sign(signableBytes(unsigned), synthKeyPair.privateKeyBytes).toBase64()
+        val sig = CryptoManager.sign(sbStore.signableBytes(unsigned), synthKeyPair.privateKeyBytes).toBase64()
         return unsigned.copy(signature = sig)
     }
 
-    // Must match MessageStore.signableBytes (rumor-msg-v1 domain tag, hopsToLive excluded).
-    private fun signableBytes(msg: RumorMessage): ByteArray = buildString {
-        append("rumor-msg-v1:")
-        append(msg.id); append(msg.senderId); append(msg.senderPublicKey)
-        append(msg.sequenceNumber); append(msg.sentAtMs); append(msg.type.name)
-        append(msg.payload?.content ?: "")
-        append(msg.encryptedPayload ?: ""); append(msg.recipientId ?: "")
-    }.toByteArray(Charsets.UTF_8)
+    // O144: delegate to the REAL MessageStore.signableBytes instead of a hand-
+    // copied duplicate — the duplicate silently went stale when v1→v2 landed,
+    // making every delivered message fail verification. A throwaway store is
+    // enough; signableBytes is pure over the message.
+    private val sbStore = com.rumor.mesh.core.protocol.MessageStore(
+        com.rumor.mesh.core.data.memory.InMemoryMessageRepository(),
+        com.rumor.mesh.core.data.memory.InMemoryContactRepository(),
+        com.rumor.mesh.core.protocol.DuplicateFilter(),
+    )
 }

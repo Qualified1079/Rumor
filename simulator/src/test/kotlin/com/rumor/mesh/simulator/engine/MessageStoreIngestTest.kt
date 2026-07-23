@@ -84,21 +84,45 @@ class MessageStoreIngestTest {
     }
 
     /**
-     * O144: signableBytes concatenates content/encryptedPayload/recipientId with
-     * no delimiters. A relay can truncate a signed broadcast by moving the
-     * content suffix into encryptedPayload — the concatenation (and thus the
-     * signature) is unchanged, but a broadcast that carries an encryptedPayload
-     * is the splice shape and must be dropped. These drive the REAL ingest path
-     * (the signature genuinely verifies — that's the whole point).
+     * O144 belt-and-suspenders: even with a VALID v2 signature over its own
+     * bytes, a broadcast that carries an encryptedPayload is anomalous (no
+     * honest composeBroadcast produces one) and the shape guard drops it before
+     * store/relay. This is independent of the v2 framing that already makes the
+     * splice's signature fail to verify (see the dedicated v2 test below) — the
+     * shape check catches any future path that might produce the odd shape.
      */
     @Test
-    fun `a broadcast splice - suffix moved into encryptedPayload - is dropped despite a valid signature`() = runBlocking {
+    fun `a broadcast carrying an encryptedPayload is dropped even when validly signed`() = runBlocking {
         val store = store()
-        // Legit: content = "hello". Splice: content = "hel", encryptedPayload = "lo".
-        // Concatenation content+encryptedPayload+recipientId = "hel"+"lo"+"" = "hello",
-        // byte-identical to the honest broadcast, so the honest signature verifies.
-        val honest = RumorMessage(
+        val odd = RumorMessage(
             id = "d".repeat(32),
+            senderId = userId,
+            senderPublicKey = kp.publicKeyBytes.toBase64(),
+            sequenceNumber = 1,
+            sentAtMs = 1_000L,
+            type = MessageType.BROADCAST,
+            hopsToLive = 7,
+            payload = MessagePayload(ContentType.TEXT, "hel"),
+            encryptedPayload = "lo",
+            signature = "",
+        )
+        // Sign it properly under v2 so it passes the signature + identity checks.
+        val signed = odd.copy(
+            signature = CryptoManager.sign(store.signableBytes(odd), kp.privateKeyBytes).toBase64(),
+        )
+        assertFalse("broadcast carrying encryptedPayload must be dropped (O144 shape guard)", store.ingest(signed))
+    }
+
+    @Test
+    fun `O144 v2 framing makes the broadcast splice structurally impossible - signature no longer verifies`() = runBlocking {
+        val store = store()
+        // content="hello" honest; splice content="hel", encryptedPayload="lo".
+        // Under v1 (no delimiters) the transcript was byte-identical, so the sig
+        // verified. Under v2 length-prefixing, framed("hello") = "5:hello" but
+        // framed("hel")+framed("lo") = "3:hel2:lo" — different bytes, so the
+        // honest signature must NOT verify over the spliced message.
+        val honest = RumorMessage(
+            id = "f".repeat(32),
             senderId = userId,
             senderPublicKey = kp.publicKeyBytes.toBase64(),
             sequenceNumber = 1,
@@ -112,20 +136,13 @@ class MessageStoreIngestTest {
         val spliced = honest.copy(
             payload = MessagePayload(ContentType.TEXT, "hel"),
             encryptedPayload = "lo",
-            signature = sig,
         )
-        // Teeth: the spliced message's signature genuinely verifies over its bytes.
-        assertTrue(
-            "splice precondition: signature must verify over the re-partitioned bytes",
-            CryptoManager.verify(
-                store.signableBytes(spliced), sig.fromBase64(),
-                kp.publicKeyBytes,
-            ),
+        assertFalse(
+            "v2 framing must make the splice transcript differ — sig cannot verify",
+            CryptoManager.verify(store.signableBytes(spliced), sig.fromBase64(), kp.publicKeyBytes),
         )
-        // The shape check must drop it anyway.
-        assertFalse("broadcast carrying encryptedPayload must be dropped (O144 splice)", store.ingest(spliced))
-        // Control: the honest broadcast still ingests.
-        assertTrue("honest broadcast still accepted", store.ingest(honest.copy(signature = sig)))
+        // And the honest broadcast round-trips under v2.
+        assertTrue("honest broadcast verifies + ingests under v2", store.ingest(honest.copy(signature = sig)))
     }
 
     @Test

@@ -308,21 +308,44 @@ class MessageStore(
      * be dropped at every downstream node). Also excludes the signature
      * field itself and the forward-compat `_ext` map (see [RumorMessage.ext]).
      *
-     * Prefixed with the `rumor-msg-v1:` domain tag so a sig produced here can
-     * never be replayed as a sig in another protocol context (HELLO challenge,
-     * blocklist record, future message-v2 envelope). Bump the tag only when
-     * the canonical-byte layout itself changes, never for additive fields.
+     * **O144 — v2 length-prefixed framing.** v1 concatenated the fields with NO
+     * separators, so the trailing free strings (content / encryptedPayload /
+     * recipientId) were re-partitionable: a relay could move a signed
+     * broadcast's content suffix into encryptedPayload — byte-identical
+     * transcript, same valid signature, but the displayed content (which reads
+     * only `payload.content`) came out truncated. Each field is now written as
+     * `<charLen>:<value>`, a self-delimiting / prefix-free encoding: the length
+     * prefix fixes every boundary, so no two distinct field-sequences can
+     * produce the same transcript and the splice is structurally impossible.
+     *
+     * Prefixed with the `rumor-msg-v2:` domain tag so a sig produced here can
+     * never be replayed as a sig in another protocol context, and so a v1 sig
+     * can never be accepted as a v2 sig (the framing change is a hard cutover —
+     * see `docs/RENAMED_FIELDS_NEVER_REUSE.md`; v1 is retired, no shipped users).
+     * Bump the tag only when the canonical-byte layout itself changes, never for
+     * additive fields. The `'|'`-delimited newer helpers (roomPostingCert,
+     * multiRecipientEnvelope, prekeyPublish, …) were assessed splice-safe — every
+     * field they cover is hex / base64 / decimal / enum, none of which can
+     * contain `'|'` — so they are deliberately NOT re-framed (no wire break for
+     * zero security gain).
      */
     fun signableBytes(msg: RumorMessage): ByteArray = buildString {
-        append("rumor-msg-v1:")
-        append(msg.id)
-        append(msg.senderId)
-        append(msg.senderPublicKey)
-        append(msg.sequenceNumber)
-        append(msg.sentAtMs)
-        append(msg.type.name)
-        append(msg.payload?.content ?: "")
-        append(msg.encryptedPayload ?: "")
-        append(msg.recipientId ?: "")
+        append("rumor-msg-v2:")
+        framed(msg.id)
+        framed(msg.senderId)
+        framed(msg.senderPublicKey)
+        framed(msg.sequenceNumber.toString())
+        framed(msg.sentAtMs.toString())
+        framed(msg.type.name)
+        framed(msg.payload?.content ?: "")
+        framed(msg.encryptedPayload ?: "")
+        framed(msg.recipientId ?: "")
     }.toByteArray(Charsets.UTF_8)
+
+    /** O144: write one field self-delimited as `<charLen>:<value>`. */
+    private fun StringBuilder.framed(value: String) {
+        append(value.length)
+        append(':')
+        append(value)
+    }
 }

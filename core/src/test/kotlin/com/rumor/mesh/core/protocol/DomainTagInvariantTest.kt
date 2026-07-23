@@ -143,12 +143,14 @@ class DomainTagInvariantTest {
     // silent break of every existing signature.
 
     @Test
-    fun `RumorMessage signable-bytes domain tag is rumor-msg-v1`() {
+    fun `RumorMessage signable-bytes domain tag is rumor-msg-v2`() {
         assertContainsTag(
             file = "core/src/main/kotlin/com/rumor/mesh/core/protocol/MessageStore.kt",
-            tag = "rumor-msg-v1:",
+            tag = "rumor-msg-v2:",
             purpose = "Outer Ed25519 signature scope on every RumorMessage. " +
-                "Bumping breaks every existing signature across the network.",
+                "O144: v2 length-prefixes each field (self-delimiting) to close " +
+                "the v1 splice/truncation attack. Bumping breaks every signature " +
+                "across the network — v1 is retired, never reuse (hard cutover).",
         )
     }
 
