@@ -1,3 +1,80 @@
+# Handoff — autonomous Tier-2 security-hardening sweep (2026-07-23, overnight)
+
+**Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
+**Git: commit + push directly to `main`, no feature branch.** Everything below
+is committed AND pushed (`c3a99e5` at handoff time; tree clean). All suites
+green (`:core` / `:app` / `:simulator` / `:node` compile+test).
+
+> **Build note for a fresh instance:** there is NO `java` on `PATH`. Export
+> `JAVA_HOME=~/jdk17` before any `./gradlew`. (Cost me the first build.)
+
+## What shipped this session (pure code, no hardware needed — all JVM-testable)
+Foundational audit-residue + Tier-2 blockers, closed most-foundational-first:
+
+1. **O116 (Room schema export) → `[PART]`:** `room.schemaLocation` KSP arg set,
+   `app/schemas/…/11.json` committed, `room-testing` dep added. Convention added
+   to CLAUDE.md: bump `RumorDatabase.version` AND commit the new schema JSON in
+   the same commit. Remaining = real `Migration` objects at first tagged release.
+2. **O128 + O120 → G44/G45:** `OnlineStatusTracker.mergeRemoteStatus` clamps
+   peer-asserted `lastSeen` to `now+2min` (poison no longer pins users online
+   mesh-wide); the three orphaned prune loops (breadcrumb/topology/online-status)
+   are wired through `GossipEngine.pruneMaintenance()`, ticked hourly by
+   `MeshRuntime`. `PruneWiringInvariantTest` greps both halves (3rd time this
+   codebase shipped a prune nobody called — guard the pattern now).
+3. **O117 → G46:** `BloomFilterData.deserialize` binds claimed `expectedItems`
+   to actual payload length BEFORE allocating (slow-DoS half of O13);
+   `MAX_RBSR_SESSION_IDS=50k` cumulative ceiling in GossipSession + SimTransport.
+4. **O118 → G47:** Meshtastic protobuf `readSubMessage` bounds check (was the
+   only length path with none) + negative/overflow-length guards on
+   `readBytes`/`skipField` (negative len previously REWOUND pos — silent desync).
+5. **O121 residue + O130 grab-bag:** breadcrumb DIRECT hop budget (was using
+   the broadcast budget); +2 missing domain tags in `DomainTagInvariantTest` and
+   `docs/wire-format.md §6` (`rumor-dm-recipient-tag-v1:`, `rumor-room-posting-cert-v1:`);
+   `selfAuthenticating` no-production-reader pin (SourceInvariantTest invariant 6);
+   deleted dead `MessageDao.delete(id)`; `SecureRandom`→`Random` for the non-secret
+   Meshtastic packet id.
+6. **O115 (identity lock lifecycle) → `[PART]`:** `lock()`/re-unlock now zero
+   `privateKeyBytes`; all derived AES wrapping keys `fill(0)`; `clearPassword()`
+   + char-array zeroing in PBKDF2; **iterations 100k→600k (OWASP)** with
+   `kdf_iterations` prefs versioning + auto-rewrap on first unlock; BlockManager
+   export blob `v2:` prefix (legacy blobs still import). Remaining = Settings
+   lock action + auto-lock (UI, → O143) and CharArray-from-UI threading.
+7. **O108 + O109 → G48/G49:** transfer-metadata evidence-gating (watchdog arms
+   on first real chunk), `Chunker.isPlausibleMetadata` (rejects the
+   `totalChunks=Int.MAX_VALUE` OOM), `MAX_ACTIVE_PER_SENDER=8`, windowed chunk
+   NACKs (`missingIndicesWindowed`, O(window) not O(totalChunks)), progress-aware
+   watchdog budget, chunk-row cleanup on abandon.
+
+## Backlog bookkeeping this session
+- O142 filed (pre-ship bridge live-check) in Tier 5.
+- **14 pure-`[TODO/UI]` rows folded into one row O143** (bodies relocated verbatim
+  to `docs/UI_BACKLOG.md`) — the consolidation the user asked for. O143's Step 0
+  is a design sit-down on UI direction BEFORE implementing.
+- Open-work count 70 → 51 this session.
+
+## Decisions I made autonomously (flag if you'd have done otherwise)
+- **Extracted `Chunker.isPlausibleMetadata` as a pure fn** rather than test the
+  reject path through a full GossipEngine — same property, unit-testable, better
+  compartmentalization.
+- **O115 iteration bump is format-versioned, not a hard cutover** — existing
+  fleet installs (100k) keep unlocking and silently upgrade. No re-onboard.
+
+## Waiting on the user (did NOT do — needs your call)
+- **UI work (O143):** the automated loop said "do UI in one sweep," but per your
+  own memory (UI ultra-low priority, needs a design sit-down first) and the row's
+  Step 0, I did NOT start UI. It needs your direction on look/approach before any
+  code. This is the one thing I deliberately deferred rather than build.
+- **O115 auto-lock UX** (timeout length, lock-on-background?) — a product choice;
+  the mechanism (`lock()` now actually zeroes) is ready for whatever you pick.
+
+## Next foundational candidates (my planned order if I keep going)
+O39 (per-message key-lifecycle re-audit of the merged compress+sealed-sender
+paths — the row flags a `CryptoManager.x25519Agreement` constant-salt HKDF
+assumption worth examining), then O123 (plugin disable-boundary race, extends
+O25), then O129 (vacuous `RoomMessageMalformedTagTest` — route through SimTransport).
+
+---
+
 # Handoff — long live-testing + sybil-defense session (2026-07-22)
 
 **Sign replies "By Order Of The High Magnate" (CLAUDE.md canary).**
