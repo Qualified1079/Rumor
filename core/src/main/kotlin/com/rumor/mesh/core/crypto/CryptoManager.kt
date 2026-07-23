@@ -135,11 +135,23 @@ object CryptoManager {
     fun generateSalt(bytes: Int = 32): ByteArray = PlatformRandom.nextBytes(bytes)
 
     /**
-     * Derives a 256-bit AES key from a passphrase.
-     * 100,000 iterations — slow enough to resist brute-force on a phone.
+     * O115: OWASP-recommended PBKDF2-HMAC-SHA256 work factor (~600k as of the
+     * 2023+ cheat sheet). Data wrapped at the legacy count keeps decrypting via
+     * an explicit iterations argument; writers re-wrap at this count.
      */
-    fun deriveKeyFromPassphrase(passphrase: String, salt: ByteArray): ByteArray =
-        PlatformCrypto.pbkdf2HmacSha256(passphrase, salt, iterations = 100_000, outputBits = 256)
+    const val PBKDF2_ITERATIONS = 600_000
+
+    /** Pre-O115 work factor. Only for reading data wrapped before the bump. */
+    const val PBKDF2_ITERATIONS_LEGACY = 100_000
+
+    /**
+     * Derives a 256-bit AES key from a passphrase. Iterations are explicit at
+     * every call site because the count is part of the stored-data format —
+     * callers version it alongside their ciphertext (see IdentityManager
+     * `kdf_iterations`, BlockManager export blob version prefix).
+     */
+    fun deriveKeyFromPassphrase(passphrase: String, salt: ByteArray, iterations: Int): ByteArray =
+        PlatformCrypto.pbkdf2HmacSha256(passphrase, salt, iterations = iterations, outputBits = 256)
 
     /**
      * Single-iteration PBKDF2 over the raw X25519 shared secret to produce a

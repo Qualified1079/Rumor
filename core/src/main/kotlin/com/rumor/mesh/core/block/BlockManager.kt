@@ -91,18 +91,25 @@ class BlockManager(
         val entries = blockEntryRepo.getActive()
         val plaintext = encodeEntries(entries)
         val salt = com.rumor.mesh.core.platform.PlatformRandom.nextBytes(16)
-        val key = CryptoManager.deriveKeyFromPassphrase(passphrase, salt)
+        val key = CryptoManager.deriveKeyFromPassphrase(passphrase, salt, CryptoManager.PBKDF2_ITERATIONS)
         val ct = CryptoManager.aesGcmEncrypt(plaintext, key)
-        return salt.toBase64() + ":" + ct.toBase64()
+        key.fill(0)
+        // O115: "v2:" marks the current PBKDF2 work factor; the un-prefixed
+        // legacy shape stays importable below.
+        return "v2:" + salt.toBase64() + ":" + ct.toBase64()
     }
 
     suspend fun importEncrypted(blob: String, passphrase: String): Int {
-        val (saltB64, ctB64) = blob.split(":", limit = 2).let { it[0] to it[1] }
+        val (body, iterations) =
+            if (blob.startsWith("v2:")) blob.removePrefix("v2:") to CryptoManager.PBKDF2_ITERATIONS
+            else blob to CryptoManager.PBKDF2_ITERATIONS_LEGACY
+        val (saltB64, ctB64) = body.split(":", limit = 2).let { it[0] to it[1] }
         val salt = saltB64.fromBase64()
-        val key = CryptoManager.deriveKeyFromPassphrase(passphrase, salt)
+        val key = CryptoManager.deriveKeyFromPassphrase(passphrase, salt, iterations)
         val plaintext = CryptoManager.aesGcmDecrypt(
             CryptoManager.AesGcmCiphertext.fromBase64(ctB64), key,
         )
+        key.fill(0)
         val entries = decodeEntries(plaintext)
         for (e in entries) blockEntryRepo.upsert(e)
         refresh()

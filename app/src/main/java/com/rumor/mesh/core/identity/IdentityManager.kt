@@ -33,8 +33,9 @@ class IdentityManager(
         val userId = CryptoManager.publicKeyToUserId(keypair.publicKeyBytes)
         val deviceId = generateDeviceId()
         val salt = CryptoManager.generateSalt()
-        val aesKey = CryptoManager.deriveKeyFromPassphrase(passphrase, salt)
+        val aesKey = CryptoManager.deriveKeyFromPassphrase(passphrase, salt, CryptoManager.PBKDF2_ITERATIONS)
         val encrypted = CryptoManager.aesGcmEncrypt(keypair.privateKeyBytes, aesKey)
+        aesKey.fill(0)
 
         prefs.edit()
             .putString("user_id", userId)
@@ -42,6 +43,7 @@ class IdentityManager(
             .putString("public_key", keypair.publicKeyBytes.toBase64())
             .putString("encrypted_private_key", encrypted.toBase64())
             .putString("kdf_salt", salt.toBase64())
+            .putInt("kdf_iterations", CryptoManager.PBKDF2_ITERATIONS)
             .putBoolean("identity_exists", true)
             .apply()
 
@@ -56,12 +58,21 @@ class IdentityManager(
         val encryptedB64 = prefs.getString("encrypted_private_key", null) ?: return false
         val saltB64 = prefs.getString("kdf_salt", null) ?: return false
 
+        // O115: the iteration count is part of the stored format. Absent key =
+        // wrapped pre-bump at the legacy count (existing fleet installs).
+        val iterations = prefs.getInt("kdf_iterations", CryptoManager.PBKDF2_ITERATIONS_LEGACY)
+
         return try {
             val salt = saltB64.fromBase64()
-            val aesKey = CryptoManager.deriveKeyFromPassphrase(passphrase, salt)
+            val aesKey = CryptoManager.deriveKeyFromPassphrase(passphrase, salt, iterations)
             val ct = CryptoManager.AesGcmCiphertext.fromBase64(encryptedB64)
             val privateKeyBytes = CryptoManager.aesGcmDecrypt(ct, aesKey)
+            aesKey.fill(0)
+            // Re-unlock without an intervening lock(): don't leave the previous
+            // key copy live on the heap.
+            _identity.value?.privateKeyBytes?.fill(0)
             _identity.value = LocalIdentity(userId, deviceId, publicKeyB64.fromBase64(), privateKeyBytes)
+            if (iterations < CryptoManager.PBKDF2_ITERATIONS) rewrap(privateKeyBytes, passphrase)
             RumorLog.i(TAG, "Identity unlocked: userId=${userId.take(16)}…")
             true
         } catch (e: Exception) {
@@ -70,7 +81,28 @@ class IdentityManager(
         }
     }
 
+    /**
+     * O115: upgrade stored wrapping to the current PBKDF2 work factor on the
+     * first successful unlock after the bump. Fresh salt per re-wrap; the
+     * passphrase is unchanged so this is invisible to the user.
+     */
+    private fun rewrap(privateKeyBytes: ByteArray, passphrase: String) {
+        val newSalt = CryptoManager.generateSalt()
+        val newKey = CryptoManager.deriveKeyFromPassphrase(passphrase, newSalt, CryptoManager.PBKDF2_ITERATIONS)
+        val encrypted = CryptoManager.aesGcmEncrypt(privateKeyBytes, newKey)
+        newKey.fill(0)
+        prefs.edit()
+            .putString("encrypted_private_key", encrypted.toBase64())
+            .putString("kdf_salt", newSalt.toBase64())
+            .putInt("kdf_iterations", CryptoManager.PBKDF2_ITERATIONS)
+            .apply()
+        RumorLog.i(TAG, "Identity re-wrapped at ${CryptoManager.PBKDF2_ITERATIONS} PBKDF2 iterations")
+    }
+
     fun lock() {
+        // O115: zero before dropping the reference — Identity.kt's contract.
+        // In-flight sign() calls race this by design; lock means stop.
+        _identity.value?.privateKeyBytes?.fill(0)
         _identity.value = null
         RumorLog.i(TAG, "Identity locked")
     }
@@ -78,11 +110,13 @@ class IdentityManager(
     fun changePassphrase(newPassphrase: String): Boolean {
         val id = _identity.value ?: return false
         val newSalt = CryptoManager.generateSalt()
-        val newKey = CryptoManager.deriveKeyFromPassphrase(newPassphrase, newSalt)
+        val newKey = CryptoManager.deriveKeyFromPassphrase(newPassphrase, newSalt, CryptoManager.PBKDF2_ITERATIONS)
         val encrypted = CryptoManager.aesGcmEncrypt(id.privateKeyBytes, newKey)
+        newKey.fill(0)
         prefs.edit()
             .putString("encrypted_private_key", encrypted.toBase64())
             .putString("kdf_salt", newSalt.toBase64())
+            .putInt("kdf_iterations", CryptoManager.PBKDF2_ITERATIONS)
             .apply()
         RumorLog.i(TAG, "Passphrase changed")
         return true

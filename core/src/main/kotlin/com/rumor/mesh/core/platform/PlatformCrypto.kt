@@ -107,8 +107,17 @@ object PlatformCrypto {
     }
 
     fun pbkdf2HmacSha256(passphrase: String, salt: ByteArray, iterations: Int, outputBits: Int): ByteArray {
-        val spec = PBEKeySpec(passphrase.toCharArray(), salt, iterations, outputBits)
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        return factory.generateSecret(spec).encoded
+        // O115: clear both passphrase copies we control. The String itself is
+        // uncollectable-by-us (JVM interning) — threading CharArray from the
+        // entry UI is the remaining full fix, tracked on the O115 row.
+        val chars = passphrase.toCharArray()
+        val spec = PBEKeySpec(chars, salt, iterations, outputBits)
+        try {
+            val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            return factory.generateSecret(spec).encoded
+        } finally {
+            spec.clearPassword()
+            chars.fill('\u0000')
+        }
     }
 }
