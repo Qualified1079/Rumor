@@ -1,6 +1,7 @@
 package com.rumor.mesh.simulator.engine
 
 import com.rumor.mesh.core.crypto.CryptoManager
+import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
@@ -80,5 +81,71 @@ class MessageStoreIngestTest {
     fun `a well-formed signed message ingests once`() = runBlocking {
         val store = store()
         assertTrue(store.ingest(store.signed("c".repeat(32))))
+    }
+
+    /**
+     * O144: signableBytes concatenates content/encryptedPayload/recipientId with
+     * no delimiters. A relay can truncate a signed broadcast by moving the
+     * content suffix into encryptedPayload — the concatenation (and thus the
+     * signature) is unchanged, but a broadcast that carries an encryptedPayload
+     * is the splice shape and must be dropped. These drive the REAL ingest path
+     * (the signature genuinely verifies — that's the whole point).
+     */
+    @Test
+    fun `a broadcast splice - suffix moved into encryptedPayload - is dropped despite a valid signature`() = runBlocking {
+        val store = store()
+        // Legit: content = "hello". Splice: content = "hel", encryptedPayload = "lo".
+        // Concatenation content+encryptedPayload+recipientId = "hel"+"lo"+"" = "hello",
+        // byte-identical to the honest broadcast, so the honest signature verifies.
+        val honest = RumorMessage(
+            id = "d".repeat(32),
+            senderId = userId,
+            senderPublicKey = kp.publicKeyBytes.toBase64(),
+            sequenceNumber = 1,
+            sentAtMs = 1_000L,
+            type = MessageType.BROADCAST,
+            hopsToLive = 7,
+            payload = MessagePayload(ContentType.TEXT, "hello"),
+            signature = "",
+        )
+        val sig = CryptoManager.sign(store.signableBytes(honest), kp.privateKeyBytes).toBase64()
+        val spliced = honest.copy(
+            payload = MessagePayload(ContentType.TEXT, "hel"),
+            encryptedPayload = "lo",
+            signature = sig,
+        )
+        // Teeth: the spliced message's signature genuinely verifies over its bytes.
+        assertTrue(
+            "splice precondition: signature must verify over the re-partitioned bytes",
+            CryptoManager.verify(
+                store.signableBytes(spliced), sig.fromBase64(),
+                kp.publicKeyBytes,
+            ),
+        )
+        // The shape check must drop it anyway.
+        assertFalse("broadcast carrying encryptedPayload must be dropped (O144 splice)", store.ingest(spliced))
+        // Control: the honest broadcast still ingests.
+        assertTrue("honest broadcast still accepted", store.ingest(honest.copy(signature = sig)))
+    }
+
+    @Test
+    fun `a message with a malformed recipientId is dropped`() = runBlocking {
+        val store = store()
+        val honest = RumorMessage(
+            id = "e".repeat(32),
+            senderId = userId,
+            senderPublicKey = kp.publicKeyBytes.toBase64(),
+            sequenceNumber = 1,
+            sentAtMs = 1_000L,
+            type = MessageType.DIRECT,
+            hopsToLive = 15,
+            encryptedPayload = "ct",
+            recipientId = "not-a-valid-64-hex-userid",
+            signature = "",
+        )
+        val signed = honest.copy(
+            signature = CryptoManager.sign(store.signableBytes(honest), kp.privateKeyBytes).toBase64(),
+        )
+        assertFalse("malformed recipientId must be dropped (splice guard)", store.ingest(signed))
     }
 }

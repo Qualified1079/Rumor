@@ -159,6 +159,36 @@ class MessageStore(
             return false
         }
 
+        // 3b. O144 canonicalization defense (partial, non-wire). signableBytes
+        //    concatenates the trailing free-string fields (content /
+        //    encryptedPayload / recipientId) with NO delimiters, so a relay can
+        //    re-partition them while keeping a valid signature — e.g. truncate a
+        //    signed broadcast by pushing its suffix into encryptedPayload, or
+        //    shift bytes across the encryptedPayload↔recipientId boundary on a
+        //    DM. The full fix is a length-prefixed v2 transcript (wire-affecting,
+        //    tracked as O144); these per-type shape checks close the practical
+        //    splices now without a wire bump. Every legit composeX path already
+        //    satisfies them (verified: buildMessage defaults + composeBroadcast /
+        //    composeDirect / composeRoomMessage), so a message that fails one is
+        //    anomalous — an honest sender never produces it.
+        //
+        //    recipientId, when present, is always a Rumor userId (64-hex) — so a
+        //    spliced value pushed into it can't survive this shape check.
+        if (msg.recipientId != null && !CryptoManager.isValidUserId(msg.recipientId)) {
+            RumorLog.w(TAG, "Dropping message ${msg.id.take(8)}: malformed recipientId (splice?)")
+            _sigFailures.incrementAndGet()
+            return false
+        }
+        //    A broadcast is plaintext with no recipient; any encryptedPayload or
+        //    recipientId is the truncation-splice shape.
+        if (msg.type == com.rumor.mesh.core.model.MessageType.BROADCAST &&
+            (msg.encryptedPayload != null || msg.recipientId != null)
+        ) {
+            RumorLog.w(TAG, "Dropping broadcast ${msg.id.take(8)}: carries encryptedPayload/recipientId (splice?)")
+            _sigFailures.incrementAndGet()
+            return false
+        }
+
         // 4. O16 per-sender token bucket, now on an AUTHENTICATED senderId: minting
         //    a fresh budget requires a fresh keypair (the Sybil floor per O27/O60),
         //    not merely a different string. Relay path is unaffected — this only
