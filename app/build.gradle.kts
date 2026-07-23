@@ -124,6 +124,10 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
+    // O116: exported schema JSONs on the androidTest classpath so future
+    // Migration objects can be verified with MigrationTestHelper.
+    androidTestImplementation("androidx.room:room-testing:2.6.1")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
@@ -167,4 +171,11 @@ android.testOptions {
     unitTests.all {
         it.useJUnitPlatform()
     }
+}
+
+// O116: export Room schema JSONs (app/schemas/, committed) so real Migration
+// objects can be authored against them. Without this, the first release-build
+// schema bump throws on DB open — total data loss on long-offline devices.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
