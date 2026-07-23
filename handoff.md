@@ -462,13 +462,41 @@ Foundational audit-residue + Tier-2 blockers, closed most-foundational-first:
    `totalChunks=Int.MAX_VALUE` OOM), `MAX_ACTIVE_PER_SENDER=8`, windowed chunk
    NACKs (`missingIndicesWindowed`, O(window) not O(totalChunks)), progress-aware
    watchdog budget, chunk-row cleanup on abandon.
+8. **O39 → G50:** per-message key-lifecycle re-audit of the merged compress +
+   sealed-sender paths. Constant HKDF salt confirmed CORRECT (freshness comes
+   from the ephemeral key, RFC 5869). **Real gap fixed:** `x25519Agreement`
+   never zeroed the raw ECDH secret — since the salt is public+constant, a
+   leaked `shared` re-derives the AES key, so call-site zeroing of the derived
+   key was worthless. `finally { shared.fill(0) }`, byte-transparent, benefits
+   all consumers. SourceInvariantTest invariant 7. Sig-scope confirmed over
+   ciphertext (no UKS surface).
+9. **O129:** the vacuous `RoomMessageMalformedTagTest` now routes both a
+   discrimination control AND the tampered message through real `SimTransport`
+   (was asserting on a bare object never sent). Proves: control emits, tampered
+   drops from inbox, tampered still stored (relay-never-filters).
+10. **O123 → G51:** plugin disable-boundary race — `PluginHolder.alive` flag
+    cleared before teardown, checked in the dispatch loop. `PluginDisableBoundaryTest`
+    source-guards the ordering (flag write before scope cancel).
+11. **O130 residue (a,b,c,e,f,g):** (a) `RelayBatcher` per-message release
+    deadlines close the arrive-just-before-flush zero-delay timing leak;
+    (b) sim `observeThread`/`observeAllDirect` sort to match Room; (e)
+    `DebouncedHlcStore` coalesces HLC persistence (both hosts, flushNow on stop);
+    (f) Meshtastic packet-id SecureRandom→Random; (g) logback 1.4.14→1.5.13;
+    (c) dead `MessageDao.delete(id)` removed. Remaining O130: (d) SortedListRbsrStorage
+    linear scan (defer — profile before large-anchor regime), (h) dependency-staleness
+    audit (deferred, no confirmed CVE).
 
 ## Backlog bookkeeping this session
 - O142 filed (pre-ship bridge live-check) in Tier 5.
 - **14 pure-`[TODO/UI]` rows folded into one row O143** (bodies relocated verbatim
   to `docs/UI_BACKLOG.md`) — the consolidation the user asked for. O143's Step 0
   is a design sit-down on UI direction BEFORE implementing.
-- Open-work count 70 → 51 this session.
+- **Open-work count 70 → 48 this session.** Closed to G-rows: O120/O128 (G44/G45),
+  O117 (G46), O118 (G47), O108/O109 (G48/G49), O39 (G50), O123 (G51). O116/O115
+  → `[PART]`. O129, O130(a/b/c/e/f/g), O121 residue (a/b/c) fixed in place.
+- **Commit note:** use `git commit -F <file>` for bodies — inline backticks in a
+  `-m` string trigger bash command substitution (mangled one commit msg early on;
+  harmless, but annoying).
 
 ## Decisions I made autonomously (flag if you'd have done otherwise)
 - **Extracted `Chunker.isPlausibleMetadata` as a pure fn** rather than test the
@@ -486,10 +514,16 @@ Foundational audit-residue + Tier-2 blockers, closed most-foundational-first:
   the mechanism (`lock()` now actually zeroes) is ready for whatever you pick.
 
 ## Next foundational candidates (my planned order if I keep going)
-O39 (per-message key-lifecycle re-audit of the merged compress+sealed-sender
-paths — the row flags a `CryptoManager.x25519Agreement` constant-salt HKDF
-assumption worth examining), then O123 (plugin disable-boundary race, extends
-O25), then O129 (vacuous `RoomMessageMalformedTagTest` — route through SimTransport).
+The Tier-2 audit-residue is now largely cleared. Biggest remaining foundational
+JVM-testable item: **O38 receiver-side forward secrecy** — the prekey rotation
+scheduler + per-contact sender cache + `composeDirect` freshest-prekey selection.
+The wire shape + `PrekeyVerifier` already shipped; this is the local-state +
+scheduler plumbing. It's a multi-file FEATURE (not a surgical fix), so it wants
+its own focused session rather than a tail-end slice — flagged as the next
+session's headline. After that: O25 auto-disable remainder (plugin crash
+isolation), O48 (bridge synthetic-userId ← pubkey-hash, needs the bridge path).
+Deferred by design: O130(d) RBSR linear scan (profile first), O130(h) dep audit,
+O121(d) SortedListRbsr scan, everything `[TODO/EMU]`/`[TODO/HW]`.
 
 ---
 
