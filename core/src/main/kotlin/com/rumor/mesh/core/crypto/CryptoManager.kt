@@ -68,16 +68,16 @@ object CryptoManager {
 
     /**
      * Returns a 32-byte session key. Both sides must derive the same one.
-     * Wire-format-critical: the KDF here (PBKDF2 with the "RumorDH" salt,
-     * single iteration) must produce identical bytes on every platform.
+     * Wire-format-critical: the KDF here (HKDF-extract = HMAC-SHA256 keyed on the
+     * constant "RumorDH" salt) must produce identical bytes on every platform.
      */
     fun x25519Agreement(ourPrivateKeyBytes: ByteArray, theirPublicKeyBytes: ByteArray): ByteArray {
         val shared = PlatformCrypto.x25519Agreement(ourPrivateKeyBytes, theirPublicKeyBytes)
-        // HKDF-SHA256 would be ideal but PBKDF2 with a constant salt gives a
-        // well-understood 256-bit key without pulling in extra dependencies.
+        // HKDF-extract (HMAC-SHA256 keyed on the salt) over the already-uniform
+        // DH output — one keyed hash to domain-separate, no extra dependency.
         // The salt is a domain tag, NOT the source of per-message key variation
         // (that comes from the fresh ephemeral key → unique `shared`); a constant
-        // salt in HKDF-extract is exactly per RFC 5869. (O39)
+        // salt in HKDF-extract is exactly per RFC 5869. (O39; PBKDF2 form retired G20)
         try {
             return deriveAesKey(shared, byteArrayOf(0x52, 0x75, 0x6d, 0x6f, 0x72, 0x44, 0x48))
         } finally {
@@ -176,16 +176,12 @@ object CryptoManager {
         PlatformCrypto.pbkdf2HmacSha256(passphrase, salt, iterations = iterations, outputBits = 256)
 
     /**
-     * Single-iteration PBKDF2 over the raw X25519 shared secret to produce a
-     * 256-bit AES key. The raw output is already high-entropy so iterations
-     * aren't doing brute-force protection — they're doing KDF mixing.
-     *
-     * **Wire-format-critical.** The passphrase argument is null in the legacy
-     * JVM `PBEKeySpec(null, secret + salt, …)` form; we approximate by feeding
-     * the salt-prefixed secret as the passphrase bytes (UTF-8 via String).
-     * On JVM the legacy code path is preserved verbatim via PlatformCrypto's
-     * actual; on other platforms the actual is responsible for matching that
-     * behaviour byte-for-byte.
+     * HKDF-extract (RFC 5869): `HMAC-SHA256(salt, secret)` → a 256-bit AES key.
+     * The X25519 output is already high-entropy, so this is a single keyed hash
+     * for domain separation, not brute-force protection. **Wire-format-critical**
+     * — every platform's `platformDeriveAesKey` actual must produce identical
+     * bytes. (The earlier single-iteration-PBKDF2 / `PBEKeySpec(null, …)` form
+     * was retired in G20 — it crashed on-device and never encrypted a real DM.)
      */
     private fun deriveAesKey(secret: ByteArray, salt: ByteArray): ByteArray =
         platformDeriveAesKey(secret, salt)
@@ -201,17 +197,16 @@ object CryptoManager {
 }
 
 /**
- * Bridge to the legacy `PBEKeySpec(null, secret + salt, 1, 256)` form used in
- * `deriveAesKey`. The JVM implementation calls into `SecretKeyFactory` with
- * the null-passphrase form (which BouncyCastle and the SunJCE both accept);
- * non-JVM actuals match the byte output.
+ * `deriveAesKey`'s platform actual: HKDF-extract (RFC 5869) =
+ * `HMAC-SHA256(salt, secret)` → 32 bytes = AES-256 key. The X25519 output is
+ * already uniform; one keyed hash domain-separates it. Non-JVM actuals must
+ * match this byte-for-byte.
+ *
+ * The previous PBKDF2 shape (`PBEKeySpec(null, …)`) crashed on-device — Android's
+ * BouncyCastle rejects an empty password, and raw DH bytes don't survive the
+ * char[] conversion PBKDF2 wants — so it never encrypted a real DM and this
+ * byte-level change broke no deployed traffic (G20).
  */
-// HKDF-extract (RFC 5869): HMAC-SHA256(salt, secret) → 32 bytes = AES-256 key.
-// The X25519 output is already uniform; one keyed hash domain-separates it.
-// The previous PBKDF2 shape (PBEKeySpec(null, …)) crashed on-device: Android's
-// BouncyCastle rejects an empty password, and raw DH bytes don't survive the
-// char[] conversion PBKDF2 wants anyway. No DM ever encrypted successfully
-// under the old form, so this byte-level change broke no deployed traffic (G20).
 internal fun platformDeriveAesKey(secret: ByteArray, salt: ByteArray): ByteArray {
     val mac = javax.crypto.Mac.getInstance("HmacSHA256")
     mac.init(javax.crypto.spec.SecretKeySpec(salt, "HmacSHA256"))
