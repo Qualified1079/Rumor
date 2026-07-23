@@ -18,6 +18,16 @@ data class InboxPolicy(
      * before assembly starts. Null = no limit.
      */
     val maxIncomingBytes: Long? = null,
+    /**
+     * O135(1)/O136: when true, only FRIENDED senders reach the inbox (the
+     * "known peers only" toggle). Relay and storage are unaffected — this is
+     * the display-layer allowlist that makes a sybil flood invisible without
+     * depriving the mesh. "Friended" is an explicit user act (O136), NOT a
+     * mere contact (every exchanged peer auto-becomes a contact, so contacts
+     * are worthless as the trust signal — see O134). Enforced by
+     * [KnownSendersInboxFilter], which owns the friended-predicate.
+     */
+    val friendedSendersOnly: Boolean = false,
 ) {
     companion object {
         val DEFAULT = InboxPolicy()

@@ -49,6 +49,11 @@ class SimNode(
      * one-off tests.
      */
     val clock: com.rumor.mesh.core.Clock = com.rumor.mesh.core.SystemClock,
+    /**
+     * O135(1): the inbox filter. Defaults to permissive; scenarios testing the
+     * "known peers only" defense pass a [com.rumor.mesh.core.policy.KnownSendersInboxFilter].
+     */
+    private val inboxFilterOverride: com.rumor.mesh.core.policy.InboxFilter? = null,
 ) {
     /**
      * O12/O114 escalation — per-node serialized execution. GossipEngine's
@@ -95,7 +100,7 @@ class SimNode(
     val meshView               = com.rumor.mesh.core.routing.MeshViewTracker(clock = clock)
     private val scheduler       = Scheduler()
     private val blockManager    = BlockManager(blockEntryRepo, subscribedRepo, blocklistRepo)
-    private val inboxFilter     = PermissiveInboxFilter()
+    private val inboxFilter     = inboxFilterOverride ?: PermissiveInboxFilter()
 
     /**
      * O79 receive-side subscription provider for ROOM_MESSAGE dispatch.
@@ -149,12 +154,24 @@ class SimNode(
     private val _reassembledTransfers = MutableStateFlow(0L)
     val reassembledTransfers: StateFlow<Long> = _reassembledTransfers.asStateFlow()
 
+    /**
+     * O135(1) test hook: sender ids of every message that passed the inbox
+     * filter (i.e. reached [GossipEngine.incomingMessages] — what the UI sees).
+     * Distinct from [messageRepo] (the store, which holds everything relayed
+     * regardless of filter). A sybil-flood scenario compares the two:
+     * store = all (relay untouched), inbox = only friended senders.
+     */
+    val inboxSenderIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     init {
         // Track successful reassembly events for the chunked-delivery assertion.
         scope.launch {
             transferAssembler.assembledTransfers.collect { _: AssembledTransfer ->
                 _reassembledTransfers.value++
             }
+        }
+        scope.launch {
+            gossipEngine.incomingMessages.collect { inboxSenderIds.add(it.senderId) }
         }
         // Wire dup-on-ingest from CanaryMetrics into the per-node counter.
         // Without this the per-node `dupDrops` field stays 0 even when the
