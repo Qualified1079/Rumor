@@ -60,6 +60,13 @@ class BlockManager(
 
     /** Returns false (a no-op) if [userId] is the local node's own identity. */
     suspend fun block(userId: String, durationMs: Long? = null, reason: String? = null): Boolean {
+        // O112: a block-by-id value can be typed by hand (O110) — shape-validate
+        // before it reaches storage so null-likes / injections / oversize junk
+        // never become a stored block entry.
+        if (!CryptoManager.isValidUserId(userId)) {
+            RumorLog.w(TAG, "Refusing to block malformed userId (len=${userId.length})")
+            return false
+        }
         if (userId == localUserId()) {
             RumorLog.w(TAG, "Refusing to block own identity ${userId.take(16)}…")
             return false

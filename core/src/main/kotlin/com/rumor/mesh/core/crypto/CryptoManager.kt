@@ -42,6 +42,18 @@ object CryptoManager {
     fun publicKeyToUserId(publicKeyBytes: ByteArray): String =
         Sha256.digest(publicKeyBytes).toHex()
 
+    /**
+     * O112: a userId is by construction `SHA-256(publicKey).toHex()` — exactly
+     * 64 lowercase hex chars. On the wire this is enforced structurally (a
+     * signed message's senderId must hash from its pubkey), but a *locally
+     * typed* userId (block-by-id field, filter allowlists, room invites) has no
+     * such gate, so callers accepting one from a UI/text boundary must shape-
+     * validate here. Rejects null-likes, SQL/format-string/unicode-abuse, and
+     * oversize input at the boundary before it reaches storage or matching.
+     */
+    fun isValidUserId(candidate: String): Boolean =
+        candidate.length == 64 && candidate.all { it in '0'..'9' || it in 'a'..'f' }
+
     // ── X25519 ───────────────────────────────────────────────────────────────
 
     data class X25519KeyPair(

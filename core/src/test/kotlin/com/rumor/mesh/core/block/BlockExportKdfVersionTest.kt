@@ -73,6 +73,19 @@ class BlockExportKdfVersionTest {
     }
 
     @Test
+    fun `block rejects malformed userIds and stores only valid ones`() = runBlocking {
+        val mgr = manager()
+        // O112: hostile-corpus + near-miss userIds must never become block entries.
+        for (bad in com.rumor.mesh.core.HostileStrings.allShort + "A".repeat(64) + "a".repeat(63)) {
+            assertTrue(!mgr.block(bad), "block() must refuse malformed userId: ${bad.take(20)}")
+        }
+        assertTrue(mgr.activeLocalBlocks().isEmpty(), "no malformed entry may be stored")
+        // A well-formed userId still blocks.
+        assertTrue(mgr.block(userA))
+        assertTrue(mgr.isBlocked(userA))
+    }
+
+    @Test
     fun `wrong passphrase fails cleanly`() = runBlocking {
         val src = manager()
         src.block(userA)

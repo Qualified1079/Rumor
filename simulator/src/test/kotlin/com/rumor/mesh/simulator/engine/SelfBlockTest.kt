@@ -16,7 +16,8 @@ import org.junit.Test
  */
 class SelfBlockTest {
 
-    private val self = "self-user-id"
+    private val self = "5".repeat(64)
+    private val other = "a".repeat(64)
 
     private fun manager() = BlockManager(
         InMemoryBlockEntryRepository(),
@@ -32,8 +33,8 @@ class SelfBlockTest {
         assertFalse("block(self) must be a no-op returning false", bm.block(self))
         assertFalse("self must never be in the blocked set", bm.isBlocked(self))
 
-        assertTrue("blocking a peer succeeds", bm.block("someone-else"))
-        assertTrue(bm.isBlocked("someone-else"))
+        assertTrue("blocking a peer succeeds", bm.block(other))
+        assertTrue(bm.isBlocked(other))
     }
 
     @Test
