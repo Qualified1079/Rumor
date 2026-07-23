@@ -309,6 +309,42 @@ private const val REALTIME_CEILING_BYTES       = 16 * 1024
 private const val TRANSFER_SETUP_CEILING_BYTES = 256 * 1024
 
 /**
+ * O132 — hard size ceiling for gossip-tier text content (BROADCAST / ROOM_MESSAGE).
+ * These are never chunked (chunking is file-transfer-only), so an uncapped one
+ * becomes a single monolithic frame; a >4 MB frame trips the GossipSession read
+ * guard, resets the session, and — because the message stays in the offer batch
+ * — is re-offered every round, wedging ALL sync to that peer (head-of-line
+ * denial-of-relay, field-confirmed). 64 KB is far beyond any legitimate text
+ * post and well under the frame limit. Enforced at compose AND ingest.
+ */
+const val MAX_BROADCAST_CONTENT_BYTES = 64 * 1024
+
+/**
+ * O132 — per-message ceiling for what may be placed in an outbound offer batch.
+ * A single message larger than this is never offered (skipped, not sent-and-
+ * reset), so a legacy/oversized message that predates [MAX_BROADCAST_CONTENT_BYTES]
+ * can't poison the link. Generous vs any legitimate message (capped text 64 KB,
+ * padded DM ≤64 KB, transfer chunk ~60 KB) yet far under the 4 MB frame guard.
+ */
+const val MAX_OFFERABLE_MESSAGE_BYTES = 1 * 1024 * 1024
+
+/**
+ * O132 — cumulative byte budget for one offer batch, so the serialized frame
+ * stays under the GossipSession 4 MB read guard with headroom for JSON/base64
+ * inflation. The batch is trimmed to this budget after the count cap.
+ */
+const val MAX_OFFER_BATCH_BYTES = 3 * 1024 * 1024
+
+/**
+ * O132 — cheap over-estimate of a message's on-wire size for batch budgeting:
+ * text + base64 ciphertext + a fixed per-message overhead (id, sig, pubkey,
+ * JSON keys, _ext). Chars ≈ bytes on the UTF-8/ASCII wire; deliberately high so
+ * the budget never under-counts.
+ */
+fun RumorMessage.approxWireBytes(): Int =
+    (payload?.content?.length ?: 0) + (encryptedPayload?.length ?: 0) + 1024
+
+/**
  * Traffic class for this message, derived from its [type], payload content
  * type, and size.
  *

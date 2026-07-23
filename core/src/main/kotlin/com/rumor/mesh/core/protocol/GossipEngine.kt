@@ -4,6 +4,7 @@ import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.crypto.CryptoManager.fromBase64
 import com.rumor.mesh.core.crypto.CryptoManager.toBase64
+import com.rumor.mesh.core.model.approxWireBytes
 import com.rumor.mesh.core.model.BridgeVouchedPayload
 import com.rumor.mesh.core.model.SelfPresencePayload
 import com.rumor.mesh.core.model.UserMode
@@ -383,6 +384,12 @@ class GossipEngine(
         mentions: List<String> = emptyList(),
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
+        // O132: broadcasts are never chunked; refuse oversized text so it can't
+        // become a >4 MB monolithic frame that wedges sync.
+        if (text.length > com.rumor.mesh.core.model.MAX_BROADCAST_CONTENT_BYTES) {
+            RumorLog.w(TAG, "Refusing broadcast: ${text.length}B exceeds ${com.rumor.mesh.core.model.MAX_BROADCAST_CONTENT_BYTES}B cap")
+            return null
+        }
         val base = buildMessage(
             identity = identity,
             type = MessageType.BROADCAST,
@@ -713,6 +720,11 @@ class GossipEngine(
         mentions: List<String> = emptyList(),
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
+        // O132: room messages are gossip-tier and unchunked — same cap as broadcasts.
+        if (plaintext.length > com.rumor.mesh.core.model.MAX_BROADCAST_CONTENT_BYTES) {
+            RumorLog.w(TAG, "Refusing room message: ${plaintext.length}B exceeds cap")
+            return null
+        }
 
         val baseMsg: RumorMessage = if (recipients.isEmpty()) {
             // OPEN room — signed plaintext broadcast.
@@ -871,7 +883,7 @@ class GossipEngine(
             }
             routedFiltered.add(msg)
         }
-        if (breadcrumbs == null) return routedFiltered
+        if (breadcrumbs == null) return budgetOfferBatch(routedFiltered)
 
         // O29 ordering bias for messages that haven't been pre-routed
         // (locally-composed DMs and intended-peer-null relays): DMs whose
@@ -883,8 +895,33 @@ class GossipEngine(
                 msg.recipientId != null &&
                 peerUserId in breadcrumbs.candidatePeersSync(msg.recipientId)
         }
-        return preferred + rest
+        return budgetOfferBatch(preferred + rest)
     }
+
+    /**
+     * O132 head-of-line-block fix: bound an offer batch so its serialized frame
+     * can't exceed the GossipSession 4 MB read guard. Skip any single message
+     * over [MAX_OFFERABLE_MESSAGE_BYTES] entirely (a legacy/oversized message
+     * that would otherwise reset the session every round and wedge ALL sync to
+     * the peer), and stop adding once the cumulative budget is reached. Order is
+     * preserved, so the freshest/priority-shaped head still goes first.
+     */
+    private fun budgetOfferBatch(msgs: List<RumorMessage>): List<RumorMessage> {
+        var acc = 0
+        val out = ArrayList<RumorMessage>(msgs.size)
+        for (msg in msgs) {
+            val sz = msg.approxWireBytes()
+            if (sz > com.rumor.mesh.core.model.MAX_OFFERABLE_MESSAGE_BYTES) {
+                RumorLog.w(TAG, "Skipping un-offerable ${msg.id.take(8)}… (${sz}B > frame budget) — never wedge the link")
+                continue
+            }
+            if (acc + sz > com.rumor.mesh.core.model.MAX_OFFER_BATCH_BYTES) break
+            acc += sz
+            out.add(msg)
+        }
+        return out
+    }
+
     fun knownMessageIds(): Set<String> = duplicateFilter.knownIds()
     val queueDepth: Int get() = scheduler.queueDepth
 

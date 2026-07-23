@@ -171,6 +171,21 @@ class MessageStore(
 
         // 5. Commit: only now is it safe to mark the id permanently seen and store.
         duplicateFilter.recordAndCheck(msg.id)
+
+        // O132: drop oversized gossip-tier content (BROADCAST / ROOM_MESSAGE are
+        // never chunked). Recorded as seen above so a peer's re-offer fast-drops,
+        // but never stored or relayed — returning false makes the caller treat it
+        // as not-new (no relay, no inbox). Stops an oversized message from ever
+        // sitting in the store to poison offer batches.
+        if ((msg.type == com.rumor.mesh.core.model.MessageType.BROADCAST ||
+                msg.type == com.rumor.mesh.core.model.MessageType.ROOM_MESSAGE) &&
+            (msg.payload?.content?.length ?: 0) > com.rumor.mesh.core.model.MAX_BROADCAST_CONTENT_BYTES
+        ) {
+            RumorLog.w(TAG, "Dropping oversized ${msg.type} ${msg.id.take(8)}… " +
+                "(${msg.payload?.content?.length}B > ${com.rumor.mesh.core.model.MAX_BROADCAST_CONTENT_BYTES}B)")
+            return false
+        }
+
         if (!persist) return true
         ensureContact(msg.senderId, msg.senderPublicKey)
         messageRepo.insert(msg)

@@ -45,6 +45,15 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
+// Each SimNode is a full engine graph (scopes, flows). Many heavy scenario
+// classes in one JVM accrete live nodes and OOM the default heap under the
+// parallel run (see docs/SIMULATOR_TESTING.md §4). Give the test JVM room and
+// restart it periodically so leaked state can't accumulate across the suite.
+tasks.test {
+    maxHeapSize = "2g"
+    forkEvery = 15
+}
+
 // Fat jar so `java -jar simulator.jar` just works with no classpath setup.
 tasks.jar {
     manifest { attributes["Main-Class"] = "com.rumor.mesh.simulator.MainKt" }
