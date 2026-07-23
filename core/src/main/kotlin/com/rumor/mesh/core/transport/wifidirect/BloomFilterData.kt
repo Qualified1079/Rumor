@@ -106,8 +106,21 @@ class BloomFilterData(
         }
 
         fun deserialize(b64: String, expectedItems: Int): BloomFilterData {
-            val filter = BloomFilterData(expectedItems)
+            // O117: bind the claimed size to the actual payload BEFORE any
+            // allocation. serialize() emits exactly bits.size*8 bytes and the
+            // bit layout is a pure function of expectedItems, so an honest
+            // claim always matches — while a fabricated huge expectedItems
+            // would have to ship the matching multi-MB payload through the
+            // frame cap to get past this. Closes the slow-DoS half of O13
+            // (heavy allocation + GC pressure below the OOM the catch sees).
+            require(expectedItems >= 0) { "negative expectedItems" }
             val bytes = Base64Codec.decode(b64)
+            val claimedBits = optimalBitCount(expectedItems, DEFAULT_FALSE_POSITIVE_RATE)
+            val claimedBytes = ((claimedBits.toLong() + 63) / 64) * 8
+            require(claimedBytes == bytes.size.toLong()) {
+                "bloom size mismatch: expectedItems=$expectedItems implies $claimedBytes bytes, got ${bytes.size}"
+            }
+            val filter = BloomFilterData(expectedItems)
             for (i in filter.bits.indices) {
                 var v = 0L
                 for (b in 0..7) {

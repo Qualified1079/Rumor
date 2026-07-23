@@ -273,6 +273,12 @@ class GossipSession(
                     val r = rbsr.respond(incoming.frames.map { it.toMemory() })
                     peerHas.addAll(r.peerHas)
                     peerNeeds.addAll(r.peerNeeds)
+                    // O117: stop accreting ids past the session ceiling — the
+                    // remainder syncs on later rounds instead of growing heap.
+                    if (peerHas.size + peerNeeds.size > com.rumor.mesh.core.sync.MAX_RBSR_SESSION_IDS) {
+                        RumorLog.w(TAG, "RBSR session id ceiling hit — deferring remainder to next exchange")
+                        break
+                    }
                     if (ourFrames.isEmpty() && incoming.frames.isEmpty()) break
                     ourFrames = r.outgoing
                 }

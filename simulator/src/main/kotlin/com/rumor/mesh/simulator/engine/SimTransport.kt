@@ -179,6 +179,12 @@ class SimTransport(
             aPeerNeeds.addAll(responseA.peerNeeds)
             val responseB = rbsrB.respond(framesA)
             bPeerNeeds.addAll(responseB.peerNeeds)
+            // O117 parity with GossipSession: same per-session id ceiling, so
+            // sim scenarios exercise the same partial-sync behavior real
+            // devices now have.
+            if (aPeerNeeds.size > com.rumor.mesh.core.sync.MAX_RBSR_SESSION_IDS ||
+                bPeerNeeds.size > com.rumor.mesh.core.sync.MAX_RBSR_SESSION_IDS
+            ) break
             if (framesA.isEmpty() && framesB.isEmpty()) break
             framesA = responseA.outgoing
             framesB = responseB.outgoing

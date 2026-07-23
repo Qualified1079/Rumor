@@ -84,6 +84,16 @@ const val MAX_RBSR_ROUNDS: Int = 12
 const val RBSR_MIN_SET_SIZE: Int = 3_000
 
 /**
+ * O117: cumulative per-session ceiling on accepted diff ids. Frames are capped
+ * at 4 MB each, but 12 near-max rounds could accrete tens of MB of peerHas /
+ * peerNeeds strings from a hostile peer. Legit stores (O77 regime: 10–60k
+ * messages) rarely diff by more than this in one session; when they do, the
+ * session stops accepting further ids and syncs the rest on later rounds —
+ * graceful partial progress, not a failure.
+ */
+const val MAX_RBSR_SESSION_IDS: Int = 50_000
+
+/**
  * Symmetric, deterministic choice of summary method — BOTH peers compute the
  * same answer from the same inputs (each other's advertised set size + shared
  * capability), so they never split modes (one RBSR, one bloom → session stall).
