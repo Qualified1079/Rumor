@@ -106,6 +106,20 @@ class MainActivity : ComponentActivity() {
 
         requestRequiredPermissions()
 
+        // O138 — DEBUG-ONLY hands-free unlock for the test fleet. A reflashed
+        // debug build auto-unlocks the existing identity so multi-device
+        // testing never needs a manual on-screen unlock. The identity collector
+        // below then binds the mesh automatically, and the lock screen is
+        // skipped because identity is already non-null at composition.
+        // HARD-GATED on BuildConfig.DEBUG — this code path cannot exist in a
+        // release build. The passphrase is the fleet dev passphrase only.
+        if (BuildConfig.DEBUG && identityManager.hasIdentity && !identityManager.isUnlocked) {
+            val ok = identityManager.unlock(DEBUG_AUTO_UNLOCK_PASSPHRASE)
+            com.rumor.mesh.core.logging.RumorLog.i(
+                "MainActivity", "DEBUG auto-unlock ${if (ok) "succeeded" else "FAILED (wrong dev passphrase?)"}",
+            )
+        }
+
         // Identity may still be locked at onStart() (first-run onboarding); react to
         // unlock happening later in the same activity instance rather than only
         // checking isUnlocked once, or the service never gets bound this session.
@@ -173,6 +187,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         permissionLauncher.launch(needed.toTypedArray())
+    }
+
+    private companion object {
+        /** O138: fleet dev passphrase, used ONLY by the BuildConfig.DEBUG auto-unlock. */
+        const val DEBUG_AUTO_UNLOCK_PASSPHRASE = "passphrase1"
     }
 }
 
