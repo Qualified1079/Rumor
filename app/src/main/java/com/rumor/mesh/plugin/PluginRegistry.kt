@@ -33,7 +33,21 @@ class PluginRegistry(
     private val dmEnvelopeRegistry: DmEnvelopeRegistry,
 ) {
     private val TAG = "PluginRegistry"
-    private val plugins = CopyOnWriteArrayList<RumorPlugin>()
+
+    /**
+     * O123: each plugin is held with an [PluginHolder.alive] flag cleared at the
+     * very start of [unregister], BEFORE teardown. The dispatch loop checks it
+     * per plugin, so a message in flight when a plugin is being torn down stops
+     * invoking that plugin instead of calling it on a cancelled scope / post-
+     * onDetach state. The per-plugin try/catch still backstops the nanosecond
+     * check→call window, but the flag closes the large window the raw
+     * CopyOnWriteArrayList snapshot left open.
+     */
+    private class PluginHolder(val plugin: RumorPlugin) {
+        @Volatile var alive = true
+    }
+
+    private val plugins = CopyOnWriteArrayList<PluginHolder>()
     /** Per-plugin host-owned scopes. Cancelled on unregister regardless of plugin behaviour. */
     private val pluginScopes = ConcurrentHashMap<String, CoroutineScope>()
     /** Tracks the PluginContextImpl per plugin so we can unregister envelopes on teardown. */
@@ -58,7 +72,7 @@ class PluginRegistry(
         )
         pluginContexts[plugin.pluginId] = ctx
         plugin.onAttach(ctx)
-        plugins.add(plugin)
+        plugins.add(PluginHolder(plugin))
         RumorLog.i(TAG, "Registered plugin: ${plugin.pluginId} (${plugin.displayName} v${plugin.version})")
     }
 
@@ -69,32 +83,37 @@ class PluginRegistry(
      * This order guarantees toggleability even for plugins whose own cleanup is incorrect.
      */
     fun unregister(pluginId: String) {
-        val plugin = plugins.firstOrNull { it.pluginId == pluginId } ?: return
+        val holder = plugins.firstOrNull { it.plugin.pluginId == pluginId } ?: return
+        // O123: mark dead FIRST so any in-flight dispatch loop skips this plugin
+        // before its scope is cancelled and onDetach runs.
+        holder.alive = false
         pluginScopes.remove(pluginId)?.cancel()
         pluginContexts.remove(pluginId)?.unregisterAllEnvelopes()
-        runCatching { plugin.onDetach() }
+        runCatching { holder.plugin.onDetach() }
             .onFailure { RumorLog.w(TAG, "Plugin $pluginId threw in onDetach", it) }
-        plugins.remove(plugin)
+        plugins.remove(holder)
         RumorLog.i(TAG, "Unregistered plugin: $pluginId")
     }
 
     /** Unregister all plugins. Called when MeshService is stopping. */
     fun unregisterAll() {
-        plugins.toList().forEach { unregister(it.pluginId) }
+        plugins.toList().forEach { unregister(it.plugin.pluginId) }
     }
 
     /** Forward an incoming mesh message to all registered plugins. */
     fun onMessageReceived(message: RumorMessage) {
-        plugins.forEach { plugin ->
+        plugins.forEach { holder ->
+            // O123: don't invoke a plugin that unregister() has begun tearing down.
+            if (!holder.alive) return@forEach
             try {
-                plugin.onMessageReceived(message)
+                holder.plugin.onMessageReceived(message)
             } catch (e: Exception) {
-                RumorLog.w(TAG, "Plugin ${plugin.pluginId} threw in onMessageReceived", e)
+                RumorLog.w(TAG, "Plugin ${holder.plugin.pluginId} threw in onMessageReceived", e)
             }
         }
     }
 
-    fun registeredPluginIds(): List<String> = plugins.map { it.pluginId }
+    fun registeredPluginIds(): List<String> = plugins.filter { it.alive }.map { it.plugin.pluginId }
 
 }
 
