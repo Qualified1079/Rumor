@@ -104,6 +104,34 @@ class SybilFloodScenarioTest {
     }
 
     @Test
+    fun `NEGATIVE CONTROL - a friended sender DOES reach the inbox (the filter discriminates, it is not a blackhole)`() = runBlocking {
+        // If the "0 sybil leaked" result came from the filter dropping
+        // EVERYTHING (or the inbox recorder never firing), this test fails —
+        // proving the pass in the main test is real discrimination, not a
+        // vacuous always-empty inbox.
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val friend = SimNode(1, scope)
+        val stranger = SimNode(2, scope)
+        val friendIds = setOf(friend.userId)
+        val victim = SimNode(
+            0, scope,
+            inboxFilterOverride = KnownSendersInboxFilter(
+                localUserId = { null },
+                isFriended = { it in friendIds },
+                initial = com.rumor.mesh.core.policy.InboxPolicy(friendedSendersOnly = true),
+            ),
+        )
+        try {
+            floodAt(victim, listOf(friend, stranger))
+            awaitUntil(timeoutMs = 5_000) { friend.userId in victim.inboxSenderIds }
+            assertTrue("the friended sender must reach the inbox", friend.userId in victim.inboxSenderIds)
+            assertTrue("the stranger must NOT", stranger.userId !in victim.inboxSenderIds)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun `baseline permissive inbox lets every sybil through (the regression this removes)`() = runBlocking {
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         val sybils = (1..SYBILS).map { SimNode(it, scope) }
