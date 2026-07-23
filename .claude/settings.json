@@ -41,5 +41,17 @@
   "enabledPlugins": {
     "github@claude-plugins-official": true,
     "security-guidance@claude-plugins-official": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.claude/hooks/away-mode-prod.sh\"; [ -f \"$f\" ] && sh \"$f\" || exit 0"
+          }
+        ]
+      }
+    ]
   }
 }

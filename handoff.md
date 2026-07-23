@@ -1,5 +1,16 @@
 # Handoff — overnight research/audit session (2026-07-23) — no code changes
 
+> ### 🔁 Away-mode "keep going" hook (new 2026-07-23)
+> A committed Stop hook prods the model to keep working instead of talking itself
+> into stopping. **OFF by default.** Toggle:
+> - Step away → `touch ~/.claude/away-mode`  (model won't stop until you're back)
+> - Back      → `rm -f ~/.claude/away-mode`
+> Hook: `.claude/hooks/away-mode-prod.sh` (wired in `.claude/settings.json`). If it
+> doesn't take effect in a running session, open `/hooks` once or restart (the
+> config watcher may need a nudge). Turn it OFF for interactive maintenance —
+> while ON it also blocks `/clear`-style turn-ends.
+
+
 This was a scheduled/unattended run: read the codebase broadly, no code
 changes, flag bugs/stale code/prebuilt-swap candidates. Six parallel
 research agents each took a slice (crypto/protocol/wire, routing/trust/
