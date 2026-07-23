@@ -73,17 +73,22 @@ class InMemoryMessageRepository : MessageRepository {
             .map { com.rumor.mesh.core.sync.RbsrItem(it.sentAtMs, it.id) }
     override fun observeBroadcasts(limit: Int): Flow<List<RumorMessage>> =
         _flow.map { it.filter { m -> m.type.name == "BROADCAST" }.take(limit) }
+    // O130(b): match the Room DAO ordering (ConcurrentHashMap iteration is
+    // otherwise undefined — the first ordering-sensitive scenario would flake).
     override fun observeThread(localUserId: String, peerId: String, limit: Int): Flow<List<RumorMessage>> =
         _flow.map { list ->
             list.filter { m ->
                 (m.senderId == localUserId && m.recipientId == peerId) ||
                 (m.senderId == peerId && m.recipientId == localUserId)
-            }.take(limit)
+            }.sortedWith(compareBy({ it.sentAtMs }, { it.sequenceNumber })).take(limit)
         }
     override fun observeUnread(userId: String): Flow<List<RumorMessage>> =
         _flow.map { it.filter { m -> m.recipientId == userId && !m.isRead } }
     override fun observeAllDirect(userId: String, limit: Int): Flow<List<RumorMessage>> =
-        _flow.map { it.filter { m -> m.senderId == userId || m.recipientId == userId }.take(limit) }
+        _flow.map { list ->
+            list.filter { m -> m.senderId == userId || m.recipientId == userId }
+                .sortedByDescending { minOf(it.sentAtMs, it.receivedAtMs) }.take(limit)
+        }
 }
 
 // ── ContactRepository ─────────────────────────────────────────────────────────

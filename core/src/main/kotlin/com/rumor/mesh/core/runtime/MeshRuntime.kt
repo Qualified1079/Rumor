@@ -28,6 +28,51 @@ interface HlcStore {
 }
 
 /**
+ * O130(e): coalesce HLC persistence. `HlcClock.onAdvance` fires once per composed
+ * AND once per ingested message, so a partition-heal burst would queue hundreds
+ * of SharedPreferences/file commits back-to-back. The clock value is monotonic,
+ * so only the latest matters — persist at most once per [intervalMs] with a
+ * trailing write so the final value always lands. Losing counter increments
+ * within one wall-ms on a hard process kill is harmless: restore is a max-merge
+ * and equal stamps tiebreak by message id, so causality (the HLC guarantee) is
+ * intact; only strict counter monotonicity is weakened, which is display-order.
+ * [flushNow] forces a synchronous final write on a clean stop.
+ */
+class DebouncedHlcStore(
+    private val delegate: HlcStore,
+    private val scope: CoroutineScope,
+    private val intervalMs: Long = 1000L,
+) : HlcStore, kotlinx.atomicfu.locks.SynchronizedObject() {
+    private var pending: HlcTimestamp? = null
+    private var scheduled = false
+
+    override fun load(): HlcTimestamp = delegate.load()
+
+    override fun save(ts: HlcTimestamp) {
+        val schedule = kotlinx.atomicfu.locks.synchronized(this) {
+            pending = ts
+            if (!scheduled) { scheduled = true; true } else false
+        }
+        if (schedule) scope.launch {
+            delay(intervalMs)
+            val toWrite = kotlinx.atomicfu.locks.synchronized(this@DebouncedHlcStore) {
+                scheduled = false
+                pending.also { pending = null }
+            }
+            toWrite?.let { delegate.save(it) }
+        }
+    }
+
+    /** Persist the latest pending value immediately (clean-shutdown path). */
+    fun flushNow() {
+        val toWrite = kotlinx.atomicfu.locks.synchronized(this) {
+            pending.also { pending = null }
+        }
+        toWrite?.let { delegate.save(it) }
+    }
+}
+
+/**
  * Host-agnostic mesh orchestration (O106): the engine↔transport wiring that
  * used to live inline in the Android `MeshService.startMesh()`. A host —
  * MeshService, the :node desktop `main()`, a future systemd unit — constructs
@@ -65,6 +110,9 @@ class MeshRuntime(
      */
     @Volatile var coordinator: PersistenceCoordinator? = null
         private set
+
+    /** O130(e): the debounce wrapper, so [stop] can force a final HLC write. */
+    @Volatile private var debouncedHlc: DebouncedHlcStore? = null
 
     /** False iff identity was locked — host should retry after unlock. */
     fun start(scope: CoroutineScope): Boolean {
@@ -108,8 +156,12 @@ class MeshRuntime(
         // otherwise compose below its own pre-restart stamps. Restore is a
         // max-merge (never moves the clock backward); every advance persists.
         hlcStore?.let { store ->
-            gossipEngine.hlc.restore(store.load())
-            gossipEngine.hlc.onAdvance = { ts -> store.save(ts) }
+            // O130(e): debounce persistence so a partition-heal burst doesn't
+            // queue hundreds of commits. Held for flushNow() on stop().
+            val debounced = DebouncedHlcStore(store, scope)
+            debouncedHlc = debounced
+            gossipEngine.hlc.restore(debounced.load())
+            gossipEngine.hlc.onAdvance = { ts -> debounced.save(ts) }
         }
 
         // O124: answer a pulse from an unknown-or-stale peer with our own
@@ -182,9 +234,13 @@ class MeshRuntime(
         gossipEngine.composeSelfPresence(mode, coordinator?.beaconNeighbors() ?: emptyList())
     }
 
-    /** Loops die with the host scope; this only drops coordinator state. */
+    /** Loops die with the host scope; this drops coordinator state and flushes HLC. */
     fun stop() {
         coordinator = null
+        // O130(e): persist the latest HLC value synchronously before the host
+        // scope dies and cancels a pending debounce flush.
+        debouncedHlc?.flushNow()
+        debouncedHlc = null
     }
 
     companion object {
