@@ -73,6 +73,18 @@ to `main`. Full `:core`+`:simulator`+`:node` suite green; `:app` compiles.
   transcript injectivity pinned directly). Still open: eviction-over-cap,
   GossipEngine-level coverage.
 
+**Fleet device smoke test (2026-07-24, debug build of this session's tree):**
+installed + launched on all three phones via the O138 hands-free debug intent
+(`am start -n com.rumor.mesh.debug/com.rumor.mesh.MainActivity`). All clean:
+identity auto-unlocked (S10e/Moto also re-wrapped to 600k PBKDF2, O115), MeshService
+started, GossipEngine reseeded 21–22 stored messages (proves the additive
+TransferMetadata/Chunk wire fields round-trip through Room/serialization on real
+Android — they ride inside payload JSON, no schema impact), zero Rumor crashes.
+Moto logged `3 Wi-Fi Direct peer(s) visible` + LAN transport `Listening on port
+8787` — the fleet discovers each other over P2P, but gossip-session *delivery* is
+the O98 hardware-tuning path (needs on-screen involvement; not driven blind here).
+So the O38 close-out's DM round-trip still can't be functionally verified.
+
 **Next foundational candidates (no-LAN-safe):** finish O121(e) GossipEngine
 coverage; O48 bridge pubkey-hash userIds (:app, bridge-adjacent); the O38
 close-out IF device round-trip becomes possible. Pre-existing flake:
