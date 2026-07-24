@@ -163,6 +163,9 @@ class TransferSender(
                 chunkIndex = index,
                 totalChunks = transfer.totalChunks,
                 data = Base64Codec.encode(entity.data),
+                // O100: retransmits carry the content-group tag too, so a repaired
+                // chunk stays interchangeable across seeders (matches Chunker.chunk).
+                contentHash = transfer.contentHash,
             )
             gossipEngine.composeOutbound(
                 type = MessageType.CHUNK,
