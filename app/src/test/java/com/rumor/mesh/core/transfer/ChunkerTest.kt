@@ -199,6 +199,84 @@ class ChunkerTest {
         assertTrue("contentHash must be non-empty", meta.contentHash.isNotEmpty())
     }
 
+    @Test
+    fun `chunk populates per-chunk hashes and content-group hash`() {
+        val data = ByteArray(180_000) { (it % 251).toByte() }
+        val (meta, chunks) = Chunker.chunk(data, ContentType.FILE, chunkSize = 60_000)
+
+        assertNotNull(meta.chunkHashes)
+        assertEquals(meta.totalChunks, meta.chunkHashes!!.size)
+        // Every chunk self-identifies its interchangeable content group.
+        assertTrue(chunks.all { it.contentHash == meta.contentHash })
+        // Each per-chunk hash matches the chunk it indexes.
+        chunks.forEach { c ->
+            assertTrue("chunk ${c.chunkIndex} must verify", Chunker.verifyChunk(c, meta))
+        }
+    }
+
+    @Test
+    fun `identical content produces identical chunk hashes and group hash`() {
+        // The interchange property: two independent sends of the same bytes yield
+        // per-chunk-interchangeable chunks (same group hash, same per-chunk hashes)
+        // even though the per-send transferId differs.
+        val data = ByteArray(150_000) { (it * 7 % 255).toByte() }
+        val (m1, _) = Chunker.chunk(data, ContentType.FILE, chunkSize = 60_000)
+        val (m2, _) = Chunker.chunk(data, ContentType.FILE, chunkSize = 60_000)
+
+        assertEquals(m1.contentHash, m2.contentHash)
+        assertEquals(m1.chunkHashes, m2.chunkHashes)
+        assertTrue("transferId is still per-send", m1.transferId != m2.transferId)
+    }
+
+    @Test
+    fun `verifyChunk rejects a poisoned chunk before reassembly`() {
+        val data = ByteArray(180_000) { (it % 251).toByte() }
+        val (meta, chunks) = Chunker.chunk(data, ContentType.FILE, chunkSize = 60_000)
+
+        val poisoned = chunks[1].copy(
+            data = java.util.Base64.getEncoder().encodeToString(ByteArray(60_000) { 0x7F }),
+        )
+        assertTrue("good chunk verifies", Chunker.verifyChunk(chunks[0], meta))
+        assertTrue("poisoned chunk is rejected", !Chunker.verifyChunk(poisoned, meta))
+    }
+
+    @Test
+    fun `verifyChunk rejects a chunk claiming the wrong content group`() {
+        val data = ByteArray(120_001) { it.toByte() }
+        val (meta, chunks) = Chunker.chunk(data, ContentType.FILE, chunkSize = 60_000)
+
+        val wrongGroup = chunks[0].copy(contentHash = "not-this-group")
+        assertTrue(!Chunker.verifyChunk(wrongGroup, meta))
+    }
+
+    @Test
+    fun `reassemble rejects a hash-valid frame carrying poisoned bytes`() {
+        // The multi-seeder attack: a chunk whose bytes were swapped. Per-chunk
+        // hashes catch it at the poisoned index, not only via the final hash.
+        val data = ByteArray(180_000) { (it % 251).toByte() }
+        val (meta, chunks) = Chunker.chunk(data, ContentType.FILE, chunkSize = 60_000)
+
+        val poisoned = chunks.map { c ->
+            if (c.chunkIndex == 2) c.copy(
+                data = java.util.Base64.getEncoder().encodeToString(ByteArray(60_000) { 0x11 }),
+            ) else c
+        }
+        assertNull(Chunker.reassemble(poisoned, meta))
+    }
+
+    @Test
+    fun `reassemble still works for legacy metadata without per-chunk hashes`() {
+        val data = ByteArray(150_000) { it.toByte() }
+        val (meta, chunks) = Chunker.chunk(data, ContentType.FILE, chunkSize = 60_000)
+
+        // Simulate a pre-content-addressing sender: strip the new fields.
+        val legacyMeta = meta.copy(chunkHashes = null)
+        val legacyChunks = chunks.map { it.copy(contentHash = null) }
+        val result = Chunker.reassemble(legacyChunks, legacyMeta)
+        assertNotNull(result)
+        assertArrayEquals(data, result)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `empty data throws`() {
         Chunker.chunk(ByteArray(0), ContentType.FILE)

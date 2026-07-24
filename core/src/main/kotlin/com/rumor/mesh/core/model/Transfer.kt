@@ -22,6 +22,16 @@ data class TransferMetadata(
     val chunkSize: Int,
     /** SHA-256 of the original data, Base64-encoded. Verified after reassembly. */
     val contentHash: String,
+    /**
+     * O100: per-chunk SHA-256 (Base64), indexed by chunkIndex — the "hard design
+     * constraint" for multi-source swarming. A whole-file hash only tells you the
+     * assembled result is wrong; it cannot say *which* chunk (or which seeder)
+     * poisoned it. With this list a bad chunk is detectable on arrival and its
+     * source is attributable/evictable. Rides inside the Ed25519-signed message
+     * payload, so a relay cannot swap a chunk's expected hash. Nullable for
+     * backward compatibility with metadata that predates content-addressing.
+     */
+    val chunkHashes: List<String>? = null,
     /** Non-null for a direct (targeted) transfer; null for a broadcast transfer. */
     val recipientId: String? = null,
     /** Reserved forward-compat carrier. See [RumorMessage.ext]. */
@@ -40,6 +50,14 @@ data class Chunk(
     val totalChunks: Int,
     /** Base64-encoded raw bytes for this slice of the original payload. */
     val data: String,
+    /**
+     * O100: the content-group hash (= [TransferMetadata.contentHash]) this chunk
+     * belongs to. Because chunking is deterministic on content, a chunk carrying
+     * group H at index i is interchangeable with the same (H, i) chunk from any
+     * other seeder — this field is what lets a future multi-source assembler
+     * recombine chunks from many senders. Nullable for backward compatibility.
+     */
+    val contentHash: String? = null,
     /** Reserved forward-compat carrier. See [RumorMessage.ext]. */
     @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
 )

@@ -463,10 +463,17 @@ Per-bridge trust toggles (receivers decide which bridges they accept vouching fr
   "sizeBytes": 1048576,
   "chunkCount": 64,
   "chunkSizeBytes": 16384,
-  "contentHash": "<hex SHA-256 of original bytes>",
+  "contentHash": "<base64 SHA-256 of original bytes>",
+  "chunkHashes": ["<base64 SHA-256 of chunk 0>", "..."],
   "_ext": null
 }
 ```
+
+`chunkHashes` (O100): per-chunk SHA-256, indexed by chunk index. Present since
+content-addressing; nullable for pre-content-addressing senders. Rides inside the
+Ed25519-signed message payload, so a relay cannot forge a chunk's expected hash —
+this is what makes a poisoned chunk in a multi-source swarm detectable and its
+seeder attributable, rather than only failing the whole-file hash at the end.
 
 `Chunk` (one per `MessageType.CHUNK`):
 
@@ -475,9 +482,15 @@ Per-bridge trust toggles (receivers decide which bridges they accept vouching fr
   "transferId": "<uuid>",
   "index": 0,
   "data": "<base64 chunk bytes>",
+  "contentHash": "<base64 group hash = TransferMetadata.contentHash>",
   "_ext": null
 }
 ```
+
+`contentHash` (O100): the content-group hash this chunk belongs to. Because
+chunking is deterministic on content, the same `(contentHash, index)` chunk from
+any seeder is interchangeable — the interchange key a multi-source assembler keys
+on. `transferId` remains the per-send session id. Nullable for backward compat.
 
 `ChunkRequest` (NACK):
 

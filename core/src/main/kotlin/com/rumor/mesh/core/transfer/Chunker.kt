@@ -35,6 +35,15 @@ object Chunker {
         val totalChunks = (data.size + chunkSize - 1) / chunkSize
         val contentHash = Sha256.digest(data).toBase64()
 
+        // O100: slice once, so per-chunk hashes and chunk payloads are derived
+        // from the exact same byte ranges (no chance of a hash/payload skew).
+        val slices = (0 until totalChunks).map { index ->
+            val start = index * chunkSize
+            val end = minOf(start + chunkSize, data.size)
+            data.copyOfRange(start, end)
+        }
+        val chunkHashes = slices.map { chunkHash(it) }
+
         val metadata = TransferMetadata(
             transferId = transferId,
             contentType = contentType,
@@ -44,21 +53,44 @@ object Chunker {
             totalChunks = totalChunks,
             chunkSize = chunkSize,
             contentHash = contentHash,
+            chunkHashes = chunkHashes,
             recipientId = recipientId,
         )
 
-        val chunks = (0 until totalChunks).map { index ->
-            val start = index * chunkSize
-            val end = minOf(start + chunkSize, data.size)
+        val chunks = slices.mapIndexed { index, slice ->
             Chunk(
                 transferId = transferId,
                 chunkIndex = index,
                 totalChunks = totalChunks,
-                data = Base64Codec.encode(data.copyOfRange(start, end)),
+                data = Base64Codec.encode(slice),
+                contentHash = contentHash,
             )
         }
 
         return metadata to chunks
+    }
+
+    /** O100: canonical per-chunk digest — SHA-256 of the raw (pre-Base64) slice, Base64-encoded. */
+    fun chunkHash(bytes: ByteArray): String = Sha256.digest(bytes).toBase64()
+
+    /**
+     * O100: verify a single [chunk] against [metadata] before trusting it —
+     * the primitive a multi-source assembler needs to drop a poisoned chunk and
+     * attribute the seeder without waiting for whole-file reassembly to fail.
+     *
+     * Passes only when the index is in range, the chunk's own content-group hash
+     * (if present) matches, and — when [TransferMetadata.chunkHashes] is present —
+     * the decoded bytes hash to the expected per-chunk digest. When the sender
+     * predates content-addressing (no chunkHashes), there is nothing to check per
+     * chunk, so this returns true and integrity falls back to the whole-file hash
+     * in [reassemble].
+     */
+    fun verifyChunk(chunk: Chunk, metadata: TransferMetadata): Boolean {
+        if (chunk.chunkIndex !in 0 until metadata.totalChunks) return false
+        if (chunk.contentHash != null && chunk.contentHash != metadata.contentHash) return false
+        val expected = metadata.chunkHashes?.getOrNull(chunk.chunkIndex) ?: return true
+        val bytes = runCatching { Base64Codec.decode(chunk.data) }.getOrNull() ?: return false
+        return chunkHash(bytes) == expected
     }
 
     /**
@@ -72,6 +104,10 @@ object Chunker {
         if (chunks.size != metadata.totalChunks) return null
         val sorted = chunks.sortedBy { it.chunkIndex }
         if (sorted.map { it.chunkIndex } != (0 until metadata.totalChunks).toList()) return null
+
+        // O100: when per-chunk hashes are present, reject a bad chunk here rather
+        // than only discovering corruption via the whole-file hash at the end.
+        if (metadata.chunkHashes != null && sorted.any { !verifyChunk(it, metadata) }) return null
 
         val result = ByteArray(metadata.totalBytes.toInt())
         var offset = 0
