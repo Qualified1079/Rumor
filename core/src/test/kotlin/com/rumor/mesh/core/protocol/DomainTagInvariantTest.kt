@@ -296,6 +296,50 @@ class DomainTagInvariantTest {
         )
     }
 
+    @Test
+    fun `O42 RBSR fingerprint domain tag is rumor-rbsr-fp-v1`() {
+        // Separate from rumor-rbsr-v1: — the per-item prefix (rumor-rbsr-v1:)
+        // domain-separates each element's hash, while this one binds the final
+        // (sum || count) reduction into the fingerprint itself. A drift in either
+        // silently desynchronises two peers on the same set.
+        assertContainsTag(
+            file = "core/src/main/kotlin/com/rumor/mesh/core/sync/Rbsr.kt",
+            tag = "rumor-rbsr-fp-v1:",
+            purpose = "RBSR range-fingerprint reduction domain — SHA-256 over " +
+                "the additive sum plus the element count. Bumping desynchronises " +
+                "every two peers on the same set; they never converge.",
+        )
+    }
+
+    // ── O98 backbone group credentials ────────────────────────────────────────
+    //
+    // Not signature scopes but on-air-observable: they derive the Wi-Fi Direct
+    // backbone group's SSID and passphrase. A drift partitions old/new builds'
+    // backbone joins (a node computes a different SSID than its peers advertise).
+    // Reserved forever in docs/RENAMED_FIELDS_NEVER_REUSE.md.
+
+    @Test
+    fun `O98 backbone networkName prefix is rumor-o98-net-v1`() {
+        assertContainsTag(
+            file = "core/src/main/kotlin/com/rumor/mesh/core/routing/GroupCredentials.kt",
+            tag = "rumor-o98-net-v1:",
+            purpose = "SHA-256 prefix deriving the backbone group SSID from the " +
+                "host userId. Both endpoints derive independently; a drift means " +
+                "clients compute a different SSID than the host advertises.",
+        )
+    }
+
+    @Test
+    fun `O98 backbone passphrase prefix is rumor-o98-psk-v2`() {
+        assertContainsTag(
+            file = "core/src/main/kotlin/com/rumor/mesh/core/routing/GroupCredentials.kt",
+            tag = "rumor-o98-psk-v2:",
+            purpose = "SHA-256 prefix deriving the backbone group passphrase from " +
+                "the networkName. Derivable by any radio-range observer (not a " +
+                "secret — trust stays with HELLO Ed25519); a drift breaks joins.",
+        )
+    }
+
     // ── O76 compression AAD ───────────────────────────────────────────────────
 
     @Test

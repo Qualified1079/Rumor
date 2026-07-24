@@ -44,8 +44,8 @@ object SealedSenderTag {
      * @param sharedKey Per-contact symmetric key — both sender and
      *   recipient derive the same value from the X25519 static keys
      *   they hold for each other. Recommended derivation:
-     *   `HKDF(x25519(my_priv, their_pub), info = "rumor-dm-recipient-tag")`,
-     *   but any deterministic derivation both sides agree on works.
+     *   `HKDF(x25519(my_priv, their_pub), info = "rumor-dm-recipient-tag-v1:" || ...)`,
+     *   the exact scheme implemented in `SealedSenderKey.derive`.
      * @param messageId The RumorMessage.id this tag covers.
      * @return 32-byte HMAC-SHA256 output. Callers typically Base64-
      *   encode for wire transmission.

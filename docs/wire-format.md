@@ -620,12 +620,15 @@ This table is the union of every tag emitted by `:core` commonMain code. Drift g
 |---|---|---|
 | `"rumor-dm-v1:"` | Sealed-sender DM recipient tag HMAC domain (O53) | `SealedSenderTag.tagFor` |
 | `"rumor-rbsr-v1:"` | Per-item input to the RBSR v1 XOR fingerprint (O42) | `Rbsr.xorFingerprint` |
+| `"rumor-rbsr-fp-v1:"` | RBSR range-fingerprint reduction: SHA-256 over additive sum + element count (O42) | `Rbsr.kt` |
 | `"rumor-room-route-v1:"` | OPEN room routing-tag SHA-256 prefix (O79) | `RoomRoutingTag.openRoomTag` |
 | `"rumor-room-msg-tag-v1:"` | ENCRYPTED room per-message routing-tag HMAC prefix (O79) | `RoomRoutingTag.encryptedRoomTag` |
 | `"rumor-room-routing-key-v1"` | HKDF info: per-room routing-key derivation (O79) | `RoomRoutingTag.deriveEncryptedRoomRoutingKey` |
 | `"rumor-room-wrap-v1:"` | HKDF info prefix: per-recipient wrap-key derivation (O79) | `MultiRecipientEnvelopeCodec` |
 | `"rumor-o76:"` | AES-GCM AAD prefix: binds `_ext.cl` originalLength to the tag (O76) | `compressionAad` |
 | `"rumor-dm-recipient-tag-v1:"` | HKDF info prefix: per-contact sealed-sender tag key from static-static X25519 (O53) | `SealedSenderKey.derive` |
+| `"rumor-o98-net-v1:"` | SHA-256 prefix: backbone group SSID from host userId (O98; on-air-observable, not secret) | `GroupCredentials.forHost` |
+| `"rumor-o98-psk-v2:"` | SHA-256 prefix: backbone group passphrase from networkName (O98; radio-observable, not secret) | `GroupCredentials.passphraseFor` |
 
 ### Retired tags
 
