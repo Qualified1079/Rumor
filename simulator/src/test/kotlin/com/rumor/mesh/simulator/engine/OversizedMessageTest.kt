@@ -2,9 +2,11 @@ package com.rumor.mesh.simulator.engine
 
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MAX_BROADCAST_CONTENT_BYTES
+import com.rumor.mesh.core.model.MAX_OFFER_BATCH_BYTES
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.model.approxWireBytes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -80,6 +82,31 @@ class OversizedMessageTest {
             assertFalse("the oversized message must be skipped from the offer batch", "poison" in offered)
             assertTrue("normal messages must still be offered — no head-of-line block", "normal-1" in offered)
             assertTrue("normal messages must still be offered — no head-of-line block", "normal-2" in offered)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `offer batch is trimmed to the cumulative byte budget, not just the per-message cap`() = runBlocking {
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val node = SimNode(0, scope)
+        val peer = SimNode(1, scope)
+        try {
+            // Each ~60 KB message is individually offerable (< 1 MB) and under the
+            // 64 KB broadcast cap, but their cumulative wire size far exceeds the
+            // 3 MB offer-batch budget — so the batch must stop early (the `break`
+            // path in budgetOfferBatch), not offer all of them.
+            val body = "C".repeat(60_000)
+            val count = 70
+            repeat(count) { i -> node.seedMessage(bcast(node, "m$i", body)) }
+
+            val offered = node.gossipEngine.messagesForExchange(peer.userId)
+            val cumulative = offered.sumOf { it.approxWireBytes().toLong() }
+
+            assertTrue("batch must stay within the cumulative byte budget", cumulative <= MAX_OFFER_BATCH_BYTES)
+            assertTrue("not every seeded message fits — the batch is trimmed", offered.size < count)
+            assertTrue("but a meaningful batch is still offered", offered.isNotEmpty())
         } finally {
             scope.cancel()
         }
