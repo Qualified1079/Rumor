@@ -402,6 +402,221 @@ pre-flattening KMP layout (now `core/src/main/kotlin/...`). Minor — same
 staleness class already flagged for `docs/IOS_PORT_PHASE_1_HANDOFF.md` in
 the prior session, just a different file that wasn't checked at the time.
 
+## Second wave — Rooms feature (O79/O89) + broader docs consistency
+
+Same session, continued: two more parallel slices after the first six —
+Rooms end-to-end (routing, posting certs, moderation, membership, not just
+the signable-bytes helpers already covered above) and every remaining
+`docs/*.md` + `README.md` file not yet spot-checked against current code.
+Both instructed to cross-check this file's own top two sessions first.
+
+### New — Rooms feature
+
+**31. [HIGH] OPEN-room routing tags aren't covered by the message
+signature — a relay can retag any validly-signed OPEN-room message into a
+*different* OPEN room, with no key needed.**
+`core/src/main/kotlin/com/rumor/mesh/core/wire/RoomRoutingTagExt.kt:11-15`
++ `core/protocol/GossipEngine.kt:715-761` (`composeRoomMessage`) +
+`:1135-1152` (`handleRoomMessage`). The routing tag lives in `_ext.rt`,
+explicitly *not* covered by the outer Ed25519 signature (the file's own
+docstring: "Unsigned (in `_ext`)"). `RoomRoutingTag.openRoomTag(roomId)`
+is a pure deterministic public function for OPEN rooms — no secret
+required to compute it for any `roomId`. `composeRoomMessage`'s OPEN path
+puts no room-identifying data anywhere inside the *signed* transcript
+(`payload.content` is raw text). So: take any validly-signed OPEN
+`ROOM_MESSAGE` — the attacker's own, or merely observed on the wire —
+overwrite `_ext.rt` with `openRoomTag(otherRoomId)`, rebroadcast.
+Signature still verifies (doesn't cover `_ext`); `RoomTagMatcher.match`
+matches on tag bytes alone; `handleRoomMessage`'s match branch delivers it
+unconditionally. Result: content Alice signed for Room A displays to every
+subscriber of Room B, attributed to Alice, with Alice never having posted
+there and the attacker needing no key at all. This directly contradicts
+`RoomRoutingTagExt.kt`'s own claim that tag tampering "achieves nothing
+useful" (only true for a *bogus* tag matching nothing — not a *valid* tag
+borrowed from elsewhere), and it would defeat a correct O89 posting-cert
+fix too, unless that fix also binds the resolved room into the *signed*
+transcript — a posting-cert check alone doesn't stop post-signing
+retagging. Same root cause as finding #1 in this file's top section
+(bare-delimited free text in signable-bytes helpers) but a different
+mechanism: here the vulnerable field isn't even inside the transcript at
+all.
+
+**32. [MEDIUM-HIGH]** Every inbound `ROOM_MESSAGE` triggers two blocking
+SQLite reads on the shared `Dispatchers.Default` pool.
+`app/.../di/AppModule.kt:174-183`'s `RoomSubscriptionProvider` wraps
+`repo.getAll()` in `runBlocking`, called from `GossipEngine.handleRoomMessage`
+per-message. Since `ROOM_MESSAGE` relays unconditionally regardless of
+local subscription (by design, like BROADCAST), an attacker flooding
+`ROOM_MESSAGE` traffic forces two blocking DB round-trips per message on a
+thread pool shared with the rest of the app's coroutine work — a
+CPU/IO-starvation DoS surface, not scoped to Rooms.
+
+**33. [MEDIUM]** CLAUDE.md's O36 "the global Room is text-only — relay
+drops media before enqueue" rule has **zero implementation**.
+`RoomCreate.allowMedia` is written nowhere and read nowhere outside its
+own signable-bytes helper. No code concept of "the global Room" exists at
+all (no hardcoded roomId, no special relay path), and no media-stripping
+logic exists anywhere in `GossipEngine`/traffic-class derivation. Currently
+non-exploitable only because `composeRoomMessage` hardcodes `ContentType.TEXT`
+(text-only by omission, not by an enforced drop rule) — the rule has
+nothing to intercept the moment a media-to-room path is added. Same
+doc-asserts-present-tense-code-doesn't-have-it pattern already known for
+O89, here in CLAUDE.md's own decision-record prose instead of a design doc.
+
+**34. [LOW-MEDIUM]** Room lifecycle (`RoomCreate`/`RoomInvite`/`RoomAction`)
+has no wire transport at all — structurally unreachable, not just unwired.
+`MessageType` has exactly one Room entry, `ROOM_MESSAGE`; there's no
+`ROOM_CREATE`/`ROOM_INVITE`/`ROOM_ACTION` type, so none of these three
+payloads can be gossiped between nodes even in principle. No
+`RoomRepository` exists anywhere (only `RoomSubscriptionRepository`, which
+holds a local user's own routing/decrypt material — nothing about room
+metadata, rosters, or moderators). `RoomPostingCertVerifier`'s moderator-
+authority check is explicitly punted to a `RoomRepository` read that
+doesn't exist yet, by its own comment. No production caller of
+`composeRoomMessage`/`RoomCreate(`/`RoomInvite(`/`RoomAction(` exists in
+`:app`, and there's no Rooms UI anywhere. **Wiring map:** live —
+`RoomRoutingTag`/`RoomTagMatcher`/`composeRoomMessage`/`handleRoomMessage`/
+relay/`RoomSubscriptionRepository`/`MultiRecipientEnvelopeCodec`. Dead
+substrate — `RoomPostingCertVerifier`/`RoomPostingCert`,
+`RoomCreate`/`RoomInvite`/`RoomAction` + their signable-bytes helpers,
+`RoomMembershipPolicy`/`RoomPostingPolicy` (zero enforcement anywhere,
+generalizing the already-known O89 posting-cert gap to membership too),
+`allowMedia`/the O36 media rule, and any `RoomRepository`.
+
+**35. [LOW]** `RoomPostingCert.kt:23`'s KDoc references a
+`RoomActionKind.REVOKE_CERT` that doesn't exist in the actual enum
+(`REMOVE_MESSAGE`/`KICK_USER`/`BAN_USER`/`UNBAN_USER` only) — stated in
+confident present tense, where `docs/ROOMS_THREAT_MODEL.md` correctly
+hedges the same concept as "(TBD)."
+
+**36. [LOW]** `RoomSubscriptionRepositoryAdapter.kt:12-15`'s class doc
+claims a corrupted/unknown-name row "falls back to OPEN with empty
+routingKey" — actual code (`toModelOrNull()`) returns `null` (row silently
+dropped) or throws, never falls back to OPEN. Actual behavior is safer
+than documented, but the comment would mislead a future maintainer into
+expecting a different failure mode than the real one.
+
+### New — docs/README consistency (beyond crypto/iOS items already covered above)
+
+**37. [HIGH] `README.md:570` claims O41 identity rotation "has a
+core/protocol implementation, just missing UI."** It doesn't — O41 was
+**removed entirely** before any release (`docs/RENAMED_FIELDS_NEVER_REUSE.md:69-70`,
+`docs/ARCHIMEDES_MERGE_CATALOG.md`): auto-rebind on identity rotation lets
+a stolen old key rotate to an attacker's key with every contact
+auto-rebinding to it — permanent impersonation, rejected as a security
+hazard, not shipped. Independently confirmed by this session: zero hits
+for `IDENTITY_ROTATION`/`IdentityRotationPayload` anywhere in current
+`core/src/main` or `app/src/main`. There is no code to add a UI for — the
+README actively misleads a contributor into "just needs UI" work on a
+feature that was deliberately killed for being unsafe.
+
+**38. [HIGH] `README.md:339`'s Device ID description is stale in a
+privacy-relevant way.** README: "SHA-256 of hardware fingerprint (build
+metadata + sensor specs) mixed with a random UUID." Actual code
+(`IdentityManager.kt:132-141`, `generateDeviceId()`) is plain
+`CryptoManager.randomBytes(16).toHex()` — the method's own comment
+explicitly disavows the old hardware-mixing approach as a
+device-fingerprinting smell and says "random is what it was actually
+behaving as, so make that explicit." A privacy-conscious reader gets the
+wrong threat model from the README; a future contributor could
+reintroduce hardware-fingerprint mixing believing it matches spec.
+
+**39. [HIGH] `README.md` §"Static mode" (~486-494) documents a superseded
+feature entirely.** Describes a binary "Settings → Node mode → Static
+mode" toggle with fixed 3×/4× multipliers. Current code replaced this with
+the three-way `UserMode` (Mobile/Static/Free) selector plus an
+auto-transition rule engine (`ModeProfile`/`AutoModeController` in
+`core/mode/`) — `ModeStateManager`'s own comment: "Replaces the old binary
+`StaticModeManager`." Confirmed `SettingsScreen.kt` now renders three
+`UserMode` radio options, not a toggle. A whole README section describes
+UI/behavior that no longer exists.
+
+**40. [MEDIUM-HIGH] `README.md:317,329`'s "Message format" block has a
+fabricated field and a wrong signature-coverage claim.** Line 317
+documents an `elapsedMs: Long` field ("clock-agnostic — no NTP dependency")
+that doesn't exist — the real field is `sentAtMs: Long`, a wall-clock
+epoch-ms value that O64/O95 explicitly treat as *untrusted,
+sender-asserted, and skew-prone* (`docs/wire-format.md:309`: "Receivers
+MUST NOT gate protocol behaviour on this") — the opposite of
+"clock-agnostic." Line 329 claims the signature "covers everything except
+`receivedAtMs`, `isRead`, `wasRelayed`" — wrong under the current v2
+scheme (`MessageStore.signableBytes`, `docs/wire-format.md:317,326-329`):
+it covers exactly 9 named fields and deliberately excludes `hopsToLive`
+and `_ext` too, not just the three UI-local fields README names. This is
+the load-bearing wire-integrity description — a re-implementer following
+it literally builds the wrong transcript.
+
+**41. [MEDIUM]** `docs/FDROID_BUILD.md` has four stale claims: (a) line 63
+says versionCode is still 1 — actual `app/build.gradle.kts` has
+`versionCode = 35`, `versionName = "0.6.14-o144-sigv2"`; (b) line 12 says
+Gradle wrapper is 8.6 — actual `gradle-wrapper.properties` pins
+`gradle-8.13-bin.zip`; (c) lines 72/78 still list "LICENSE file missing"
+as an open checklist item — a `LICENSE` (Apache-2.0) was added by commit
+`9950316`; (d) the documented build command
+`./gradlew :app:assembleRelease -PfdroidBuild=true` references a
+`fdroidBuild` Gradle property that doesn't exist anywhere in any
+`.gradle.kts` file — the flag has no effect, an ordinary `assembleRelease`
+runs regardless. Also (e) the "audited dependency surface" table omits
+`org.jmdns:jmdns:3.6.3` and `commons-codec:commons-codec:1.22.0` (both
+newer, O93-era, both Apache-2.0 so not actually a problem — just missing
+from the doc that claims to be the complete audit record).
+
+**42. [LOW]** `docs/wire-format.md:596` and `docs/IOS_SWIFT_BRIDGE_SPEC.md`
+(lines 17, 126, 156) cite pre-flattening KMP source-set paths
+(`core/src/jvmTest/...`, `core/src/iosMain/...`, `core/src/jvmMain/...`,
+`core/src/commonTest/...`) that no longer exist — same staleness class
+already flagged for `docs/CRYPTO_PRIMITIVES_AUDIT.md`'s `commonMain`
+references, just different files/lines not previously checked. Actual
+paths are all flat under `core/src/main/kotlin/...` or
+`core/src/test/kotlin/...`.
+
+**43. [LOW-MEDIUM]** `docs/IOS_PORT_PLAN.md` predates the 2026-07-16
+archimedes-merge decision to flatten to pure-JVM `core/src/main` and land
+a preparatory `core/platform/` shim layer as plain-JVM classes ahead of
+any real KMP split. The plan's architecture sketch still describes the
+`commonMain`/`androidMain`/`iosMain` split and the shim layer as future
+work, not knowing the shim layer (10 files: `AtomicCounter.kt`,
+`Base64Codec.kt`, `PlatformCrypto.kt`, `Sha256.kt`, etc.) already landed.
+Would waste a future implementer's time re-deriving what's done.
+
+### Checked, no new issues in this pass
+`docs/ROOMS_THREAT_MODEL.md` (self-consistent with code except the
+already-tracked O89 gap and finding #35 above), `docs/O79_PROTOCOL_SPEC.md`,
+`docs/GLOSSARY.md`, `docs/BRIDGING.md` (verified `DmEnvelope`/
+`DmEnvelopeRegistry` code matches the doc's interface listing exactly),
+`docs/SIMULATOR_TESTING.md`, `docs/UI_BACKLOG.md`, `docs/DESIGN_ANALYSIS.md`,
+`docs/SCOPE_AUDIT.md`, `docs/PROJECT_KEYS.md`,
+`docs/ARCHIMEDES_MERGE_CATALOG.md`, `docs/NODE_KICKOFF.md` — internally
+consistent with current code. The rest of `docs/wire-format.md` (framing,
+HELLO/HELLO_PROOF, RBSR frame format, domain-tag table, `MessageType`
+enum, sub-payload specs) matches `MessageStore.signableBytes`,
+`GossipPacket.kt`'s challenge-bytes helpers, and `Rbsr.kt` precisely,
+including the O144 v2 signature framing.
+
+### Updated suggested next moves (supersedes the list below — read this one)
+
+1. **Fix #31 (OPEN-room retagging)** — highest new-severity item of the
+   whole session; content can be misattributed into a different room with
+   zero key material, today, on a wired-and-reachable path. Needs the
+   room identity bound into the *signed* transcript, not just an O89
+   posting-cert check layered on top (a cert alone doesn't stop
+   retagging).
+2. Fix #1 (KeywordFilter splice) and generalize across every
+   `*SignableBytes` helper — same fix shape covers #31's cert-adjacent
+   root cause too where applicable.
+3. Fix #2 (transfer chunk leak) + add the missing `TransferAssembler`
+   test suite (#12).
+4. Fix #6/#6b (bridged messages never persisted + trustLevel column) in
+   one `MessageEntity` commit.
+5. README corrections (#37/#38/#39/#40) — all four are contributor- and
+   user-facing misinformation, cheap to fix, no code changes needed.
+6. Add `:node:test`/`:node:assemble` to `ci.yml` (#5).
+7. FLAG_SECURE sweep (#3).
+8. Triage backlog per the note above before opening new work — this
+   session alone produced 43 numbered findings across two waves; the
+   next instance's first move should be assigning O-numbers, not finding
+   #44.
+
 ## Already-open, reconfirmed this session (not new — listed only so the
 next instance doesn't re-derive the same conclusion)
 
@@ -447,7 +662,7 @@ next instance doesn't re-derive the same conclusion)
   session's worth of unpromoted findings stacking up in this doc instead
   of the backlog it's supposed to feed.
 
-## Suggested next moves
+## Suggested next moves (first-wave list — superseded by the updated list above, kept for the reasoning)
 
 1. Fix #1 (KeywordFilter splice) and generalize the audit across every
    `*SignableBytes` helper — cheapest high-value pass, mirrors O144's own
