@@ -62,6 +62,17 @@ class TransferAssembler(
      */
     private val paused = ConcurrentSet<String>()
 
+    /**
+     * O100: per-chunk hashes from the (signed) TransferMetadata, kept in memory
+     * for the transfer's lifetime so each inbound chunk is verified at its index
+     * on receipt — a corrupt or poisoned chunk is dropped and re-NACK'd rather
+     * than silently accepted and only caught by the whole-file hash after the
+     * whole transfer has already been paid for (the multi-seeder attribution
+     * primitive). Not persisted: on a mid-transfer process restart it's lost and
+     * integrity falls back to the whole-file hash in [Chunker.reassemble].
+     */
+    private val chunkHashesByTransfer = ConcurrentMap<String, List<String>>()
+
     private val _assembledTransfers = MutableSharedFlow<AssembledTransfer>(extraBufferCapacity = 32)
     val assembledTransfers: SharedFlow<AssembledTransfer> = _assembledTransfers
 
@@ -82,6 +93,7 @@ class TransferAssembler(
         // for inbound transfers whose metadata was lost). Without a sender we
         // can't tell anyone to stop, but we still drop local state.
         activeBySender.remove(transferId)
+        chunkHashesByTransfer.remove(transferId)
         transfer.senderId?.let { gossipEngine.composeTransferCancel(transferId, it) }
         transferRepo.upsert(transfer.copy(
             status = TransferStatus.ABANDONED,
@@ -135,6 +147,8 @@ class TransferAssembler(
             return
         }
         activeBySender[meta.transferId] = senderUserId
+        // O100: retain the signed per-chunk hashes for receipt-time verification.
+        meta.chunkHashes?.let { chunkHashesByTransfer[meta.transferId] = it }
         transferRepo.upsert(
             TransferRecord(
                 transferId = meta.transferId,
@@ -167,6 +181,19 @@ class TransferAssembler(
         if (chunk.chunkIndex !in 0 until transfer.totalChunks) return
         val bytes = runCatching { Base64Codec.decode(chunk.data) }.getOrNull() ?: return
         if (bytes.size > transfer.chunkSize) return
+        // O100: verify this chunk against the signed per-chunk hash before storing
+        // it. A poisoned chunk (from a bad seeder or a corrupted relay) is dropped
+        // here and left for the watchdog to re-NACK, instead of poisoning the store
+        // and only surfacing as a whole-file hash mismatch after every chunk landed.
+        val expectedHash = chunkHashesByTransfer[chunk.transferId]?.getOrNull(chunk.chunkIndex)
+        if (expectedHash != null && Chunker.chunkHash(bytes) != expectedHash) {
+            RumorLog.w(
+                TAG,
+                "Dropping poisoned chunk ${chunk.chunkIndex} of ${chunk.transferId.take(8)}… " +
+                    "from ${transfer.senderId?.take(8)}… (per-chunk hash mismatch)",
+            )
+            return
+        }
         // O108 evidence-gating: first real chunk arms the NACK watchdog.
         if (watchdogs[chunk.transferId] == null && transfer.senderId != null) {
             armWatchdog(chunk.transferId, transfer.totalChunks, transfer.senderId)
@@ -199,6 +226,7 @@ class TransferAssembler(
             totalChunks = transfer.totalChunks,
             chunkSize = transfer.chunkSize,
             contentHash = transfer.contentHash,
+            chunkHashes = chunkHashesByTransfer[transferId],
             recipientId = transfer.recipientId,
         )
         val data = Chunker.reassemble(chunks, meta) ?: run {
@@ -207,6 +235,7 @@ class TransferAssembler(
         }
         watchdogs.remove(transferId)?.cancel()
         activeBySender.remove(transferId)
+        chunkHashesByTransfer.remove(transferId)
         transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, SystemClock.now())
         RumorLog.i(TAG, "Transfer ${transferId.take(8)}… complete (${data.size}B)")
         _assembledTransfers.emit(AssembledTransfer(meta, data))
@@ -251,6 +280,7 @@ class TransferAssembler(
             }
             watchdogs.remove(transferId)
             activeBySender.remove(transferId)
+            chunkHashesByTransfer.remove(transferId)
         }
         watchdogs[transferId] = job
     }
