@@ -38,6 +38,433 @@ should still be treated with normal suspicion regardless of this note.
 
 ---
 
+# Handoff — scheduled overnight research/audit session (2026-07-24) — no code changes
+
+Unattended run per the standing pattern: read broadly, no code changes, flag
+bugs/stale code/prebuilt-swap candidates. Seven parallel research slices —
+crypto/protocol/wire, routing/trust/topology, transport/plugins/bridges,
+data/DI/Room, UI/ViewModels, simulator/test-suite quality, and a manual
+seventh pass (this session, not sub-agent) covering `:node`, the new LAN
+transport's Android host, CI config, dependency/build files, and doc-vs-code
+consistency. Every slice was instructed to cross-check `CLAUDE.md`,
+`docs/COMPLETED_GAPS.md`, and the top 2-3 sessions already in this file
+before reporting, so what follows should be net-new — items already open
+and simply reconfirmed are called out as such, not written up twice.
+
+Also fixed this session: `CLAUDE.md` has pointed to "`handoff.md` §0" since
+before this session started, but no §0 existed — several instances
+apparently kept flagging the High-Magnate canary as a possible injection
+for lack of the promised longer explanation. Added it (see the very top of
+this file, above the session stack). Purely additive, no other doc/code
+touched by that commit.
+
+## Highest severity — recommend acting on these first
+
+**1. `keywordFilterListSignableBytes` signature-splice forgery — a live,
+exploitable wire-format bug, same class as O144 but NOT covered by that
+fix.** `core/src/main/kotlin/com/rumor/mesh/core/model/KeywordFilter.kt:136-156`.
+The transcript is `publisherId|version|name|<entries>|<allowlist>` — bare
+`'|'`/`':'`/`','` delimiters around **unvalidated free text**: `name` (the
+list's display title) and `entries[].pattern` (arbitrary match text, by
+design) can both contain `|`. `KeywordFilterVerifier.verify` resolves the
+verification pubkey from the *subscriber's own pinned record* for that
+publisher, not from anything inside the object being verified — so anyone
+who has observed one legitimately-signed list from a publisher can craft a
+different `(name', entries', userIdAllowlist')` whose transcript is
+byte-identical to the original (shift content across the `name|entries` or
+`entries|allowlist` boundary via an embedded `|`), reuse the original
+`list.signature` untouched, and rebroadcast it under their own outer
+transport signature. It verifies. Concrete impact: silently changes what
+gets BLOCK/WARN'd for every subscriber of that publisher, or silently
+drops someone from `userIdAllowlist`, while the UI shows "validly signed by
+a trusted publisher." No private key needed. Notably, `BlockManager.block()`
+(`core/block/BlockManager.kt:66`) already gates every blocklist entry
+through `CryptoManager.isValidUserId` before it can reach
+`BlocklistPublisher` — the identical risk was closed there but not here.
+**Also latent (not yet wired, so not yet exploitable, but will be the
+moment O79/O89 land):** `roomCreateSignableBytes` and
+`roomActionSignableBytes` (`core/.../model/Room.kt:142-193`) have the exact
+same shape — free-text `name` / `reason` fields sandwiched in bare-delimited
+transcripts, zero call sites today. Fix shape for all three: length-prefix
+each field (`<len>:<value>`) the way O144's `MessageStore.signableBytes` v2
+now does, under a fresh domain tag per `docs/RENAMED_FIELDS_NEVER_REUSE.md`
+discipline. Worth a repo-wide grep for every `*SignableBytes` helper that
+places a free-text field between two bare delimiters — this is now the
+second time that exact class of bug has shipped after the first one was
+"fixed," so the fix should generalize, not spot-patch.
+
+**2. `TransferAssembler` never releases chunk BLOBs on the *successful*
+completion path — a storage leak on the happy path.**
+`core/src/main/kotlin/com/rumor/mesh/core/transfer/TransferAssembler.kt`.
+`attemptReassembly()` (~187-213) calls
+`transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, …)` and
+emits, but never calls `chunkRepo.deleteAllForTransfer(transferId)` — contrast
+`cancel()` (~90) and the stale-eviction/abandon path (~250), both of which
+do release chunks. Every transfer that finishes normally leaves its raw
+chunk bytes in the repo forever. Ironic given how much of O108/O109's
+recent hardening work targeted exactly this class of unbounded
+receiver-side accretion — the adversarial paths got the fix, the honest
+happy path didn't. No existing test would have caught this (see #4 below);
+one asserting "chunk rows are gone after a completed transfer" is the (see finding #12 — no test suite exists for this class today)
+regression guard to add alongside the fix.
+
+**3. No `FLAG_SECURE` anywhere in the app — passphrase entry and decrypted
+DM plaintext are Recents-thumbnail/screenshot exposed.**
+Confirmed via grep: zero `FLAG_SECURE`/`window.addFlags` references in
+`app/src/main/java`. Concretely affected: `ui/onboarding/OnboardingScreen.kt`
+(identity passphrase, with a "Show" cleartext toggle at ~83-90),
+`ui/settings/ChangePassphraseScreen.kt` (current/new/confirm fields),
+`ui/blocks/BlockManagementScreen.kt` (export/import passphrase dialogs,
+~327-394), and `ui/messages/ThreadScreen.kt` (decrypted DM bodies via
+`MessageBubble`, ~140). Any home-button/recent-apps gesture mid-thread or
+mid-passphrase-entry snapshots the live screen into the OS app-switcher
+card; any screenshot/screen-recording tool captures it freely. `CLAUDE.md`'s
+O45 already mandates FLAG_SECURE for the *future* mnemonic-export screen on
+this exact rationale — the screens that exist and handle equally sensitive
+material *today* have none of it. Broader and more urgent than O45's scope.
+
+**4. O32's routed/flooded TTL split doesn't actually work — routed DMs get
+zero extra reach over blind flood.** `core/protocol/GossipEngine.kt:1297`.
+`decrementHops()` unconditionally shrinks the legacy `hopsToLive` field on
+every DIRECT relay hop regardless of routed-vs-flooded status, so a message
+still dies at `MAX_DIRECT_HOPS=15` and the `MAX_TOTAL_HOPS=30` ceiling the
+`routedHops`/`floodedHops` split fields were built to allow is never
+reachable in practice. The project's own `PerPeerRoutingTest` is aware
+something's off and quietly weakens its own assertion
+(`floodedHops >= originalFloodedHops - 1 // allow a single decrementHops`)
+instead of catching the bug — a soft-failing test masking a real one, same
+family as the vacuous-test findings below.
+
+**5. `:node` module is invisible to CI — not built, not tested, not even
+compiled.** `.github/workflows/ci.yml`'s only test/build steps are
+`./gradlew :core:test :app:testDebugUnitTest :simulator:test` and
+`:app:assembleDebug`. `:node` (real module, `settings.gradle.kts` includes
+it, `node/build.gradle.kts` declares its own JUnit4+vintage-engine test
+scaffolding) is never referenced. Since `:app` doesn't depend on `:node`,
+nothing in the current pipeline transitively touches it either. `node/Main.kt`
+and `node/SybilDriver.kt` both construct `GossipEngine`, `GossipSession`,
+`MeshRuntime`, `LanTransport.Config`, and `IdentityProvider` positionally —
+a breaking signature change to any of those `:core` types (which is under
+very active development) would silently break `:node` with nothing in CI
+to catch it, until someone happens to run it by hand. This is the same
+*shape* of gap as the project's own documented critical-bug-history entry
+about `:app`'s JUnit4 tests silently never running — a module CI doesn't
+touch is a module CI can't protect. Fix: add `:node:test` (and ideally
+`:node:assemble`/`:node:installDist`) to `ci.yml`. (No test source set
+exists under `node/src/test` yet either — see the test-quality section
+below — so today this would mostly buy compile-checking, but that alone
+would have caught real breakage.)
+
+**6. Bridged broadcasts are never persisted — invisible in the Feed, don't
+survive restart, sender never becomes a Contact — contradicting the
+plugin API's own documented contract.** `core/protocol/GossipEngine.kt:1016-1026`.
+When a message arrives via `MessageSource.LOCAL_BRIDGE` with
+`signature == BRIDGE_UNSIGNED` (the normal path for every message either
+bridge plugin injects — `MeshtasticBridge.kt:127-137`,
+`MeshCoreBridge.kt:152-163`, both construct a `BROADCAST` with
+`signature = PluginContext.BRIDGE_UNSIGNED`), `processIncoming` takes the
+`bridged` branch, which calls **only** `duplicateFilter.recordAndCheck(id)`
+— it never calls `messageStore.ingest(...)`. `MessageStore.ingest()` is
+the *only* call site anywhere that inserts into `MessageRepository` or
+calls `ensureContact(...)`. The message is emitted once to the transient
+`incomingMessages` SharedFlow (consumed by plugin/keyword-filter/transfer
+machinery, none of which persist it), then `relay()` returns immediately
+for `BRIDGED` trust. Net effect: a bridged LoRa/Meshtastic message the
+radio successfully decoded and the plugin successfully forwarded **never
+appears in the Feed** (`FeedViewModel.broadcasts` is sourced exclusively
+from the Room-backed `messageStore.observeBroadcasts()`), doesn't survive
+even a ViewModel recreation let alone an app restart, and its synthetic
+`meshtastic:*`/`meshcore:*` sender never becomes a `Contact`. This
+directly contradicts `PluginContext.sendMessage()`'s own doc comment
+("The gossip engine will store, verify, and flood it normally") — for
+`BRIDGE_UNSIGNED` traffic it currently does none of the three. Not
+previously flagged anywhere (both prior sessions audited bridge
+reconnect/BLE/decoder robustness, not this persistence gap) despite S1/S2
+being marked "v0.1.0" shipped features in `CLAUDE.md`.
+
+## High severity
+
+**6b.** `RumorMessage.trustLevel` has no `MessageEntity` column and is
+never read/written by `MessageRepositoryAdapter.toEntity()`/`toMessage()`
+— same failure class as the `_ext` bug (the schema-v10 incident already in
+`CLAUDE.md`'s Critical bug history), on the field CLAUDE.md's own headline
+invariant ("Bridge traffic cannot forge VERIFIED trust") depends on. Any
+message persisted with non-default `trustLevel` (today: only
+`BRIDGE_VOUCHED`) silently reverts to `VERIFIED` on the next Room load.
+Currently low *live* impact (BRIDGED content is never persisted at all per
+finding #6, and `BRIDGE_VOUCHED` isn't in the reseed-eligible type set) —
+but O47's planned "via-bridge" per-message UI label explicitly depends on
+`trustLevel` surviving a reload, and will silently misrender the moment it
+ships against this. Sharper still: `MessageEntityExtRoundTripTest` — the
+regression test purpose-built after the original `_ext` incident to catch
+exactly this bug class — passes today only because its `msg()` fixture
+never sets a non-default `trustLevel`, so it can't see the loss. Add a
+`trustLevel` column + a non-default-trustLevel case to that same test.
+
+**8. `MeshControllerHolder.NoOp` silently drops sends/relays during the
+service-bind race window, while the UI reports success anyway.**
+`app/src/main/java/com/rumor/mesh/service/MeshControllerHolder.kt:15-42` —
+`controller()` returns a no-op stub whenever `MeshService` isn't bound yet
+(the bind in `MainActivity.onStart()` is async;`onStop()` unconditionally
+clears the holder, so every background→foreground cycle reopens the
+window). `ui/feed/FeedScreen.kt:60-63` and `ui/messages/ThreadScreen.kt:95-98`
+clear the compose field unconditionally on send with no result/error
+signal — a message typed and sent in that window is composed nowhere,
+persisted nowhere, queued nowhere, and simply vanishes while the UI looks
+identical to a successful send. `FeedViewModel.relay()` (~41-46) is worse:
+it calls the (no-op'd) `manualRelay()` then unconditionally
+`messageStore.markRelayed(message.id)` — a broadcast can show "Relayed" in
+the Feed while nothing left the device.
+
+**9. `PluginCatalog.enable()` can show a bridge as ON when it silently
+isn't running.** `PluginCatalog.kt:71-84` marks a plugin persistently
+"enabled" even when `PluginRegistry.register()` rolled the attach back
+after an `onAttach` failure (e.g. a revoked BLE permission) — since O25's
+fix made `register()` swallow that failure instead of throwing,
+`PluginCatalog` has no way to learn the attach didn't take. Settings shows
+the bridge toggled on; it never actually attached.
+
+**10. Plugin coroutine scopes have no `CoroutineExceptionHandler` — an
+uncaught exception in a bridge's own launched collector is fatal to the
+*whole process*, not just the plugin.** `PluginRegistry.register()`
+(`PluginRegistry.kt:63`) builds each plugin's scope bare. Both bridges
+launch their inbound/outbound collectors directly via `pluginScope.launch{}`
+rather than through a `PluginRegistry` dispatch call site (the one place
+that *is* try/catch-wrapped per O25), so those specific coroutines have no
+safety net at all — worse than the "plugin crash disables the plugin"
+behavior O25 was built to guarantee.
+
+**11. `BridgeCodecFuzzers`/`BridgeCodecSeedCorpusTest` (`:app`) have the
+identical crash-masking bug as the already-flagged `:core` fuzz files, in a
+file the earlier audit's citation didn't cover.**
+`app/src/test/java/com/rumor/mesh/plugin/fuzz/BridgeCodecFuzzers.kt:29,35`
+and `BridgeCodecSeedCorpusTest.kt:45,52` — `runCatching{}` catches
+`Throwable`, not just `Exception`, so a `StackOverflowError`/`OutOfMemoryError`
+from the hand-rolled Meshtastic/MeshCore protobuf readers (the file's own
+docstring calls these "the highest-risk untrusted-bytes surfaces in the
+app") is absorbed before Jazzer can see it as a crash — a `JAZZER_FUZZ=1`
+run against these two harnesses can never report a finding regardless of
+how broken the decoder is. `BridgeCodecSeedCorpusTest`'s two `@Test`
+methods additionally have zero assertions, same as the already-tracked
+`SeedCorpusTest`/`BloomFalsePositiveTest` pattern.
+
+**12. `TransferAssembler`/`TransferSender` have zero unit test coverage —
+despite being the exact class that O108/O109's resource-exhaustion
+hardening (evidence-gated watchdog arming, per-sender concurrency cap,
+windowed NACKs, stale-transfer eviction) lives in.** No
+`TransferAssemblerTest`/`TransferSenderTest` exists anywhere in the repo.
+`Chunker` (the pure-function half) is well covered
+(`app/src/test/.../ChunkerTest.kt`); the stateful class that actually uses
+those functions is not. The only indirect coverage is one simulator
+scenario's happy-path assertion. Finding #2 above (the chunk-BLOB leak) is
+concrete proof this gap is not theoretical — a single test asserting
+"chunk rows are gone after COMPLETE" would have caught it immediately.
+
+## Medium severity
+
+**13.** `PersistenceCoordinator.recent` (`core/routing/PersistenceCoordinator.kt:43`)
+is an unsynchronized `LinkedHashSet` mutated/iterated from independent
+coroutines (beacon loop, recompute loop, `onExchange`) on
+`Dispatchers.Default` — risks a `ConcurrentModificationException` that
+silently kills the backbone-recompute loop.
+
+**14.** `BreadcrumbCache.snapshot` (`core/routing/BreadcrumbCache.kt:38`) is
+an unbounded in-memory map; O120's prune-wiring fix only touches the
+persistent repo side, not this in-memory one — the leak it was meant to
+close is only half-closed.
+
+**15.** `Rbsr.respond()` (`core/sync/Rbsr.kt:198`) has no per-round cap on
+frame count — a single ~4MB packet can carry ~25-30k Fingerprint frames,
+each an O(N) linear scan over the full local item set with no cancellation
+checkpoint. CPU-exhaustion DoS surface against large-store anchor/backbone
+nodes specifically (the nodes O55/O98 most want to keep alive).
+
+**16.** `PersistencePlanner`/`MeshViewTracker` (`core/routing/PersistencePlanner.kt:42`)
+has no sybil resistance on self-declared `UserMode.FREE` capacity claims —
+a single fresh keypair can bias honest nodes' backbone-hub selection toward
+itself. Same threat-model family as the already-tracked O127 amplification
+work (the project's own `SybilDriver` test instrument in `:node` exists
+specifically to measure this class of issue — worth pointing it at this
+one too).
+
+**17.** `MeshtasticBleClient.drainFromRadio()` (`MeshtasticBleClient.kt:203`)
+has a lost-wakeup race: a `FromNum` notification arriving mid-drain is
+dropped with nothing scheduling a follow-up drain — can stall a queued
+inbound packet indefinitely.
+
+**18.** `MeshCoreBridge.onFrame` (`MeshCoreBridge.kt:122`) routes
+`PUSH_CODE_RAW_DATA` through the same decoder as `RESP_CODE_CHANNEL_MSG_RECV`
+with only an 11-byte length floor as a format discriminator — a firmware
+whose raw-data payload isn't byte-identical in shape to a channel message
+could decode to plausible-looking garbage displayed as a real bridged
+message.
+
+**19. (this session, manual pass) `LanTransport`'s inbound accept loop has
+no connection cap or per-source throttling.**
+`core/src/main/kotlin/com/rumor/mesh/core/transport/lan/LanTransport.kt`,
+`start()` (~113-117): `while (isActive) { val client = ss.accept(); …;
+launch { runSession(client, isInbound = true) } }` — unbounded concurrent
+inbound `GossipSession`s, no per-IP rate limit, no cap on total inflight
+sessions. The `sessionGate` dedup (first-come-wins per verified peer
+userId) only kicks in *after* the HELLO handshake completes, so it doesn't
+bound pre-verification cost. Matters more for this transport than for
+Wi-Fi Direct because Wi-Fi Direct's own group-membership cap (~8-10 GO
+clients) provides a natural ceiling that a regular-AP LAN has none of —
+and O104's design intent for `:node` is literally "the laptop *is* the AP,"
+meaning any device that associates to that Wi-Fi can reach this port and
+force crypto-verification work per connection with no cost to the
+attacker.
+
+**20. (this session) `LanTransportManager`'s `NetworkCallback` isn't
+pinned to the `Network` it actually started the transport with.**
+`app/src/main/java/com/rumor/mesh/core/transport/lan/LanTransportManager.kt`.
+`start()` registers a callback for `addTransportType(TRANSPORT_WIFI)` —
+matching *any* Wi-Fi-transport network, not a specific one. `onLost(network)`
+tears down the transport on loss of *any* matching network, without
+checking it's the same `Network` object `onLinkPropertiesChanged` used to
+bring the transport up. If the device briefly has two WIFI-transport
+networks (a captive-portal validation network, or in some Android
+versions a P2P group interface also classified under `TRANSPORT_WIFI`), a
+spurious loss of the *unrelated* one would incorrectly tear down a
+perfectly-good LAN transport. Fix: capture the started `Network` and check
+`network == startedNetwork` in both callbacks.
+
+**21.** `SettingsViewModel.setScanInterval()` (`ui/settings/SettingsViewModel.kt:73-75`)
+only writes local Compose state — nothing reads `scanIntervalSec`, and the
+one plausible consumer (`ModeProfile.scanIntervalMs`) is never written from
+here. The "Radio duty cycle" slider visually updates and controls nothing.
+Sharper than O70's framing (which assumes a working-but-crude binary
+toggle exists today — it doesn't, this does nothing at all).
+
+**22.** Battery-optimisation warning card is permanently dead —
+`SettingsState.showBatteryOptimisationWarning` defaults `false` and is
+never written anywhere in the app. The card + its correctly-wired "Fix
+this" button (`SettingsScreen.kt:190-208`) can never render regardless of
+actual OEM battery-kill state. Directly relevant to O33's still-open half
+and G24's field note calling out this exact gap as a "UI-warning
+candidate" that was never wired live.
+
+**23.** `MeshViewTracker.pruneStale()` (`core/routing/MeshViewTracker.kt:135`)
+is dead code — a fourth instance of the orphaned-prune pattern
+`PruneWiringInvariantTest` exists to catch but doesn't check for this one.
+
+## Lower severity
+
+**24. (this session)** `NodeIdentityProvider`
+(`node/src/main/kotlin/com/rumor/mesh/node/NodeIdentity.kt:57-61`) writes
+the private-key seed file with default umask permissions, *then* chmods to
+0600 — a real if brief window where a fresh identity file is
+world/group-readable on a shared machine before hardening lands. Worse,
+the `Files.setPosixFilePermissions` call is wrapped in `runCatching` with
+no logging on failure — if it fails for any reason (non-POSIX filesystem,
+unrelated I/O error), the file silently stays at default permissions with
+no warning to the operator. `TEST INSTRUMENT ONLY` today per the class's
+own KDoc, but O44 explicitly designates this file's descendant as the
+product `:node` identity impl — worth getting the create-with-restrictive-
+permissions-from-the-start pattern right before that promotion, not after.
+
+**25.** `ThreadViewModel` (`ui/messages/ThreadViewModel.kt:77-105`,
+`137-205`) re-decrypts the *entire* thread (X25519 ECDH + AES-GCM +
+possible decompress, per message) on every single new-message emission,
+not just the delta — O(thread-length) crypto work per incoming message.
+Matters most in exactly the regime O55 targets: long-lived high-volume
+threads, and post-partition-heal catch-up bursts (the kind G24 verified
+happen) trigger repeated full-thread re-decryption passes.
+
+**26.** `:node` has no `src/test` directory at all despite
+`node/build.gradle.kts` declaring the full JUnit4+vintage-engine test
+scaffolding (junit, kotlinx-coroutines-test, junit-vintage-engine) —
+present, unused. Lower priority since the substantive logic (`MeshRuntime`)
+is tested from `:core`, but worth a note before the module grows further
+per O106.
+
+**27.** `FeedViewModel.markRead()` (`ui/feed/FeedViewModel.kt:48-52`) is
+unreachable — no caller anywhere in the UI package (only
+`ThreadViewModel.markAllRead()` is actually wired).
+
+**28.** Feed "Relay" button (`ui/feed/FeedScreen.kt:119-133`) has no
+in-flight/debounce guard — `wasRelayed` only flips after the next DB-backed
+StateFlow emission, so a double-tap before that lands calls `manualRelay()`
+twice.
+
+**29. (this session) `CLAUDE.md`'s own "Architecture at a glance" section
+is stale about its own module count.** Line 9 still says "Three Gradle
+modules," listing only `:core`/`:app`/`:simulator` — `:node` (real,
+building, referenced elsewhere in this same file and correctly described
+as a fourth module in `README.md`, which says "four Gradle modules") isn't
+mentioned. The "DI (Koin) wiring" section a few lines down also doesn't
+mention `:node`'s constructor-injection pattern. Low stakes but this is
+the file every fresh instance reads first — worth a one-line fix.
+
+**30. (this session)** `docs/CRYPTO_PRIMITIVES_AUDIT.md`'s "Sources"
+section still cites `core/src/commonMain/kotlin/...` paths from the
+pre-flattening KMP layout (now `core/src/main/kotlin/...`). Minor — same
+staleness class already flagged for `docs/IOS_PORT_PHASE_1_HANDOFF.md` in
+the prior session, just a different file that wasn't checked at the time.
+
+## Already-open, reconfirmed this session (not new — listed only so the
+next instance doesn't re-derive the same conclusion)
+
+- iOS Swift bridge (`ios/RumorCryptoBridge.swift`) still has no `aad`
+  parameter on `aesGcmEncrypt`/`aesGcmDecrypt` and the KDF-wrapper comment
+  still says `PlatformCrypto.pbkdf2` (stale since G20's HKDF-extract
+  switch) — confirmed still true against current `main`, unfixed since the
+  last session flagged it.
+- O127 sybil/`PresenceReplyGate` amplification — confirmed as a known,
+  actively-being-measured issue (`:node --sybil` exists specifically to
+  quantify it); not re-reported as new.
+- `WifiDirectTransport.stop()` coroutine-scope-death — already filed O145.
+- `BloomFalsePositiveTest` zero-assertion gap — already flagged prior
+  session (2026-07-23 audit item 13a).
+- Bridge BLE-reconnect/MTU/dedup gaps — already tracked as O119.
+- `TransferAssembler`'s chunk-BLOB leak on the COMPLETE path (finding #2
+  above) was actually first surfaced in the 2026-07-23 session already in
+  this file (its finding #10) — re-independently-confirmed by this
+  session's data/DI slice, still unfixed. Also from that same slice:
+  `TransferDao.pruneOlderThan` (`app/.../data/TransferDao.kt:31`) compares
+  lowercase status literals against the uppercase `TransferStatus.name`
+  Room actually stores (no `COLLATE NOCASE`) — matches zero rows on-device
+  — moot today since nothing calls it from production code, but a landmine
+  if it's ever wired up expecting to work. And `InMemoryMessageRepository.evictOldest`
+  (`core/.../data/memory/InMemoryRepos.kt:44-48`) still ignores the
+  `alwaysSave`-contact exemption that `MessageDao.evictOldest`'s SQL
+  correctly implements — simulator/`:node` eviction behavior diverges from
+  the on-device Room behavior it's meant to mirror.
+- `RbsrWire.kt:38`'s stale "XOR fingerprint" doc comment (fingerprint is
+  actually additive per the negentropy-review fix) — already flagged,
+  tracked under O122.
+- Several routing findings (`PersistenceCoordinator` race,
+  `BreadcrumbCache` unbounded map, `MeshViewTracker` dead prune,
+  `Rbsr.respond()` frame cap, `PersistencePlanner` sybil gap — items
+  11-14/21 above) were actually first surfaced in the informal
+  2026-07-23 overnight-audit session already in this file, but never
+  promoted to a `CLAUDE.md` O-row or fixed. Re-verified against current
+  `main` (post the subsequent Tier-2 hardening sweep) and confirmed
+  genuinely still open — flagging again here specifically so they don't
+  fall through a second time. **Suggest the next instance's first move be
+  triage-and-assign-O-numbers for everything in this file that doesn't
+  have one yet, before starting new work** — this is now the second
+  session's worth of unpromoted findings stacking up in this doc instead
+  of the backlog it's supposed to feed.
+
+## Suggested next moves
+
+1. Fix #1 (KeywordFilter splice) and generalize the audit across every
+   `*SignableBytes` helper — cheapest high-value pass, mirrors O144's own
+   fix shape exactly.
+2. Fix #2 (transfer chunk leak) + add the missing `TransferAssembler`
+   test suite in the same pass (#12) — the bug and its missing test are
+   the same piece of work.
+3. Add `:node:test`/`:node:assemble` to `ci.yml` (#5) — five-minute fix,
+   closes a real blind spot on an actively-growing module.
+4. FLAG_SECURE sweep (#3) — mechanical, same fix repeated across ~4 screens.
+5. Fix #6 (bridged messages never persisted) — functional bug on a shipped
+   feature (S1/S2), not just a hygiene issue; pairs naturally with #6b
+   (trustLevel column) in the same MessageEntity commit.
+6. Triage backlog per the note above before opening new work.
+
+---
+
 # Handoff — overnight research/audit session (2026-07-23) — no code changes
 
 > ### 🔁 Away-mode "keep going" hook (new 2026-07-23)
