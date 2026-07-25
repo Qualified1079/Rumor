@@ -91,6 +91,23 @@ close-out IF device round-trip becomes possible. Pre-existing flake:
 `PerPeerRoutingTest` fails ~sometimes under parallel-suite load, passes in
 isolation — not mine.
 
+**UNTESTED / not started (scoped, ready to pick up):**
+- **Behavioral BRIDGED-never-relay test** — the invariant is currently only
+  source-grep-pinned (`SourceInvariantTest`); a behavioral test through the real
+  engine would be stronger. Sketch: inject a bridged broadcast on node A via
+  `GossipEngine.injectFromPlugin(msg, pluginId)` (LOCAL_BRIDGE source → BRIDGED
+  trust), then run a real `SimTransport(A,B).exchange` and assert B never receives
+  it (bridged is stored/inboxed locally on A but not relayed to peers), with a
+  positive control that a normal broadcast from A DOES reach B. Needs a SimNode
+  affordance to reach `injectFromPlugin` (not currently exposed — add one, or
+  drive it via the engine directly). Was about to write this when the session
+  wrapped; nothing committed for it.
+- **O38 close-out** (composeDirect prekey selection + `_ext.pk` marker + `:app`
+  ThreadViewModel decrypt) — spans :core+:app, changes the live DM crypto path;
+  MUST land atomically and wants a two-node on-device DM round-trip (needs mesh
+  delivery, i.e. the O98 path) before being relied on. Rotator + cache are done;
+  this is the unverifiable-here integration. Do NOT half-ship.
+
 ---
 
 # Handoff — scheduled overnight research/audit session (2026-07-24) — no code changes
