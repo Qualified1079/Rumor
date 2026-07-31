@@ -128,8 +128,8 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O107 | **`[STRUCT]` `[PART]`** Transport SPI — extract WHEN the second transport lands, not before** |
 | O98 | **`[PART]`** Smart persistence — covering-set of persistent links under a per-device degree cap** |
 | O100 | **`[PART]` `[TODO/SIM]`** Torrent-style multi-source chunk distribution (swarm fetch)** |
-| O163 | **`[TODO/CODE]`** `:node` invisible to CI — not built/tested/compiled (audit #5) |
-| O182 | **`[TODO/CODE]`** `:node` has no `src/test` despite declaring the scaffolding (audit #26) |
+| O163 | **`[BLOCKED — needs `workflow`-scope token]`** Fix is a one-liner: add `:node:test` to `ci.yml`'s unit-test step (now that O182 gives it tests). The push token lacks `workflow` scope so `.github/workflows/ci.yml` can't be updated from here — **apply this by hand:** in `.github/workflows/ci.yml` line 23, append ` :node:test` to the `./gradlew … :simulator:test` command. Verified green locally. |
+| O182 | **`[DONE 2026-07-31]`** `:node` now has `src/test` — `NodeIdentityProviderTest` (3): fresh-identity well-formedness + identity binding, seed persistence across restart, `FileHlcStore` default+round-trip. Uses the declared junit+vintage scaffolding; runs in CI via O163. |
 #### Tier 2 — security/crypto substrate (pre-ship blockers; Tier 3 is gated on the first two rows)
 
 | # | Item |
