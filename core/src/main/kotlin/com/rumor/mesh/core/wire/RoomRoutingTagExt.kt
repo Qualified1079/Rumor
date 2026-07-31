@@ -8,11 +8,18 @@ import kotlinx.serialization.json.JsonPrimitive
  *
  * The tag itself is a 16-byte routing identifier produced by
  * [com.rumor.mesh.core.protocol.RoomRoutingTag]. On the wire it
- * rides as a Base64-encoded string in `_ext.rt`. Unsigned (in
- * `_ext`) — a relay could in principle flip the tag, but the
- * consequence is the message gets dropped at every honest peer
- * (no subscription matches a bogus tag), so the relay achieves
- * nothing useful by tampering.
+ * rides as a Base64-encoded string in `_ext.rt`.
+ *
+ * O157: although `_ext` is generally unsigned, for `ROOM_MESSAGE`
+ * the routing tag IS bound into the signed transcript
+ * ([com.rumor.mesh.core.protocol.MessageStore.signableBytes]) — it
+ * is stamped before signing in `buildMessage`. This closes the
+ * keyless-retag attack: without it, an attacker could take any
+ * validly-signed OPEN room message and overwrite `_ext.rt` with the
+ * (public, keyless) tag of a different room, re-homing the sender's
+ * content into a room they never posted to. Any post-signing change
+ * to a room message's tag now breaks the signature and is dropped at
+ * verify — not merely unmatched.
  *
  * Mirrors the [withCompressionMetadata] / [withReplyTo] /
  * [withMentions] pattern: pure accessor + a single copy helper.

@@ -732,6 +732,7 @@ class GossipEngine(
             return null
         }
 
+        val tagBase64 = Base64Codec.encode(routingTag)
         val baseMsg: RumorMessage = if (recipients.isEmpty()) {
             // OPEN room — signed plaintext broadcast.
             buildMessage(
@@ -739,6 +740,7 @@ class GossipEngine(
                 type = MessageType.ROOM_MESSAGE,
                 hopsToLive = DEFAULT_BROADCAST_HOPS,
                 payload = MessagePayload(ContentType.TEXT, plaintext),
+                roomRoutingTag = tagBase64,
             )
         } else {
             // ENCRYPTED room — multi-recipient envelope.
@@ -748,19 +750,20 @@ class GossipEngine(
                 senderId = identity.userId,
                 senderEd25519Public = identity.publicKeyBytes,
                 recipients = recipients,
-                roomRoutingTag = Base64Codec.encode(routingTag),
+                roomRoutingTag = tagBase64,
             )
             buildMessage(
                 identity = identity,
                 type = MessageType.ROOM_MESSAGE,
                 hopsToLive = DEFAULT_BROADCAST_HOPS,
                 encryptedPayload = WireJson.encodeToString(envelope),
+                roomRoutingTag = tagBase64,
             )
         }
 
-        // Stamp the routing tag into _ext.rt + apply O90 thread/mention metadata.
-        val routedMsg = baseMsg.withRoomRoutingTag(Base64Codec.encode(routingTag))
-            .applyThreadAndMentionExt(replyTo, mentions)
+        // O157: the routing tag is now stamped + signed inside buildMessage.
+        // Only the unsigned O90 thread/mention metadata is applied here.
+        val routedMsg = baseMsg.applyThreadAndMentionExt(replyTo, mentions)
 
         enqueueImmediate(routedMsg)
         return routedMsg
@@ -1410,8 +1413,9 @@ class GossipEngine(
         payload: MessagePayload? = null,
         encryptedPayload: String? = null,
         recipientId: String? = null,
+        roomRoutingTag: String? = null,
     ): RumorMessage {
-        val unsigned = RumorMessage(
+        val base = RumorMessage(
             id = Uuid.randomHex32(),
             senderId = identity.userId,
             senderPublicKey = identity.publicKeyBytes.toBase64(),
@@ -1424,6 +1428,11 @@ class GossipEngine(
             recipientId = recipientId,
             signature = "",
         )
+        // O157: the room routing tag must be present BEFORE signing so
+        // signableBytes covers it (it rides _ext.rt, which is otherwise
+        // stamped post-sign and thus forgeable). Everything else in _ext
+        // (HLC, thread/mention) stays unsigned and is applied after.
+        val unsigned = if (roomRoutingTag != null) base.withRoomRoutingTag(roomRoutingTag) else base
         val sig = CryptoManager.sign(messageStore.signableBytes(unsigned), identity.privateKeyBytes).toBase64()
         // O95: HLC stamp rides _ext (unsigned, like every _ext field) so it can
         // be applied after signing without invalidating the sig.

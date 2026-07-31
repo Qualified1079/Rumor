@@ -6,8 +6,10 @@ import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.data.MessageRepository
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.Contact
+import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.mode.ModeState
+import com.rumor.mesh.core.wire.roomRoutingTag
 import kotlinx.coroutines.flow.Flow
 import com.rumor.mesh.core.platform.AtomicCounter
 
@@ -340,5 +342,14 @@ class MessageStore(
         framed(msg.payload?.content ?: "")
         framed(msg.encryptedPayload ?: "")
         framed(msg.recipientId ?: "")
+        // O157: bind the room routing tag into the SIGNED transcript for room
+        // messages. The tag otherwise rides unsigned in _ext.rt, so a relay
+        // could take any validly-signed OPEN room message and overwrite the tag
+        // with openRoomTag(otherRoom) — re-homing the sender's content into a
+        // room they never posted to, no key required. Gated on type so
+        // broadcast and DM transcripts stay byte-identical (no wire regression);
+        // type.name is itself framed above, so a non-room message can't be
+        // reinterpreted as a room message to skip this field.
+        if (msg.type == MessageType.ROOM_MESSAGE) framed(msg.roomRoutingTag ?: "")
     }.toByteArray(Charsets.UTF_8)
 }

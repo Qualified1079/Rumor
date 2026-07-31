@@ -55,8 +55,10 @@ class RoomMessageMalformedTagTest {
         ) ?: error("compose failed")
 
         // Attack: the same compose, then the routing tag tampered to a
-        // non-base64 value. The outer Ed25519 signature does NOT cover _ext,
-        // so the sig stays valid — exactly what a confused relay could emit.
+        // non-base64 value. O157 now binds the room routing tag into the SIGNED
+        // transcript, so this post-signing edit invalidates the Ed25519
+        // signature — the message is dropped at the verify gate (stronger than
+        // the pre-O157 behaviour, where it was stored-but-unmatched).
         val base = alice.gossipEngine.composeRoomMessage(
             routingTag = RoomRoutingTag.openRoomTag(room),
             plaintext = "tag tamper",
@@ -82,10 +84,11 @@ class RoomMessageMalformedTagTest {
             "malformed routing tag MUST NOT emit to inbox",
             bobInbox.value.contains(tampered.id),
         )
-        // Relay-never-filters: the malformed message still propagated into
-        // bob's store (drop is inbox-only, the mesh keeps carrying it).
-        assertTrue(
-            "malformed message MUST still be stored/relayed (relay path is filter-blind)",
+        // O157: tampering a room message's tag now breaks its signature, so it
+        // is dropped at the verify gate — never stored (a signature-invalid
+        // message is a forgery, not filter-blind relay traffic).
+        assertFalse(
+            "tag-tampered room message MUST be dropped at verify, not stored",
             bob.knownMessages().any { it.id == tampered.id },
         )
 
