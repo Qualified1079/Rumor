@@ -92,7 +92,7 @@ Each row carries a status tag in its title:
 | `[TODO/HW]` | Needs real hardware (a Pixel-class device for battery; a Meshtastic/MeshCore radio for bridge work). |
 | `[STRUCT]` | Foundational/structural — cross-platform architecture correction (phone app + desktop app + USB-bootable node). Schedule ahead of feature work touching the same area; deferring one multiplies the cost of every later change in its area. |
 
-Counts as of 2026-07-30: 23 DECISION rows · 97 open work rows (14 of them `[PART]` remainders, 2 `[STRUCT]`; 2026-07-30: O189–O199 filed from the privacy/security workshop — three-mode duress, ephemeral mode, ratcheted DM path (supersedes O38/absorbs O53), key-retirement beacon, relay-ephemeral DM caching, eclipse/RF decision, traffic-analysis resistance (padding+delay+mix), cover-traffic-rejection decision, limited onion routing, breadcrumb minimization, and the coercion/checkpoint hardening pack; 2026-07-30: O156–O188 filed by triaging the 2026-07-24 overnight audit's 43 findings — bodies in `docs/OPEN_BACKLOG.md`, 7 pure doc-staleness findings folded into O122 instead; 2026-07-24: O146–O155 filed from the DM/Room + moderation/authority + feed design session, full derivation in `docs/MODERATION_AUTHORITY_RESEARCH.md`; 2026-07-22: 14 pure-UI rows folded into O143, bodies in `docs/UI_BACKLOG.md`) · 4 tombstones · 51 completed G-rows. (O127–O130 added from the 2026-07-19 overnight audit; §15 Rooms-enforcement finding folded into O89/O79; O126 closed as G43 same week it was filed; O106 headless slice shipped → `[PART]`.)
+Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PART]` remainders, 2 `[STRUCT]`; 2026-07-30: O189–O201 filed from the privacy/security workshop — three-mode duress, ephemeral mode, ratcheted DM path (supersedes O38/absorbs O53), key-retirement beacon, relay-ephemeral DM caching, eclipse/RF decision, traffic-analysis resistance (padding+delay+mix), cover-traffic-rejection decision, limited onion routing, breadcrumb minimization, lock/device-access hardening, notification privacy controls (O200, UI), and post-quantum-hybrid research (O201); the security-program review lives in `docs/SECURITY_RESEARCH.md`; 2026-07-30: O156–O188 filed by triaging the 2026-07-24 overnight audit's 43 findings — bodies in `docs/OPEN_BACKLOG.md`, 7 pure doc-staleness findings folded into O122 instead; 2026-07-24: O146–O155 filed from the DM/Room + moderation/authority + feed design session, full derivation in `docs/MODERATION_AUTHORITY_RESEARCH.md`; 2026-07-22: 14 pure-UI rows folded into O143, bodies in `docs/UI_BACKLOG.md`) · 4 tombstones · 51 completed G-rows. (O127–O130 added from the 2026-07-19 overnight audit; §15 Rooms-enforcement finding folded into O89/O79; O126 closed as G43 same week it was filed; O106 headless slice shipped → `[PART]`.)
 
 **Organization (2026-07-15 audit):** rows are grouped by disposition — recorded decisions first, then unimplemented work ordered **most → least foundational** in tiers (a tier reflects structural dependency: what other work stacks on it — not priority or difficulty), then closed-row tombstones. `[PART]` rows sit in the tier of their *missing remainder*; the shipped substrate is described in the row body. When a row closes, move it to Completed gaps; when new work is identified, slot it into the tier whose downstream-dependency weight matches.
 
@@ -155,7 +155,8 @@ Counts as of 2026-07-30: 23 DECISION rows · 97 open work rows (14 of them `[PAR
 | O189 | **`[TODO/EMU]`** Three-mode duress: fake-profile / crypto-shred-wipe / explode(=wipe+O192 beacon) — crypto-shred KEKs, hidden-vault deniability (privacy workshop) |
 | O190 | **`[TODO/EMU]`** Ephemeral / RAM-only mode — tiered scale-of-forgetting (reboot / app-close / battery-death); in-memory-repo seam already exists (privacy workshop) |
 | O191 | **`[TODO/SIM]` — NOT committed; de-risk in sim first** Ratcheted DM path — Double Ratchet for 2-person DMs; would supersede O38, absorb O53 + repudiable auth (privacy workshop) |
-| O199 | **`[TODO/EMU]`** Coercion/checkpoint hardening pack — biometric-is-a-liability lockdown, panic gesture, disguise, distress beacon; extends O189 (privacy workshop) |
+| O199 | **`[TODO/EMU]`** Lock & device-access privacy hardening — passphrase-only lockdown, panic action, wipe-on-N, FLAG_SECURE; extends O189 (privacy workshop) |
+| O201 | **`[DECISION+RESEARCH]`** Post-quantum hybrid for DM/prekey path — harvest-now-decrypt-later under the decades-horizon threat model; see docs/SECURITY_RESEARCH.md (privacy workshop) |
 #### Tier 3 — plugin platform chain (ordered internally; ALL gated behind O20/O44)
 
 | # | Item |
@@ -249,7 +250,7 @@ Counts as of 2026-07-30: 23 DECISION rows · 97 open work rows (14 of them `[PAR
 
 | # | Item |
 |---|------|
-| O143 | **`[TODO/UI]`** Consolidated UI pass (folds O14/O18/O19/O21/O47/O68/O69/O70/O71/O97/O110/O113/O131/O133 — full row bodies relocated verbatim to `docs/UI_BACKLOG.md`; filed 2026-07-22, user request) |
+| O143 | **`[TODO/UI]`** Consolidated UI pass (folds O14/O18/O19/O21/O47/O68/O69/O70/O71/O97/O110/O113/O131/O133/O200 — full row bodies relocated verbatim to `docs/UI_BACKLOG.md`; filed 2026-07-22, user request) |
 | O111 | **`[TODO/CODE+UI]`** Nickname advertisement — self-chosen nick offered to peers, receiver-accepted (filed 2026-07-17, user request) |
 | O122 | **`[TODO/CODE]`** Doc-drift reconciliation sweep (2026-07-18 audit §4 — one pass, low risk, high reader value) |
 | O74 | **`[TODO/CODE]`** Submit to non-Play Android stores** |
