@@ -151,7 +151,7 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O166 | **`[TODO/CODE]`** `LanTransport` inbound accept loop has no connection cap / per-source throttle (audit #19) |
 | O170 | **`[TODO/CODE]`** `:app` `BridgeCodecFuzzers`/`SeedCorpusTest` mask crashes (catch `Throwable`, no assertions) (audit #11) |
 | O172 | **`[DONE 2026-07-31]`** `Rbsr.respond()` per-round frame-count cap — `MAX_RBSR_FRAMES_PER_ROUND=10_000` bounds the O(frames×N) flood; `RbsrFrameCapTest`. |
-| O180 | **`[TODO/CODE]`** `NodeIdentityProvider` create-then-chmod key-seed window + silent chmod failure (audit #24) |
+| O180 | **`[DONE 2026-07-31]`** `NodeIdentityProvider` now creates the seed file owner-only from creation (atomic `CREATE_NEW` + 0600 attr → no world-readable window on POSIX); non-POSIX fallback restricts post-hoc and LOGS on failure instead of swallowing it. `NodeIdentityProviderTest` asserts no group/other read. Get-it-right-before-O44-promotion done. |
 | O189 | **`[TODO/EMU]`** Three-mode duress: fake-profile / crypto-shred-wipe / explode(=wipe+O192 beacon) — crypto-shred KEKs, hidden-vault deniability (privacy workshop) |
 | O190 | **`[TODO/EMU]`** Ephemeral / RAM-only mode — tiered scale-of-forgetting (reboot / app-close / battery-death); in-memory-repo seam already exists (privacy workshop) |
 | O191 | **`[TODO/SIM]` — NOT committed; de-risk in sim first** Ratcheted DM path — Double Ratchet for 2-person DMs; would supersede O38, absorb O53 + repudiable auth (privacy workshop) |

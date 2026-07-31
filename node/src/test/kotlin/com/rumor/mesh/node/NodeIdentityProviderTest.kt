@@ -2,10 +2,14 @@ package com.rumor.mesh.node
 
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.time.HlcTimestamp
+import java.io.File
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /**
@@ -47,6 +51,21 @@ class NodeIdentityProviderTest {
         assertEquals(first.deviceId, second.deviceId)
         assertTrue(first.publicKeyBytes.contentEquals(second.publicKeyBytes))
         assertTrue(first.privateKeyBytes.contentEquals(second.privateKeyBytes))
+    }
+
+    // O180: the unencrypted seed file must never be group/other-readable, and
+    // must be owner-only from the moment it exists (no create-then-chmod window).
+    @Test
+    fun `seed file is owner-only after generation`() {
+        val dir = tempDir()
+        NodeIdentityProvider(dir)
+        val seedFile = File(dir, "identity.properties").toPath()
+        val store = Files.getFileStore(seedFile)
+        assumeTrue("POSIX permissions unsupported on this FS", store.supportsFileAttributeView("posix"))
+        val perms = Files.getPosixFilePermissions(seedFile)
+        assertFalse("seed must not be group-readable", perms.contains(PosixFilePermission.GROUP_READ))
+        assertFalse("seed must not be other-readable", perms.contains(PosixFilePermission.OTHERS_READ))
+        assertTrue("owner must retain read", perms.contains(PosixFilePermission.OWNER_READ))
     }
 
     @Test

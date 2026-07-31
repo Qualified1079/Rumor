@@ -3,16 +3,23 @@ package com.rumor.mesh.node
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.identity.IdentityProvider
 import com.rumor.mesh.core.identity.LocalIdentity
+import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.runtime.HlcStore
 import com.rumor.mesh.core.time.HlcTimestamp
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.Base64
 import java.util.Properties
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+
+private const val TAG = "NodeIdentity"
+
+/** Owner-only (0600) POSIX permission set for the unencrypted seed file. */
+private val OWNER_ONLY = PosixFilePermissions.fromString("rw-------")
 
 /**
  * File-backed identity for the headless test node. Generates an Ed25519
@@ -55,9 +62,8 @@ class NodeIdentityProvider(dataDir: File) : IdentityProvider {
             props.setProperty("publicKey", Base64.getEncoder().encodeToString(pair.publicKeyBytes))
             props.setProperty("deviceId", deviceId)
             file.parentFile?.mkdirs()
-            file.outputStream().use { props.store(it, "rumor node identity — TEST INSTRUMENT, unencrypted") }
-            runCatching {
-                Files.setPosixFilePermissions(file.toPath(), PosixFilePermissions.fromString("rw-------"))
+            writeSeedOwnerOnly(file) { out ->
+                props.store(out, "rumor node identity — TEST INSTRUMENT, unencrypted")
             }
             _identity.value = LocalIdentity(
                 userId = CryptoManager.publicKeyToUserId(pair.publicKeyBytes),
@@ -65,6 +71,36 @@ class NodeIdentityProvider(dataDir: File) : IdentityProvider {
                 publicKeyBytes = pair.publicKeyBytes,
                 privateKeyBytes = pair.privateKeyBytes,
             )
+        }
+    }
+}
+
+/**
+ * O180: write the unencrypted key-seed file so it is NEVER world/group-readable,
+ * not even briefly. The old path wrote at the default umask and chmod'd to 0600
+ * afterwards — a real window where a fresh seed sat readable on a shared box —
+ * and swallowed a failed chmod silently. Here the file is created owner-only up
+ * front via an atomic CREATE_NEW with the 0600 attribute, so on any POSIX FS
+ * there is no window. On a non-POSIX FS (no createFile-with-perms support) we
+ * fall back to a post-hoc restrict and LOG loudly if even that fails — an
+ * unreadable warning beats a silently exposed key.
+ */
+private fun writeSeedOwnerOnly(file: File, write: (java.io.OutputStream) -> Unit) {
+    val path = file.toPath()
+    Files.deleteIfExists(path)
+    val createdOwnerOnly = runCatching {
+        Files.newByteChannel(
+            path,
+            setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
+            PosixFilePermissions.asFileAttribute(OWNER_ONLY),
+        ).close()
+    }.isSuccess
+    file.outputStream().use(write)   // truncates the pre-created 0600 file, perms unchanged
+    if (!createdOwnerOnly) {
+        val restricted = runCatching { Files.setPosixFilePermissions(path, OWNER_ONLY) }.isSuccess
+        if (!restricted) {
+            RumorLog.w(TAG, "could not make identity seed owner-only ($path) — " +
+                "unencrypted key may be readable by other users on this machine")
         }
     }
 }
