@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.model
 
+import com.rumor.mesh.core.protocol.framed
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -63,5 +64,11 @@ data class MessageDeletePayload(
  * so a sig over delete(X) by key K1 can't be lifted onto delete(X)
  * by key K2 (UKS resistance).
  */
-fun messageDeleteSignableBytes(messageId: String, issuerPublicKey: String): ByteArray =
-    "rumor-message-delete-v1:$messageId|$issuerPublicKey".encodeToByteArray()
+fun messageDeleteSignableBytes(messageId: String, issuerPublicKey: String): ByteArray = buildString {
+    // O156 — length-prefixed framing. messageId is sender-chosen (not gated to
+    // hex on the inbound path), so a bare `|` between it and the pubkey was
+    // re-partitionable. [framed] fixes both boundaries.
+    append("rumor-message-delete-v2:")
+    framed(messageId)
+    framed(issuerPublicKey)
+}.encodeToByteArray()

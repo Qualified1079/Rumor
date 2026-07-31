@@ -144,7 +144,7 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O112 | **`[TODO/CODE]`** Hostile-input hardening sweep (filed 2026-07-17, user request) |
 | O115 | **`[PART]`** Identity lock lifecycle — core zeroize + KDF bump SHIPPED; UI surface open (2026-07-18 audit §2.2 + round 3) |
 | O116 | **`[PART]`** Room migration chain — pre-first-release gate (2026-07-18 audit §2.4) |
-| O156 | **`[TODO/CODE]`** `keywordFilterListSignableBytes` splice forgery + repo-wide `*SignableBytes` length-prefix sweep (audit #1 — HIGHEST; same class as O144, not covered by it) |
+| O156 | **`[DONE 2026-07-31]`** `keywordFilterListSignableBytes` splice forgery + repo-wide `*SignableBytes` length-prefix sweep — 6 transcripts re-framed under `-v2:` tags via one `SignableFraming` primitive; `SignableFramingGuardTest` fails the build on any new bare-delimiter transcript. Classification table in `docs/SECURITY_RESEARCH.md`. |
 | O157 | **`[TODO/CODE]`** OPEN-room routing tag not in signed transcript — keyless retag into a different room (audit #31 — HIGH) |
 | O162 | **`[TODO/CODE]`** `RumorMessage.trustLevel` has no `MessageEntity` column — reverts to VERIFIED on reload (audit #6b; `_ext`-bug class) |
 | O165 | **`[TODO/EMU]`** No `FLAG_SECURE` — passphrase entry + decrypted DMs are Recents/screenshot exposed (audit #3) |

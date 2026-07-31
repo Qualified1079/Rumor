@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.model
 
+import com.rumor.mesh.core.protocol.framed
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -77,10 +78,12 @@ fun bridgeVouchedSignableBytes(
     payload: String,
     receivedAtMs: Long,
 ): ByteArray = buildString {
-    append("rumor-bridge-vouched-v1:")
-    append(bridgeUserId); append('|')
-    append(originNetwork); append('|')
-    append(originSenderId); append('|')
-    append(receivedAtMs); append('|')
-    append(payload)
+    // O156 — length-prefixed framing. originNetwork / originSenderId / payload are
+    // free text from a foreign network, all re-partitionable under bare `|`.
+    append("rumor-bridge-vouched-v2:")
+    framed(bridgeUserId)
+    framed(originNetwork)
+    framed(originSenderId)
+    framed(receivedAtMs)
+    framed(payload)
 }.toByteArray(Charsets.UTF_8)

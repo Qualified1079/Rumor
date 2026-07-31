@@ -1,5 +1,7 @@
 package com.rumor.mesh.core.model
 
+import com.rumor.mesh.core.protocol.framed
+import com.rumor.mesh.core.protocol.framedList
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -132,7 +134,19 @@ data class FilterMatch(
 
 data class FilterHit(val listPublisherId: String, val listName: String, val entry: FilterEntry)
 
-/** Domain-tagged signable bytes for a [KeywordFilterList]. */
+/**
+ * Domain-tagged signable bytes for a [KeywordFilterList].
+ *
+ * O156 — v2 length-prefixed framing. v1 joined the free-text [name] and each
+ * entry's free-text `pattern` with bare `|`/`:`/`,` delimiters, so an observer
+ * of one legitimately-signed list could shift content across a field boundary
+ * (e.g. embed a `|` in `name`) to craft a different `(name, entries, allowlist)`
+ * with a byte-identical transcript, reuse the original signature untouched, and
+ * rebroadcast it. Every variable-length field is now length-prefixed via
+ * [framed]/[framedList] (see [com.rumor.mesh.core.protocol.framed]), making the
+ * field→byte mapping injective and the splice structurally impossible. Hard
+ * cutover — `-v1:` is retired (no shipped users); see `RENAMED_FIELDS_NEVER_REUSE.md`.
+ */
 fun keywordFilterListSignableBytes(
     publisherId: String,
     version: Long,
@@ -140,17 +154,13 @@ fun keywordFilterListSignableBytes(
     entries: List<FilterEntry>,
     userIdAllowlist: Set<String>,
 ): ByteArray = buildString {
-    append("rumor-keyword-filter-v1:")
-    append(publisherId)
-    append('|')
-    append(version)
-    append('|')
-    append(name)
-    append('|')
+    append("rumor-keyword-filter-v2:")
+    framed(publisherId)
+    framed(version)
+    framed(name)
     // Sort for deterministic ordering across publishers / versions.
-    entries.sortedWith(compareBy({ it.pattern }, { it.matchKind.name })).forEach {
-        append(it.pattern); append(':'); append(it.action.name); append(':'); append(it.matchKind.name); append(',')
-    }
-    append('|')
-    userIdAllowlist.sorted().forEach { append(it); append(',') }
+    val sorted = entries.sortedWith(compareBy({ it.pattern }, { it.matchKind.name }))
+    framed(sorted.size)
+    sorted.forEach { framed(it.pattern); framed(it.action.name); framed(it.matchKind.name) }
+    framedList(userIdAllowlist.sorted())
 }.toByteArray(Charsets.UTF_8)

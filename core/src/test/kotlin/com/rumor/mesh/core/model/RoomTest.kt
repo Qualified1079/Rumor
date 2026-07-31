@@ -67,8 +67,8 @@ class RoomTest {
         val actionBytes = roomActionSignableBytes("r", RoomActionKind.KICK_USER,
             "u", null, "m", 0L).decodeToString()
         // Domain-tag separation — sig over one struct cannot be lifted to another.
-        assertEquals(true, createBytes.startsWith("rumor-room-create-v1:"))
+        assertEquals(true, createBytes.startsWith("rumor-room-create-v2:"))
         assertEquals(true, inviteBytes.startsWith("rumor-room-invite-v1:"))
-        assertEquals(true, actionBytes.startsWith("rumor-room-action-v1:"))
+        assertEquals(true, actionBytes.startsWith("rumor-room-action-v2:"))
     }
 }

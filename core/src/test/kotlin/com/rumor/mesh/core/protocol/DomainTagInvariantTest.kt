@@ -115,19 +115,19 @@ class DomainTagInvariantTest {
     }
 
     @Test
-    fun `O40 message-delete signable-bytes domain tag is rumor-message-delete-v1`() {
+    fun `O40 message-delete signable-bytes domain tag is rumor-message-delete-v2`() {
         assertContainsTag(
             file = "core/src/main/kotlin/com/rumor/mesh/core/model/MessageDelete.kt",
-            tag = "rumor-message-delete-v1:",
+            tag = "rumor-message-delete-v2:",
             purpose = "MESSAGE_DELETE signed-bytes scope",
         )
     }
 
     @Test
-    fun `O67 keyword-filter signable-bytes domain tag is rumor-keyword-filter-v1`() {
+    fun `O67 keyword-filter signable-bytes domain tag is rumor-keyword-filter-v2`() {
         assertContainsTag(
             file = "core/src/main/kotlin/com/rumor/mesh/core/model/KeywordFilter.kt",
-            tag = "rumor-keyword-filter-v1:",
+            tag = "rumor-keyword-filter-v2:",
             purpose = "KeywordFilterList signed-bytes scope",
         )
     }
@@ -200,10 +200,10 @@ class DomainTagInvariantTest {
     // ── G13 BRIDGE_VOUCHED outer signature ────────────────────────────────────
 
     @Test
-    fun `G13 bridge-vouched signable-bytes domain tag is rumor-bridge-vouched-v1`() {
+    fun `G13 bridge-vouched signable-bytes domain tag is rumor-bridge-vouched-v2`() {
         assertContainsTag(
             file = "core/src/main/kotlin/com/rumor/mesh/core/model/BridgeVouched.kt",
-            tag = "rumor-bridge-vouched-v1:",
+            tag = "rumor-bridge-vouched-v2:",
             purpose = "Outer Rumor signature scope on BRIDGE_VOUCHED messages " +
                 "(the bridge's signature certifying foreign-network delivery).",
         )
@@ -225,10 +225,10 @@ class DomainTagInvariantTest {
     // ── O79 Room signed events (create / invite / action) ─────────────────────
 
     @Test
-    fun `O79 RoomCreate signable-bytes domain tag is rumor-room-create-v1`() {
+    fun `O79 RoomCreate signable-bytes domain tag is rumor-room-create-v2`() {
         assertContainsTag(
             file = "core/src/main/kotlin/com/rumor/mesh/core/model/Room.kt",
-            tag = "rumor-room-create-v1:",
+            tag = "rumor-room-create-v2:",
             purpose = "RoomCreate signature scope. Separate domain from " +
                 "RoomInvite / RoomAction so a sig from one struct can't be " +
                 "lifted to another.",
@@ -246,10 +246,10 @@ class DomainTagInvariantTest {
     }
 
     @Test
-    fun `O79 RoomAction signable-bytes domain tag is rumor-room-action-v1`() {
+    fun `O79 RoomAction signable-bytes domain tag is rumor-room-action-v2`() {
         assertContainsTag(
             file = "core/src/main/kotlin/com/rumor/mesh/core/model/Room.kt",
-            tag = "rumor-room-action-v1:",
+            tag = "rumor-room-action-v2:",
             purpose = "RoomAction signature scope. Moderator-signed actions " +
                 "(REMOVE_MESSAGE, KICK_USER, BAN_USER, UNBAN_USER).",
         )
@@ -268,10 +268,10 @@ class DomainTagInvariantTest {
     }
 
     @Test
-    fun `O89 room posting-cert signable-bytes domain tag is rumor-room-posting-cert-v1`() {
+    fun `O89 room posting-cert signable-bytes domain tag is rumor-room-posting-cert-v2`() {
         assertContainsTag(
             file = "core/src/main/kotlin/com/rumor/mesh/core/model/RoomPostingCert.kt",
-            tag = "rumor-room-posting-cert-v1:",
+            tag = "rumor-room-posting-cert-v2:",
             purpose = "Posting-certificate signature scope (mod-signed write " +
                 "permission). Separate domain from the other Room structs so " +
                 "a cert sig can't be lifted onto an action or invite.",

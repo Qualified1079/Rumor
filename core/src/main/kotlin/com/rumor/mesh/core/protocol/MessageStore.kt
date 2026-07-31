@@ -334,18 +334,11 @@ class MessageStore(
         framed(msg.id)
         framed(msg.senderId)
         framed(msg.senderPublicKey)
-        framed(msg.sequenceNumber.toString())
-        framed(msg.sentAtMs.toString())
+        framed(msg.sequenceNumber)
+        framed(msg.sentAtMs)
         framed(msg.type.name)
         framed(msg.payload?.content ?: "")
         framed(msg.encryptedPayload ?: "")
         framed(msg.recipientId ?: "")
     }.toByteArray(Charsets.UTF_8)
-
-    /** O144: write one field self-delimited as `<charLen>:<value>`. */
-    private fun StringBuilder.framed(value: String) {
-        append(value.length)
-        append(':')
-        append(value)
-    }
 }

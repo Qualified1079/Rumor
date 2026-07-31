@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.model
 
+import com.rumor.mesh.core.protocol.framed
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -30,7 +31,8 @@ import kotlinx.serialization.json.JsonElement
  * Read access is structurally enforced separately by the O79
  * multi-recipient envelope (omitted recipient = no key wrap = no read).
  *
- * Reserved domain tag: `rumor-room-posting-cert-v1:` — never reuse.
+ * Domain tag `rumor-room-posting-cert-v2:` (O156 length-prefix cutover;
+ * `-v1:` retired, both reserved forever — never reuse).
  */
 @Serializable
 @SerialName("room_posting_cert")
@@ -74,11 +76,13 @@ fun roomPostingCertSignableBytes(
     moderatorId: String,
     moderatorPublicKey: String,
 ): ByteArray = buildString {
-    append("rumor-room-posting-cert-v1:")
-    append(roomId); append('|')
-    append(channel ?: ""); append('|')
-    append(userId); append('|')
-    append(validFromMs); append("->"); append(validToMs); append('|')
-    append(moderatorId); append('|')
-    append(moderatorPublicKey)
+    // O156 — length-prefixed framing (free-text [channel] between bare delimiters).
+    append("rumor-room-posting-cert-v2:")
+    framed(roomId)
+    framed(channel ?: "")
+    framed(userId)
+    framed(validFromMs)
+    framed(validToMs)
+    framed(moderatorId)
+    framed(moderatorPublicKey)
 }.encodeToByteArray()

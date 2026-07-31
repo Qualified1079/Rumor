@@ -25,15 +25,46 @@ whole *class* of bug can't come back a third time.
 
 Ordered by (severity of what they'd catch) × (cheapness to run):
 
-1. **Signature-transcript canonicalization — sweep + a structural guard.**
+1. **Signature-transcript canonicalization — sweep + a structural guard. ✅ DONE 2026-07-31.**
    O144 fixed `MessageStore.signableBytes`; O156/O157 then found the identical
    bare-delimiter splice class in `keywordFilterListSignableBytes`, the Room
    `*SignableBytes` helpers, and the OPEN-room routing tag. **This class has
-   shipped, been "fixed," and recurred.** The pass: grep every `*SignableBytes` /
-   transcript builder, convert each to length-prefixed framing under a fresh
-   domain tag, AND add a test/lint that **FAILS on any new bare-delimiter
-   transcript** so the class is structurally dead, not whack-a-moled. Rows: O144
-   (done), O156, O157.
+   shipped, been "fixed," and recurred** — so it was killed structurally, not
+   whack-a-moled:
+   - One canonicalization primitive, `core/protocol/SignableFraming.kt`
+     (`framed()`/`framedList()`, netstring `<charLen>:<value>`), now used by
+     every free-text-carrying transcript incl. `MessageStore.signableBytes`.
+   - The six vulnerable transcripts re-framed under fresh `-v2:` domain tags
+     (hard cutover, no shipped users; all six `-v1:` tags recorded retired in
+     `RENAMED_FIELDS_NEVER_REUSE.md`).
+   - **`SignableFramingGuardTest`** source-scans every `*SignableBytes` /
+     `*ChallengeBytes` builder and **FAILS the build on any new bare-delimiter
+     join** unless the function is on a documented splice-safe allowlist.
+   - `SignableFramingInjectivityTest` demonstrates each fixed transcript's
+     former v1 collision and proves v2 no longer collides.
+
+   **Classification (all `*SignableBytes` / challenge builders, 2026-07-31):**
+
+   | Transcript | Free-text / attacker-var field | Disposition |
+   |---|---|---|
+   | `MessageStore.signableBytes` | content / encryptedPayload / recipientId | **framed** (O144, `rumor-msg-v2:`) |
+   | `keywordFilterListSignableBytes` | `name`, entry `pattern` | **framed** (`-v2:`) |
+   | `messageDeleteSignableBytes` | sender-chosen `messageId` | **framed** (`-v2:`) |
+   | `bridgeVouchedSignableBytes` | `originNetwork`/`originSenderId`/`payload` | **framed** (`-v2:`) |
+   | `roomCreateSignableBytes` | room `name` | **framed** (`-v2:`) |
+   | `roomActionSignableBytes` | moderator `reason` | **framed** (`-v2:`) |
+   | `roomPostingCertSignableBytes` | `channel` | **framed** (`-v2:`) |
+   | `blocklistSignableBytes` / `blocklistDiffSignableBytes` | none (ids hex/bridge, no `\|`/`,`) | splice-safe, allowlisted |
+   | `prekeyPublishSignableBytes` | none (hex + base64 + decimal) | splice-safe, allowlisted |
+   | `multiRecipientEnvelopeSignableBytes` | none (routing tag + base64 + hex ids) | splice-safe, allowlisted |
+   | `roomInviteSignableBytes` | none (hex + base64 + decimal) | splice-safe, allowlisted |
+   | `helloChallengeBytes` / `helloChallengeBytesV2` | none; self-signed → no cross-identity splice | splice-safe, allowlisted |
+
+   Also eyed: `RoomRoutingTag` and the RBSR fingerprint are SHA-256/HMAC over
+   domain-tagged inputs, not signature transcripts — O157's routing-tag concern
+   is a separate finding (the tag isn't in the signed transcript at all), tracked
+   under O157, not this canonicalization pass. Rows: O144/O156 done; O157's
+   routing-tag-not-in-transcript half remains open.
 
 2. **Formal privacy + security threat model (LINDDUN + STRIDE).** Rumor is a
    *privacy* system with no formal threat-model artifact. Run **LINDDUN**

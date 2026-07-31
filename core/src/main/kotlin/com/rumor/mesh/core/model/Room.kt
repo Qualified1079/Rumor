@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.model
 
+import com.rumor.mesh.core.protocol.framed
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -63,7 +64,8 @@ enum class RoomPostingPolicy {
  * catch tampering (a relay forging a roomId that doesn't hash from the
  * other fields).
  *
- * Domain-tagged sig under `rumor-room-create-v1:` — see [roomCreateSignableBytes].
+ * Domain-tagged sig under `rumor-room-create-v2:` — see [roomCreateSignableBytes].
+ * (`-v1:` retired in the O156 length-prefix cutover; both reserved forever.)
  */
 @Serializable
 @SerialName("room_create")
@@ -148,14 +150,15 @@ fun roomCreateSignableBytes(
     postingPolicy: RoomPostingPolicy,
     allowMedia: Boolean,
 ): ByteArray = buildString {
-    append("rumor-room-create-v1:")
-    append(roomId); append('|')
-    append(name); append('|')
-    append(createdBy); append('|')
-    append(createdAtMs); append('|')
-    append(membershipPolicy.name); append('|')
-    append(postingPolicy.name); append('|')
-    append(allowMedia)
+    // O156/O157 — length-prefixed framing (free-text [name] between bare delimiters).
+    append("rumor-room-create-v2:")
+    framed(roomId)
+    framed(name)
+    framed(createdBy)
+    framed(createdAtMs)
+    framed(membershipPolicy.name)
+    framed(postingPolicy.name)
+    framed(allowMedia)
 }.encodeToByteArray()
 
 /** Domain-tagged signable bytes for a [RoomInvite]. */
@@ -183,11 +186,12 @@ fun roomActionSignableBytes(
     moderatorId: String,
     takenAtMs: Long,
 ): ByteArray = buildString {
-    append("rumor-room-action-v1:")
-    append(roomId); append('|')
-    append(kind.name); append('|')
-    append(target); append('|')
-    append(reason ?: ""); append('|')
-    append(moderatorId); append('|')
-    append(takenAtMs)
+    // O156/O157 — length-prefixed framing (free-text [reason] between bare delimiters).
+    append("rumor-room-action-v2:")
+    framed(roomId)
+    framed(kind.name)
+    framed(target)
+    framed(reason ?: "")
+    framed(moderatorId)
+    framed(takenAtMs)
 }.encodeToByteArray()
