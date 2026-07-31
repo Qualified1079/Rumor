@@ -78,6 +78,36 @@ post-quantum hybrid for the DM/prekey path.
 O193/O197/O195 share one dependency: a connect/disconnect/new-peer *churn* sim
 harness — build it once, unblock three rows.
 
+**IN PROGRESS — signature-transcript canonicalization sweep (O156, do-first #1):**
+Started the enumeration but did NOT finish classifying (session ended). The full
+list of `*SignableBytes` / transcript builders to inspect for the O144-class
+bare-delimiter splice (adjacent variable-length/free-text fields joined by a
+delimiter the field content can itself contain → re-partitionable while the
+byte-sequence and thus the signature stay valid):
+  - `MessageStore.signableBytes` (`protocol/MessageStore.kt:332`) — DONE (O144, v2
+    length-prefixed, `rumor-msg-v2:`). The reference pattern to copy.
+  - `keywordFilterListSignableBytes` (`model/KeywordFilter.kt:136`) — KNOWN VULN
+    (O156); free-text `name`/`pattern` between bare `|`. FIX FIRST.
+  - `roomCreateSignableBytes` / `roomInviteSignableBytes` / `roomActionSignableBytes`
+    (`model/Room.kt:142/162/178`) — LATENT per O156/O157 (free-text between bare
+    delimiters; unwired today, live the moment O79/O187 land).
+  - Still UNCLASSIFIED (next session — read each body, confirm whether every field
+    is fixed-shape hex/base64/decimal/enum (splice-safe) or has adjacent free-text
+    (vuln)): `messageDeleteSignableBytes` (MessageDelete.kt:66),
+    `blocklistSignableBytes`/`blocklistDiffSignableBytes` (Blocklist.kt:59/70),
+    `roomPostingCertSignableBytes` (RoomPostingCert.kt:68),
+    `bridgeVouchedSignableBytes` (BridgeVouched.kt:73),
+    `prekeyPublishSignableBytes` (Prekey.kt:70),
+    `multiRecipientEnvelopeSignableBytes` (MultiRecipientEnvelope.kt:122),
+    `helloChallengeBytes`/`V2` (GossipPacket.kt:201/229).
+  - Also non-signature but domain-tag SHA-256 inputs to eye for the same
+    re-partition risk: `RoomRoutingTag` (protocol/RoomRoutingTag.kt — see O157,
+    the tag isn't in the signed transcript at all), `Rbsr` fingerprint
+    (sync/Rbsr.kt:286).
+The deliverable is BOTH the point-fixes AND a test that FAILS on any new
+bare-delimiter transcript, so this class can't recur a third time. Then record
+the classification table in `docs/SECURITY_RESEARCH.md`.
+
 ---
 
 # Handoff — away-mode foundational build (2026-07-23 → 07-24)
