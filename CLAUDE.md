@@ -150,7 +150,7 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O165 | **`[TODO/EMU]`** No `FLAG_SECURE` — passphrase entry + decrypted DMs are Recents/screenshot exposed (audit #3) |
 | O166 | **`[TODO/CODE]`** `LanTransport` inbound accept loop has no connection cap / per-source throttle (audit #19) |
 | O170 | **`[TODO/CODE]`** `:app` `BridgeCodecFuzzers`/`SeedCorpusTest` mask crashes (catch `Throwable`, no assertions) (audit #11) |
-| O172 | **`[TODO/CODE]`** `Rbsr.respond()` has no per-round frame-count cap — CPU-exhaustion DoS (audit #15) |
+| O172 | **`[DONE 2026-07-31]`** `Rbsr.respond()` per-round frame-count cap — `MAX_RBSR_FRAMES_PER_ROUND=10_000` bounds the O(frames×N) flood; `RbsrFrameCapTest`. |
 | O180 | **`[TODO/CODE]`** `NodeIdentityProvider` create-then-chmod key-seed window + silent chmod failure (audit #24) |
 | O189 | **`[TODO/EMU]`** Three-mode duress: fake-profile / crypto-shred-wipe / explode(=wipe+O192 beacon) — crypto-shred KEKs, hidden-vault deniability (privacy workshop) |
 | O190 | **`[TODO/EMU]`** Ephemeral / RAM-only mode — tiered scale-of-forgetting (reboot / app-close / battery-death); in-memory-repo seam already exists (privacy workshop) |

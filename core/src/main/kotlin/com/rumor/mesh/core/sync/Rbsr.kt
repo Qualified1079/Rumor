@@ -94,6 +94,20 @@ const val RBSR_MIN_SET_SIZE: Int = 3_000
 const val MAX_RBSR_SESSION_IDS: Int = 50_000
 
 /**
+ * O172: per-round cap on frames processed by [Rbsr.respond]. Each Fingerprint
+ * frame triggers an O(N) `storage.items`/`storage.fingerprint` scan over the
+ * local set, so a single ~4 MB packet stuffed with ~25–30k Fingerprint frames
+ * would force O(frames × N) CPU on the receiver — aimed squarely at large-store
+ * anchor/backbone nodes (O55/O98). A legit delta-sync round carries few frames
+ * (the diff is small — that's the point of RBSR); this ceiling is far above any
+ * honest round yet bounds the flood. With [MAX_RBSR_ROUNDS] it caps total work
+ * per session. Frames beyond the cap are ignored (those ranges just reconcile on
+ * a later round — graceful partial progress, matching the [MAX_RBSR_SESSION_IDS]
+ * policy), not processed.
+ */
+const val MAX_RBSR_FRAMES_PER_ROUND: Int = 10_000
+
+/**
  * Symmetric, deterministic choice of summary method — BOTH peers compute the
  * same answer from the same inputs (each other's advertised set size + shared
  * capability), so they never split modes (one RBSR, one bloom → session stall).
@@ -200,7 +214,13 @@ class Rbsr(
         val peerHas = mutableListOf<String>()
         val peerNeeds = mutableListOf<String>()
 
-        for (frame in incoming) {
+        // O172: bound the O(frames × N) work a hostile peer can force in one packet.
+        val bounded = if (incoming.size > MAX_RBSR_FRAMES_PER_ROUND) {
+            incoming.subList(0, MAX_RBSR_FRAMES_PER_ROUND)
+        } else {
+            incoming
+        }
+        for (frame in bounded) {
             when (frame) {
                 is RbsrFrame.Skip -> {
                     // Peer confirmed agreement on this range — nothing to do.
