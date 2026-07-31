@@ -1,5 +1,7 @@
 package com.rumor.mesh.core.protocol
 
+import com.rumor.mesh.core.crypto.ConstantTime
+
 /**
  * O79 — Match an inbound room routing tag against the set of rooms a
  * receiver is subscribed to.
@@ -53,13 +55,17 @@ object RoomTagMatcher {
         // subscription); do it first.
         for (roomId in openSubscriptions) {
             val expected = RoomRoutingTag.openRoomTag(roomId)
-            if (expected.contentEquals(inboundTag)) {
+            // OPEN tags are a public function of roomId (no secret), but keep the
+            // compare uniform with the encrypted branch.
+            if (ConstantTime.equals(expected, inboundTag)) {
                 return MatchResult.OpenMatch(roomId)
             }
         }
         for (sub in encryptedSubscriptions) {
             val expected = RoomRoutingTag.encryptedRoomTag(sub.routingKey, messageId)
-            if (expected.contentEquals(inboundTag)) {
+            // Secret-derived (HMAC over sub.routingKey): a byte-at-a-time timing
+            // leak here would be a tag-forgery oracle. Compare in constant time.
+            if (ConstantTime.equals(expected, inboundTag)) {
                 return MatchResult.EncryptedMatch(sub.roomId)
             }
         }

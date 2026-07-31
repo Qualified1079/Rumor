@@ -76,14 +76,31 @@ Ordered by (severity of what they'd catch) × (cheapness to run):
    against. Note: Non-repudiation is a LINDDUN *privacy threat* — which is
    exactly the O191 repudiable-DM insight arriving from the standards side.
 
-3. **Crypto-primitive audit (concrete, high-value, JVM-inspectable).**
+3. **Crypto-primitive audit (concrete, high-value, JVM-inspectable). ⏳ IN PROGRESS — RNG + GCM + constant-time compares done 2026-07-31.**
    - **AES-GCM nonce uniqueness** — GCM nonce reuse is catastrophic (key/auth
      recovery). Audit every AES-GCM call site for how the nonce is generated;
      prove uniqueness-per-key discipline; prefer random-96-bit with a documented
      birthday-bound budget or an explicit counter.
+     **✅ Reviewed 2026-07-31:** `CryptoManager.encrypt` generates a fresh random
+     12-byte IV per call from `PlatformRandom` (JVM `actual` = a shared
+     `java.security.SecureRandom`, CSPRNG). DM/room content keys are per-message
+     ephemeral (O38 prekeys, per-envelope content keys), so the same key never
+     approaches the random-96-bit birthday bound. No fixed/counter nonce or
+     nonce-from-plaintext anywhere. Clean.
    - **Constant-time comparisons** — every MAC / auth-tag / sealed-sender-tag
      (O53) / HMAC compare must be constant-time; a byte-wise early-return leaks
      via timing. Grep for `==`/`.contentEquals` on secret-derived bytes.
+     **✅ Fixed 2026-07-31:** the one live secret-derived compare was
+     `RoomTagMatcher.match`'s ENCRYPTED branch — `contentEquals` on
+     `HMAC(routingKey, messageId)`, an early-returning compare that was a
+     byte-at-a-time routing-tag forgery oracle. Added `crypto/ConstantTime.equals`
+     (XOR-accumulate, branch only on final result) and routed both matcher
+     branches through it. Set the convention on `SealedSenderTag` (its
+     still-unwired receiver-side match MUST use `ConstantTime.equals`).
+     `ConstantTimeTest` pins correctness incl. high-bit/sign-extension. Other
+     `contentEquals` sites are over public data (pinned pubkeys, content hashes,
+     userIds) — not secrets, no oracle. Honest scope: JVM constant-time is
+     best-effort (JIT/GC), documented in the helper (O27 ethos).
    - **HKDF usage** (RFC 5869) — confirm extract-vs-expand used correctly, salt
      and `info` domain-separated (O121(c) started the domain-tag guard;
      generalize it — `DomainTagInvariantTest`).

@@ -28,8 +28,11 @@ import com.rumor.mesh.core.crypto.HmacSha256
  * alongside the existing plaintext `recipientId` (coexistence phase). The
  * remaining open work is receiver-side: precompute per-contact tagKeys at
  * unlock time, and at relay routing match inbound `_ext.t` against the
- * precomputed set. Once that path is universally deployed the plaintext
- * `recipientId` field can be retired in a wire-format break.
+ * precomputed set. **That match MUST use [com.rumor.mesh.core.crypto.ConstantTime.equals]**
+ * — the tag is HMAC-derived from a secret per-contact key, so an
+ * early-returning byte compare would be a tag-forgery timing oracle (same
+ * class as the O79 `RoomTagMatcher` fix). Once that path is universally
+ * deployed the plaintext `recipientId` field can be retired in a wire break.
  *
  * Domain tag is RESERVED — never reuse `rumor-dm-v1:` for any other
  * purpose (per `docs/RENAMED_FIELDS_NEVER_REUSE.md` policy).
