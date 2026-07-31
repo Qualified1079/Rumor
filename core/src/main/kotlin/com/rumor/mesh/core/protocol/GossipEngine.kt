@@ -520,6 +520,12 @@ class GossipEngine(
     }
 
     fun manualRelay(msg: RumorMessage) {
+        // Same invariant as relay(): unsigned bridge traffic is never re-relayed
+        // onto the signed mesh — re-broadcasting it here would launder a foreign
+        // message this node never received over a verified link. The store-backed
+        // msg the Feed hands us carries its persisted trustLevel (O162), so this
+        // guard is meaningful even after a reload.
+        if (msg.trustLevel == TrustLevel.BRIDGED) return
         enqueueImmediate(messageStore.boostHopsForManualRelay(msg))
         scope.launch { messageStore.markRelayed(msg.id) }
     }
@@ -860,6 +866,10 @@ class GossipEngine(
         val localUserId = identityProvider.identity.value?.userId
         val routedFiltered = ArrayList<RumorMessage>(batch.size)
         for (msg in batch) {
+            // Never offer unsigned bridge traffic to peers — the store-backfill
+            // path (offerable) can surface a persisted BRIDGED message (O162)
+            // that relay() would have refused; the serve path must refuse it too.
+            if (msg.trustLevel == TrustLevel.BRIDGED) continue
             val intended = msg.intendedPeers
             if (intended != null) {
                 if (peerUserId in intended) routedFiltered.add(msg)

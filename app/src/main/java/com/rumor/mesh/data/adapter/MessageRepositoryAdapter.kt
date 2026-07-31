@@ -54,6 +54,7 @@ internal fun RumorMessage.toEntity() = MessageEntity(
     recipientId = recipientId, signature = signature, receivedAtMs = receivedAtMs,
     isRead = isRead, wasRelayed = wasRelayed,
     ext = ext?.let { WireJson.encodeToString(it) },
+    trustLevel = trustLevel,
 )
 
 internal fun MessageEntity.toMessage() = RumorMessage(
@@ -64,4 +65,5 @@ internal fun MessageEntity.toMessage() = RumorMessage(
     encryptedPayload = encryptedPayload, recipientId = recipientId,
     signature = signature, receivedAtMs = receivedAtMs, isRead = isRead, wasRelayed = wasRelayed,
     ext = ext?.let { runCatching { WireJson.decodeFromString<Map<String, JsonElement>>(it) }.getOrNull() },
+    trustLevel = trustLevel,
 )

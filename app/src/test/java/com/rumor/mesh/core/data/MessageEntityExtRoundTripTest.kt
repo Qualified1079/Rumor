@@ -2,6 +2,7 @@ package com.rumor.mesh.core.data
 
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
+import com.rumor.mesh.core.model.TrustLevel
 import com.rumor.mesh.data.adapter.toEntity
 import com.rumor.mesh.data.adapter.toMessage
 import kotlinx.serialization.json.JsonPrimitive
@@ -19,7 +20,10 @@ import org.junit.Test
  */
 class MessageEntityExtRoundTripTest {
 
-    private fun msg(ext: Map<String, kotlinx.serialization.json.JsonElement>?) = RumorMessage(
+    private fun msg(
+        ext: Map<String, kotlinx.serialization.json.JsonElement>?,
+        trustLevel: TrustLevel = TrustLevel.VERIFIED,
+    ) = RumorMessage(
         id = "cafebabecafebabecafebabecafebabe",
         senderId = "aa".repeat(32),
         senderPublicKey = "cGs=",
@@ -31,6 +35,7 @@ class MessageEntityExtRoundTripTest {
         recipientId = "bb".repeat(32),
         signature = "c2ln",
         ext = ext,
+        trustLevel = trustLevel,
     )
 
     @Test
@@ -51,5 +56,16 @@ class MessageEntityExtRoundTripTest {
     @Test
     fun `null ext stays null`() {
         assertNull(msg(null).toEntity().toMessage().ext)
+    }
+
+    // O162 — trustLevel is derived at receive and cannot be re-derived after
+    // reload; without a column a stored BRIDGED message came back VERIFIED,
+    // making it re-relayable in violation of the never-re-relay invariant.
+    @Test
+    fun `trustLevel survives entity round-trip`() {
+        for (level in TrustLevel.values()) {
+            val back = msg(null, level).toEntity().toMessage()
+            assertEquals(level, back.trustLevel)
+        }
     }
 }

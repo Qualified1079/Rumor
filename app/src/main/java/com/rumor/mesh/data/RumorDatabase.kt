@@ -58,8 +58,11 @@ import com.rumor.mesh.BuildConfig
     //      which then failed AES-GCM tag checks at display time.
     // v11: added ContactEntity.friended (O136 — explicit friend bit the
     //      O135(1) "known peers only" inbox filter keys on).
+    // v12: added MessageEntity.trustLevel (O162) — it is derived at receive and
+    //      unrecoverable after reload; without the column every stored message
+    //      came back VERIFIED, so a BRIDGED message became re-relayable.
     // Dev uses fallbackToDestructiveMigration so no migration code needed.
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

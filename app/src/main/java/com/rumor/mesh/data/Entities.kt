@@ -6,6 +6,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessageType
+import com.rumor.mesh.core.model.TrustLevel
 
 @Entity(
     tableName = "messages",
@@ -39,6 +40,12 @@ data class MessageEntity(
     // O76 compression-AAD flags (and every other `_ext` rider) from stored
     // and relayed messages — DMs then failed the GCM tag check at display.
     val ext: String?,
+    // O162 — trustLevel is DERIVED at receive from MessageSource + Ed25519
+    // verification (GossipEngine.deriveTrustLevel); the source context is gone
+    // by reload, so it cannot be re-derived and MUST persist. Without a column
+    // every reloaded message defaulted to VERIFIED, so a stored BRIDGED message
+    // came back re-relayable as VERIFIED (breaks the never-re-relay invariant).
+    val trustLevel: TrustLevel = TrustLevel.VERIFIED,
 )
 
 @Entity(

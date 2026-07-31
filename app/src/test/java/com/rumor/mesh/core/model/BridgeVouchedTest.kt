@@ -19,7 +19,7 @@ class BridgeVouchedTest {
             receivedAtMs = 1000L,
         )
         val s = String(bytes, Charsets.UTF_8)
-        assertTrue("domain tag prefix", s.startsWith("rumor-bridge-vouched-v1:"))
+        assertTrue("domain tag prefix", s.startsWith("rumor-bridge-vouched-v2:"))
         assertTrue(s.contains("bridge"))
         assertTrue(s.contains("meshtastic"))
         assertTrue(s.contains("meshtastic:abc"))

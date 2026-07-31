@@ -6,6 +6,7 @@ import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.TransferDirection
 import com.rumor.mesh.core.model.TransferStatus
+import com.rumor.mesh.core.model.TrustLevel
 
 /**
  * Room TypeConverters for the core enums that appear in entity fields.
@@ -31,4 +32,7 @@ class Converters {
 
     @TypeConverter fun fromTransferDirection(v: TransferDirection): String = v.name
     @TypeConverter fun toTransferDirection(v: String): TransferDirection = TransferDirection.valueOf(v)
+
+    @TypeConverter fun fromTrustLevel(v: TrustLevel): String = v.name
+    @TypeConverter fun toTrustLevel(v: String): TrustLevel = TrustLevel.valueOf(v)
 }
