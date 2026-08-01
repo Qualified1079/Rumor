@@ -66,6 +66,10 @@ class LanTransport(
         val onlineUsersProvider: () -> Map<String, Long>,
         val onExchangeFailed: (peerUserId: String) -> Unit = {},
         val rbsrItemsProvider: (suspend () -> List<RbsrItem>)? = null,
+        // Off disables mDNS advertise/discovery (TCP server still runs); peers
+        // must be wired via onPeerLocated. Lets multi-node loopback tests build
+        // a deterministic topology instead of auto-full-meshing.
+        val enableMdns: Boolean = true,
     )
 
     private val TAG = "LanTransport"
@@ -115,7 +119,7 @@ class LanTransport(
                 // containers, exotic APs). The TCP server must survive that —
                 // peers located by other means (tests, a future beacon-derived
                 // address hint) can still dial in.
-                runCatching {
+                if (config.enableMdns) runCatching {
                     val dns = JmDNS.create(bindAddress, serviceName)
                     jmdns = dns
                     dns.registerService(
@@ -193,7 +197,7 @@ class LanTransport(
      * the old loop would otherwise keep dialing a dead port until its failure
      * budget expired — minutes of blindness to a peer that's actually back.
      */
-    internal fun onPeerLocated(name: String, address: InetAddress, port: Int) {
+    fun onPeerLocated(name: String, address: InetAddress, port: Int) {
         val s = scope ?: return
         val endpoint = "${address.hostAddress}:$port"
         peerLoops.compute(name) { _, existing ->

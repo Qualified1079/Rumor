@@ -9,8 +9,14 @@ Append new harness findings here (newest first within a section). Two tiers:
   `SimNode` running the actual `GossipEngine`/relay/dedup/breadcrumb/X25519+AES-GCM.
   DM delivery measured by ciphertext landing in the recipient's real store.
   **Fidelity caveat:** real engine, *simulated wire* (`SimTransport`, in-process) —
-  does NOT exercise `LanTransport` (TCP/mDNS/session framing). LanTransport backend
-  is the next fidelity tier.
+  does NOT exercise `LanTransport` (TCP/mDNS/session framing).
+- **Real-wire harness** (`LanMeshHarness` / `LanMeshHarnessTest`) — same real
+  engine but over a REAL `LanTransport` on loopback (real TCP + `GossipSession`
+  wire), mDNS off for deterministic topology, wired via `onPeerLocated`. Top of
+  the ladder. Slow (~10 s/gossip round → tens of seconds for multi-hop), small N.
+  Proven 2026-08-01: a DM relays 0→1→2 over real sockets (a middle node carries
+  ciphertext it isn't the recipient of). This is where the "other stuff"
+  (peer-cap, duty-cycle, malicious modes) will be layered next.
 
 Fidelity ladder: abstract math → real engine / sim wire → real engine / real
 `LanTransport` (loopback) → real `:node` processes (~32 cap, CPU-bound; measured
