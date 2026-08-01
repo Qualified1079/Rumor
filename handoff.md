@@ -73,11 +73,16 @@ run on the JBR 25 that `JAVA_HOME` points at by default).
   no close-then-reopen-by-path. A **background security review flagged the
   reopen as a TOCTOU** (path could be swapped for a symlink between close and
   reopen); fixed + fails-closed on a lost create-race.
-- **O166** (committed this session) — `LanTransport` accept loop caps pre-HELLO
+- **O166** (`038ad64`) — `LanTransport` accept loop caps pre-HELLO
   concurrency: `MAX_INBOUND_INFLIGHT=32` + `MAX_INBOUND_PER_SOURCE=4`, admitted /
   rolled-back atomically before `GossipSession`, excess closed immediately (retry
   next 10s round). Bounds unauth Ed25519-verification cost on the O104 "laptop IS
   the AP" node. `LanTransportInboundCapTest`.
+- **O170** (`6d42119`) — `:app` bridge fuzzers no longer swallow `Error`.
+  Contract-specific (probed the real decoder behaviour first): Meshtastic *throws*
+  on bad input + prod wraps it → catch `Exception`, let `Error` reach Jazzer;
+  MeshCore is total + prod-unwrapped → catch nothing, seed test uses
+  `assertDoesNotThrow`. Both seed `@Test`s gained real assertions (were zero).
 
 ## Needs your attention (flagged, not blocking)
 - **O163 is BLOCKED on token scope.** The one-line fix (add `:node:test` to
@@ -89,10 +94,12 @@ run on the JBR 25 that `JAVA_HOME` points at by default).
 
 ## Next-session pointers
 - Remaining pure-`[TODO/CODE]` Tier-2 security rows I did NOT reach:
-  **O170** (`:app` fuzzers catch `Throwable` → mask crashes; catch `Exception`,
-  add assertions — same class already fixed in `:core`), **O48**
-  (bridge-asserted-pubkey constraint on synthetic userIds), **O112** (broad
-  hostile-input sweep). O166's sibling: the O104 product node will want a
+  **O48** (bridge-asserted-pubkey constraint on synthetic userIds), **O112**
+  (broad hostile-input sweep — larger/vaguer, wants care). Note: the `:core` fuzz
+  files (`WireParserFuzzers`, `SeedCorpusTest`) still use the same
+  `runCatching{Throwable}` pattern O170 just fixed in `:app` — worth the same
+  contract-specific pass (they're defensive JSON parsers, so likely a uniform
+  "let Error propagate"). O166's sibling: the O104 product node will want a
   time-based per-source throttle too, but concurrent caps were the audit's ask.
 - Foundational ordering held: closed both `:node`-CI Tier-1 code rows (O182 done,
   O163 blocked-on-token) and the Tier-2 HIGH forgery/persistence rows.
