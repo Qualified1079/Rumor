@@ -151,7 +151,7 @@ class RelayEvictionModelTest {
 
     // ── One trial ─────────────────────────────────────────────────────────────
 
-    private data class RunResult(val deliveredRound: Int, val storageRounds: Long)
+    private data class RunResult(val deliveredRound: Int, val storageRounds: Long, val everHeldCarriers: Int)
 
     private fun runOnce(n: Int, model: MeetingModel, sAvail: BooleanArray, rAvail: BooleanArray, policy: Policy, ackModel: AckModel, seed: Long): RunResult {
         val rng = Random(seed)
@@ -210,7 +210,7 @@ class RelayEvictionModelTest {
 
             storageRounds += carriers.count { holds[it] }.toLong()
         }
-        return RunResult(deliveredRound, storageRounds)
+        return RunResult(deliveredRound, storageRounds, carriers.count { everHeld[it] })
     }
 
     // ── Aggregation ───────────────────────────────────────────────────────────
@@ -234,6 +234,34 @@ class RelayEvictionModelTest {
             // normalized so scales are comparable: fraction of carrier·rounds a copy occupies.
             meanStorage = storageSum.toDouble() / SEEDS / (carriers.toDouble() * HORIZON),
         )
+    }
+
+    /** Random online schedule at a target [fraction] of rounds (sender-reconnect model). */
+    private fun fractionalPresence(fraction: Double, seed: Long, salt: Long): BooleanArray {
+        val rng = Random(seed xor salt)
+        return BooleanArray(HORIZON) { rng.nextDouble() < fraction }
+    }
+
+    private data class Decomp(val delivery: Double, val neverLeftS: Double, val stranded: Double)
+
+    /** Like [measure] but classifies WHY undelivered runs failed (accuracy of the ceiling). */
+    private fun decompose(
+        env: Env, policy: Policy, ackModel: AckModel, n: Int = DEFAULT_N,
+        sSchedOverride: ((Long) -> BooleanArray)? = null,
+    ): Decomp {
+        var delivered = 0; var neverLeft = 0; var stranded = 0
+        for (s in 0 until SEEDS) {
+            val seed = s.toLong() * 1_000_003L + 17
+            val sAvail = sSchedOverride?.invoke(seed) ?: presenceSchedule(env.sKind, seed, 0x51_5eed)
+            val rAvail = presenceSchedule(env.rKind, seed, 0x52_5eed)
+            val r = runOnce(n, env.factory(n), sAvail, rAvail, policy, ackModel, seed)
+            when {
+                r.deliveredRound >= 0 -> delivered++
+                r.everHeldCarriers == 0 -> neverLeft++      // DM never escaped the sender
+                else -> stranded++                          // reached the mesh but never met R
+            }
+        }
+        return Decomp(delivered.toDouble() / SEEDS, neverLeft.toDouble() / SEEDS, stranded.toDouble() / SEEDS)
     }
 
     private data class Env(
@@ -416,5 +444,49 @@ class RelayEvictionModelTest {
             falseClaimFailed = true
         }
         assertTrue("the 'on-relay is costless' claim should have failed but didn't — assertions lack teeth", falseClaimFailed)
+    }
+
+    /**
+     * Accuracy pass for the suspiciously-clean ~95%: decompose the undelivered
+     * runs, and measure how much sender-reconnection ("retry until ACK") lifts
+     * delivery — i.e. whether the ceiling is sender-side (retry fixes it) or
+     * recipient-availability-bound (it doesn't).
+     */
+    @Test
+    fun stressorAccuracyAndSenderRetry() {
+        val sb = StringBuilder()
+        val stress = environments.first { it.label == "ferry(4)   S:early R~" }
+        val base = Policy("baseline")
+
+        // (E1) What IS the ~95%? Split the ~5% failures by cause (exact, 0.1%).
+        sb.append("\n(E1) stressor baseline delivery decomposition ($SEEDS seeds, BREADCRUMB ack, exact):\n")
+        val d = decompose(stress, base, AckModel.BREADCRUMB)
+        sb.append("  delivered     = %.1f%%\n".format(d.delivery * 100))
+        sb.append("  never-left-S  = %.1f%%  (DM never escaped the sender before it went offline @ round 15)\n".format(d.neverLeftS * 100))
+        sb.append("  stranded      = %.1f%%  (reached carriers, but no holder met R while R was online)\n".format(d.stranded * 100))
+
+        // (E2) Sender-retry-on-reconnect: a sender that keeps re-offering whenever
+        // it is online is exactly "retry until ACK". Sweep sender online-fraction.
+        sb.append("\n(E2) sender presence -> delivery (ferry topology, R~ intermittent, baseline):\n")
+        sb.append("  sender online-time     delivery%   (remaining failures)\n")
+        val early: (Long) -> BooleanArray = { seed -> presenceSchedule(Presence.EARLY_ONLY, seed, 0x51_5eed) }
+        val de = decompose(stress, base, AckModel.BREADCRUMB, sSchedOverride = early)
+        sb.append("  early15 then gone      %.1f%%      (neverLeftS %.1f%% / stranded %.1f%%)\n"
+            .format(de.delivery * 100, de.neverLeftS * 100, de.stranded * 100))
+        for (f in listOf(0.10, 0.20, 0.30, 0.50, 1.0)) {
+            val sched: (Long) -> BooleanArray = { seed -> fractionalPresence(f, seed, 0x51_5eed) }
+            val df = decompose(stress, base, AckModel.BREADCRUMB, sSchedOverride = sched)
+            sb.append("  intermittent %3.0f%%      %.1f%%      (neverLeftS %.1f%% / stranded %.1f%%)\n"
+                .format(f * 100, df.delivery * 100, df.neverLeftS * 100, df.stranded * 100))
+        }
+        sb.append("\nReading: if delivery plateaus below 100%% even at 100%% sender-online, the residual\n")
+        sb.append("is 'stranded' = recipient-availability-bound — retries can't fix it, only R coming online can.\n")
+        println(sb.toString())
+        runCatching { java.io.File("build/o193-retry.txt").writeText(sb.toString()) }
+
+        // Teeth: more sender online-time must not REDUCE delivery (monotone lever).
+        val d10 = decompose(stress, base, AckModel.BREADCRUMB) { seed -> fractionalPresence(0.10, seed, 0x51_5eed) }.delivery
+        val d100 = decompose(stress, base, AckModel.BREADCRUMB) { seed -> fractionalPresence(1.0, seed, 0x51_5eed) }.delivery
+        assertTrue("more sender uptime should not lower delivery ($d10 -> $d100)", d100 >= d10 - 0.01)
     }
 }

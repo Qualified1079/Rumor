@@ -251,3 +251,19 @@ closest real substrate is O40 `MESSAGE_DELETE`, a manual sender/recipient-
 authorized purge). Small-N/accurate and large-N/coarser runs bracket the truth;
 they agree on the winner. The real store-and-forward carry + O40 purge
 propagation should be validated on the `:node` real path before building on-ack.
+
+### O193 accuracy note — the recurring "95%" (2026-08-01)
+
+The ~95% baseline delivery in the `ferry S:early R~` stressor is NOT a delivery
+rate — it is a structural artifact. Failure decomposition (`RelayEvictionModel
+Test.stressorAccuracyAndSenderRetry`, E1): of the ~5% undelivered, **5.0% is
+"never-left-sender"** (the DM never got handed off during the sender's 15 online
+rounds under a 4-meetings/round ferry) and **0.0% is recipient/relay loss**.
+That is why every eviction policy reported the identical 95.0% — the ceiling is
+sender-escape, independent of caching. Every other environment is already 100%.
+
+Sender-reconnection ("retry until ACK") is the lever (E2): sender online ~20% →
+98.8%, ~30% → 100%. 99%+ is achievable; retry-on-reconnect is the mechanism, and
+it needs a delivery-ACK to know when to stop — the same missing primitive as
+on-ack. Non-monotone at very low uptime (10% scattered < an early burst) because
+early presence maximizes carrier-spread time — an outbox-scheduling insight.
