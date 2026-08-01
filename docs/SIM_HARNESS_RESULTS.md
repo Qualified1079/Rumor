@@ -24,6 +24,22 @@ Fidelity ladder: abstract math → real engine / sim wire → real engine / real
 
 ---
 
+## LAN harness (`LanMeshHarness`) — sliders to add (add each as we go)
+
+The real-wire tier is slow (~10 s/gossip round) so it does **fidelity spot-checks**
+(does the real transport/relay actually do X), not statistical sweeps — those stay
+on the fast `MeshHarness` (sim-wire) tier. Checklist:
+
+- [x] **Arbitrary topology / peer-cap** — edges are a `start()` param (multi-hop line proven).
+- [x] **Node duty-cycle** (online/offline via transport stop/re-start + re-wire) — `setOnline()`; proven 2026-08-01: a DM sent to an OFFLINE recipient is carried by the relay over real TCP and delivered when the recipient returns (the O202/O55 store-and-forward property on real code).
+- [ ] **Dead/hostile relay** — a node we simply don't wire (or wire but it refuses to serve).
+- [ ] **Byzantine/malicious modes** — drop-but-claim, replay, flood — needs a misbehaving transport wrapper.
+- [ ] **Link loss / latency / jitter / bandwidth** — real TCP has none injected; needs a conditioning socket wrapper.
+- [ ] **Delivery-rate driver** — many DMs → aggregate %, if we accept the wall-clock cost (else keep on `MeshHarness`).
+- [ ] **Scale** — more nodes within the in-process socket/thread ceiling (~10–30).
+
+---
+
 ## Real-engine harness — connectivity sliders (2026-08-01)
 
 Base (harsh, to make knobs visible): 24 nodes, 12 rounds, 48 DMs, 3 seeds/cell.

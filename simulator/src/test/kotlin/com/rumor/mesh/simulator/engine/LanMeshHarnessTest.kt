@@ -1,6 +1,8 @@
 package com.rumor.mesh.simulator.engine
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -40,6 +42,41 @@ class LanMeshHarnessTest {
                 // And node 1 (the relay) really carried it in its own store.
                 assertTrue("relay node 1 should hold the ciphertext it forwarded",
                     h.nodes[1].messageRepo.getById(twoHop) != null)
+            }
+        } finally {
+            h.stop()
+        }
+    }
+
+    /**
+     * O202 duty-cycle property on real code: a DM sent while the recipient is
+     * OFFLINE is carried by the relay over real TCP and delivered once the
+     * recipient comes back online — store-and-forward across a duty-cycled
+     * device, the exact O55 case ("meet you today, your recipient next week").
+     */
+    @Test
+    fun dmCarriedOverRealWireUntilOfflineRecipientReturns() {
+        val h = LanMeshHarness(n = 3, seed = 2)
+        try {
+            runBlocking {
+                h.start(edges = listOf(0 to 1, 1 to 2))
+                h.setOnline(2, up = false)                       // recipient goes dark
+
+                val id = h.sendDm(from = 0, to = 2, text = "carry me until node 2 is back")!!
+
+                // Relay (node 1) picks it up over real wire while node 2 is offline.
+                assertTrue("relay should carry the DM while recipient is offline",
+                    h.awaitDelivered(id, to = 1, timeoutMs = 30_000))
+
+                // Negative control: recipient is offline, so it has NOT received it.
+                delay(2_000)
+                assertFalse("offline recipient must not have the DM yet",
+                    h.nodes[2].messageRepo.getById(id) != null)
+
+                // Recipient returns → the carried ciphertext is delivered over real TCP.
+                h.setOnline(2, up = true)
+                assertTrue("DM not delivered after the offline recipient returned",
+                    h.awaitDelivered(id, to = 2, timeoutMs = 40_000))
             }
         } finally {
             h.stop()

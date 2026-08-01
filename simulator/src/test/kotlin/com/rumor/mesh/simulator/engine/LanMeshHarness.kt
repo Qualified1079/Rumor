@@ -31,39 +31,72 @@ class LanMeshHarness(private val n: Int, private val seed: Long = 1) {
     private val loopback: InetAddress = InetAddress.getLoopbackAddress()
 
     val nodes = (0 until n).map { SimNode(it, scope, useBreadcrumbs = true, clock = clock) }
-    private val transports = ArrayList<LanTransport>(n)
+    private val transports = arrayOfNulls<LanTransport>(n)
+    private val online = BooleanArray(n) { true }
+    private var edges: List<Pair<Int, Int>> = emptyList()
+
+    private fun buildTransport(i: Int): LanTransport {
+        val node = nodes[i]
+        val lan = LanTransport(
+            LanTransport.Config(
+                localUserId = node.userId,
+                localPublicKey = Base64.getEncoder().encodeToString(node.identityProvider.identity.value!!.publicKeyBytes),
+                signer = { bytes -> node.identityProvider.identity.value?.let { CryptoManager.sign(bytes, it.privateKeyBytes) } },
+                messageProvider = node.gossipEngine::messagesForExchange,
+                messagesByIds = node.gossipEngine::messagesByIds,
+                knownIdsProvider = node.gossipEngine::knownMessageIds,
+                onlineUsersProvider = node.onlineTracker::currentSnapshot,
+                onExchangeFailed = node.gossipEngine::onExchangeFailed,
+                rbsrItemsProvider = node.gossipEngine::rbsrSnapshot,
+                enableMdns = false,
+            )
+        )
+        // exchangeResults is a per-instance SharedFlow; the collector rides the
+        // harness scope so it survives a stop()/start() of this transport.
+        scope.launch { lan.exchangeResults.collect { node.gossipEngine.onExchange(it) } }
+        lan.start(loopback)
+        return lan
+    }
+
+    private suspend fun awaitBound(t: LanTransport) {
+        var tries = 0
+        while (t.boundPort() == null && tries++ < 200) delay(25)
+        checkNotNull(t.boundPort()) { "LanTransport never bound" }
+    }
+
+    /** (Re)dial every edge touching an online node, using current ports. Idempotent. */
+    private fun rewire() {
+        for ((a, b) in edges) {
+            if (!online[a] || !online[b]) continue
+            val ta = transports[a] ?: continue
+            val tb = transports[b] ?: continue
+            tb.onPeerLocated(nodes[a].userId.take(16), loopback, ta.boundPort()!!)
+        }
+    }
 
     /** Build a real LanTransport per node and wire the given undirected [edges]. */
     suspend fun start(edges: List<Pair<Int, Int>>) {
-        for (node in nodes) {
-            val idKeys = node.identityProvider.identity.value!!
-            val lan = LanTransport(
-                LanTransport.Config(
-                    localUserId = node.userId,
-                    localPublicKey = Base64.getEncoder().encodeToString(idKeys.publicKeyBytes),
-                    signer = { bytes -> node.identityProvider.identity.value?.let { CryptoManager.sign(bytes, it.privateKeyBytes) } },
-                    messageProvider = node.gossipEngine::messagesForExchange,
-                    messagesByIds = node.gossipEngine::messagesByIds,
-                    knownIdsProvider = node.gossipEngine::knownMessageIds,
-                    onlineUsersProvider = node.onlineTracker::currentSnapshot,
-                    onExchangeFailed = node.gossipEngine::onExchangeFailed,
-                    rbsrItemsProvider = node.gossipEngine::rbsrSnapshot,
-                    enableMdns = false,
-                )
-            )
-            scope.launch { lan.exchangeResults.collect { node.gossipEngine.onExchange(it) } }
-            lan.start(loopback)
-            transports.add(lan)
-        }
-        // Wait for every server socket to bind.
-        for (t in transports) {
-            var tries = 0
-            while (t.boundPort() == null && tries++ < 200) delay(25)
-            checkNotNull(t.boundPort()) { "LanTransport never bound" }
-        }
-        // Wire each undirected edge as one dial (session is bidirectional).
-        for ((a, b) in edges) {
-            transports[b].onPeerLocated(nodes[a].userId.take(16), loopback, transports[a].boundPort()!!)
+        this.edges = edges
+        for (i in 0 until n) transports[i] = buildTransport(i)
+        transports.forEach { awaitBound(it!!) }
+        rewire()
+    }
+
+    /**
+     * Take a node offline (stop its real transport — server + peer loops down)
+     * or back online (fresh transport on a new port, re-wired). Models a
+     * duty-cycled device: the O202 delivery risk, exercised over the real wire.
+     */
+    suspend fun setOnline(index: Int, up: Boolean) {
+        if (online[index] == up) return
+        if (!up) {
+            transports[index]?.stop()
+            online[index] = false
+        } else {
+            transports[index] = buildTransport(index)
+            awaitBound(transports[index]!!)
+            online[index] = true
+            rewire()  // restarted node got a new port; re-dial affected edges
         }
     }
 
@@ -89,7 +122,7 @@ class LanMeshHarness(private val n: Int, private val seed: Long = 1) {
     }
 
     fun stop() {
-        transports.forEach { runCatching { it.stop() } }
+        transports.forEach { t -> t?.let { runCatching { it.stop() } } }
         scope.cancel()
     }
 }
