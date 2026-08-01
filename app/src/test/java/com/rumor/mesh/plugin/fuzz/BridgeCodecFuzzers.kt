@@ -26,12 +26,22 @@ class BridgeCodecFuzzers {
     @FuzzTest
     fun fuzzMeshtasticFromRadio(data: FuzzedDataProvider) {
         val bytes = data.consumeRemainingAsBytes()
-        runCatching { MeshtasticMessages.decodeFromRadioPacket(bytes) }
+        // Catch Exception, NOT Throwable. The Meshtastic decoder legitimately
+        // throws on malformed input and prod wraps it in runCatching
+        // (MeshtasticBridge:97), so ordinary exceptions are its contract — but a
+        // StackOverflowError / OutOfMemoryError from length confusion is a real
+        // bug, and the old runCatching{} swallowed those too, so JAZZER_FUZZ=1
+        // could never report one. Errors now propagate to Jazzer.
+        try { MeshtasticMessages.decodeFromRadioPacket(bytes) } catch (e: Exception) {}
     }
 
     @FuzzTest
     fun fuzzMeshCoreChannelMessage(data: FuzzedDataProvider) {
         val bytes = data.consumeRemainingAsBytes()
-        runCatching { MeshCoreFrames.decodeChannelMessage(bytes) }
+        // MeshCore's prod call site does NOT wrap the decoder (MeshCoreBridge:139),
+        // so it must be total — return null or a message, never throw. Let ANY
+        // throwable surface to Jazzer; an exception here is a real prod crash
+        // (a bridge collector throw takes down the process — see O169).
+        MeshCoreFrames.decodeChannelMessage(bytes)
     }
 }

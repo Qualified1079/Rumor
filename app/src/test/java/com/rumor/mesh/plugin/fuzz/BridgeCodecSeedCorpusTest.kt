@@ -2,6 +2,8 @@ package com.rumor.mesh.plugin.fuzz
 
 import com.rumor.mesh.plugin.meshcore.MeshCoreFrames
 import com.rumor.mesh.plugin.meshtastic.MeshtasticMessages
+import org.junit.jupiter.api.Assertions.assertDoesNotThrow
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Test
 
 /**
@@ -40,16 +42,30 @@ class BridgeCodecSeedCorpusTest {
     )
 
     @Test
-    fun `Meshtastic decoder absorbs adversarial seeds without crashing`() {
+    fun `Meshtastic decoder never throws a fatal Error on adversarial seeds`() {
         for (s in seeds) {
-            runCatching { MeshtasticMessages.decodeFromRadioPacket(s) }.getOrNull()
+            // The Meshtastic decoder legitimately throws IllegalArgument/
+            // IllegalStateException on malformed input; prod tolerates that via
+            // runCatching (MeshtasticBridge:97). A StackOverflowError/
+            // OutOfMemoryError is NOT tolerable — assert none escapes. The old
+            // body's runCatching{}.getOrNull() swallowed even those, and had no
+            // assertion, so a fatal crash could never fail this test.
+            val err = runCatching { MeshtasticMessages.decodeFromRadioPacket(s) }.exceptionOrNull()
+            assertFalse(err is Error, "fatal Error decoding Meshtastic seed (len=${s.size}): $err")
         }
     }
 
     @Test
-    fun `MeshCore decoder absorbs adversarial seeds without crashing`() {
+    fun `MeshCore decoder is total on adversarial seeds`() {
         for (s in seeds) {
-            runCatching { MeshCoreFrames.decodeChannelMessage(s) }.getOrNull()
+            // MeshCore's prod call site does NOT wrap the decoder
+            // (MeshCoreBridge:139), so the contract is stricter: it must return
+            // null or a message and never throw ANYTHING. assertDoesNotThrow
+            // fails on any Throwable (Error or Exception).
+            assertDoesNotThrow(
+                { MeshCoreFrames.decodeChannelMessage(s) },
+                "MeshCore decoder threw on seed (len=${s.size})",
+            )
         }
     }
 }
