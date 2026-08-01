@@ -212,3 +212,42 @@ Fuzzing / property testing:
 - Honesty conventions (O27/O51/O60) bound the *claims*; this doc bounds the
   *engineering*. Never let the engineering review quietly expand a claim past
   what O27/O60 permit.
+
+## O193 relay-ephemeral DM caching — sim findings (2026-08-01)
+
+Harness: `simulator/…/engine/RelayEvictionModelTest.kt` — a pure-logic
+discrete-event store-and-forward model (carry/evict as set-algebra over a
+meeting schedule; a faithful abstraction of the real gossip serve). Sender S
+originates one DM→R, keeps a persistent outbox copy, eviction applies only to
+*carriers'* cached copies. Metrics: delivery rate, latency, and normalized
+storage (% of carrier·rounds a copy occupies — scale-comparable). ACK model =
+BREADCRUMB (walks the reverse delivery path via `BreadcrumbCache` crumbs — the
+deployed mechanism; only on-path nodes get it, off-path carriers rely on TTL).
+
+**Conclusions (drive the O193 build):**
+1. **Recommended trigger bundle = spray-k + on-ack + TTL** (`k=4`, `X≈24`). Best
+   delivery-safe policy in every environment tested: matches baseline delivery
+   (95–100%) at 2.3–3.5× less storage. Each component covers a different gap —
+   spray caps dense over-replication (breadcrumb-ACK can't reach those copies),
+   on-ack clears the delivery path fast, TTL sweeps off-path stragglers the ACK
+   never reaches. Confirmed scale-robust to N=256.
+2. **on-relay (forward-then-forget, k=1) is a scale-amplified trap.** 56%
+   delivery at N=32 in the sender-offline/sparse stressor, degrading to 13% at
+   N=256 (a single forwarded copy is a smaller fraction of a bigger mesh). Keep
+   only as an explicit "may not arrive" high-sensitivity extreme, never default.
+3. **on-ack alone is delivery-safe by construction** (a carrier only evicts
+   *after* the DM already reached R — that's what produced the ACK). The
+   deployed breadcrumb ACK is ~44% weaker at cleanup than an optimistic flood,
+   which is *why* the TTL backstop earns its place — as a hard storage ceiling,
+   not a delivery rescue (delivery is never at risk from a weak ACK).
+4. **TTL alone (after-X) is a weak lever** — preserves delivery but saves little,
+   because copies rarely outlive X except in long-carry cases, exactly where you
+   want the bound. Useful only combined with on-ack/spray.
+
+**Fidelity caveats (both intentionally preserved as two datasets):** the model
+is an abstraction — the *trigger dynamics* are modeled, not real code. on-ack's
+automatic trigger does NOT exist yet (no delivery-receipt message type; the
+closest real substrate is O40 `MESSAGE_DELETE`, a manual sender/recipient-
+authorized purge). Small-N/accurate and large-N/coarser runs bracket the truth;
+they agree on the winner. The real store-and-forward carry + O40 purge
+propagation should be validated on the `:node` real path before building on-ack.
