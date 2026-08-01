@@ -10,6 +10,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
@@ -81,6 +82,19 @@ class LanTransport(
     /** First-come-wins per verified peer userId — same rule as G22's claimSession. */
     private val activePeerSessions = ConcurrentHashMap<String, Boolean>()
 
+    /**
+     * O166 — pre-HELLO admission caps. `activePeerSessions` only gates AFTER a
+     * peer proves its userId, so it doesn't bound the Ed25519-verification cost
+     * an unauthenticated flooder can force. On O104's "the laptop IS the AP"
+     * node, any associated device can reach this port for free. Cap total
+     * concurrent inbound sessions and per-source-IP concurrency so a single
+     * source can't monopolise the accept loop; the 5s HELLO soTimeout recycles
+     * silent slots. Excess connections are closed immediately and retry next
+     * round (10s) — graceful degradation, not loss.
+     */
+    private val inboundInflight = AtomicInteger(0)
+    private val inboundPerSource = ConcurrentHashMap<String, Int>()
+
     private val _exchangeResults = MutableSharedFlow<PeerExchangeResult>(extraBufferCapacity = 64)
     val exchangeResults: SharedFlow<PeerExchangeResult> = _exchangeResults
 
@@ -113,7 +127,12 @@ class LanTransport(
                 while (isActive) {
                     val client = ss.accept()
                     client.tcpNoDelay = true
-                    launch { runSession(client, isInbound = true) }
+                    val src = client.inetAddress?.hostAddress ?: "?"
+                    if (!admitInbound(client, src)) continue
+                    launch {
+                        try { runSession(client, isInbound = true) }
+                        finally { releaseInbound(src) }
+                    }
                 }
             } catch (e: Exception) {
                 if (isActive) RumorLog.w(TAG, "LAN transport failed (${e.message})")
@@ -134,6 +153,8 @@ class LanTransport(
         peerLoops.clear()
         peerTarget.clear()
         activePeerSessions.clear()
+        inboundPerSource.clear()
+        inboundInflight.set(0)
         _peerCount.value = 0
         scope?.cancel()
         scope = null
@@ -203,6 +224,39 @@ class LanTransport(
         false
     }
 
+    /**
+     * O166 pre-HELLO admission. Reserves a total + per-source slot atomically;
+     * on rejection the socket is closed immediately (the flooder pays a TCP
+     * handshake, we pay nothing). Rolls back cleanly if either cap is hit.
+     */
+    private fun admitInbound(socket: Socket, src: String): Boolean {
+        val perSource = inboundPerSource.merge(src, 1, Integer::sum)!!
+        if (perSource > MAX_INBOUND_PER_SOURCE) {
+            releaseSource(src)
+            RumorLog.w(TAG, "inbound per-source cap ($MAX_INBOUND_PER_SOURCE) for $src — dropping")
+            runCatching { socket.close() }
+            return false
+        }
+        if (inboundInflight.incrementAndGet() > MAX_INBOUND_INFLIGHT) {
+            inboundInflight.decrementAndGet()
+            releaseSource(src)
+            RumorLog.w(TAG, "inbound total cap ($MAX_INBOUND_INFLIGHT) reached — dropping $src")
+            runCatching { socket.close() }
+            return false
+        }
+        return true
+    }
+
+    private fun releaseInbound(src: String) {
+        inboundInflight.decrementAndGet()
+        releaseSource(src)
+    }
+
+    /** Decrement a source's concurrent count, removing the entry at zero (no map growth). */
+    private fun releaseSource(src: String) {
+        inboundPerSource.computeIfPresent(src) { _, v -> (v - 1).takeIf { it > 0 } }
+    }
+
     private suspend fun runSession(socket: Socket, isInbound: Boolean): Boolean {
         val cfg = config
         var claimedPeer: String? = null
@@ -251,5 +305,16 @@ class LanTransport(
 
     companion object {
         private const val MAX_ROUND_FAILURES = 3
+
+        /**
+         * O166 admission caps. Total bounds concurrent Ed25519-verification cost;
+         * per-source stops one IP from monopolising the accept loop. Generous for
+         * a LAN (a peer opens one session at a time via the round loop), tight
+         * enough that an unauthenticated flooder can't force unbounded crypto.
+         * Excess connections retry next round (10s). `internal` so tests assert
+         * against the real numbers.
+         */
+        internal const val MAX_INBOUND_INFLIGHT = 32
+        internal const val MAX_INBOUND_PER_SOURCE = 4
     }
 }
