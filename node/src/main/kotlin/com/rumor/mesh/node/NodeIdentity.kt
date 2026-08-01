@@ -7,6 +7,9 @@ import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.runtime.HlcStore
 import com.rumor.mesh.core.time.HlcTimestamp
 import java.io.File
+import java.io.OutputStream
+import java.nio.channels.Channels
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermissions
@@ -77,31 +80,45 @@ class NodeIdentityProvider(dataDir: File) : IdentityProvider {
 
 /**
  * O180: write the unencrypted key-seed file so it is NEVER world/group-readable,
- * not even briefly. The old path wrote at the default umask and chmod'd to 0600
- * afterwards — a real window where a fresh seed sat readable on a shared box —
- * and swallowed a failed chmod silently. Here the file is created owner-only up
- * front via an atomic CREATE_NEW with the 0600 attribute, so on any POSIX FS
- * there is no window. On a non-POSIX FS (no createFile-with-perms support) we
- * fall back to a post-hoc restrict and LOG loudly if even that fails — an
- * unreadable warning beats a silently exposed key.
+ * not even briefly. The pre-O180 path wrote at the default umask and chmod'd to
+ * 0600 afterwards — a real window where a fresh seed sat readable — and swallowed
+ * a failed chmod silently.
+ *
+ * The file is created owner-only up front via an atomic CREATE_NEW carrying the
+ * 0600 attribute, and — the TOCTOU fix — the key material is written straight
+ * into THAT handle. The first cut created the 0600 file, closed it, then
+ * reopened by path (`file.outputStream()`); between close and reopen the path
+ * could be swapped for a symlink, so the write could land elsewhere at other
+ * perms. Writing into the create handle removes the check-then-act gap.
+ *
+ * If CREATE_NEW fails because the path already exists (something raced us after
+ * the delete), we FAIL CLOSED rather than write through a possibly-planted
+ * symlink. A non-POSIX FS (no create-with-perms support) falls back to a
+ * best-effort restrict and logs loudly on failure.
  */
-private fun writeSeedOwnerOnly(file: File, write: (java.io.OutputStream) -> Unit) {
+private fun writeSeedOwnerOnly(file: File, write: (OutputStream) -> Unit) {
     val path = file.toPath()
+    // Clear any pre-existing (e.g. malformed) file so the atomic CREATE_NEW governs.
     Files.deleteIfExists(path)
-    val createdOwnerOnly = runCatching {
+    val opened = runCatching {
         Files.newByteChannel(
             path,
             setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
             PosixFilePermissions.asFileAttribute(OWNER_ONLY),
-        ).close()
-    }.isSuccess
-    file.outputStream().use(write)   // truncates the pre-created 0600 file, perms unchanged
-    if (!createdOwnerOnly) {
-        val restricted = runCatching { Files.setPosixFilePermissions(path, OWNER_ONLY) }.isSuccess
-        if (!restricted) {
-            RumorLog.w(TAG, "could not make identity seed owner-only ($path) — " +
-                "unencrypted key may be readable by other users on this machine")
-        }
+        )
+    }
+    opened.getOrNull()?.let { channel ->
+        Channels.newOutputStream(channel).use(write)   // same 0600 handle — no reopen
+        return
+    }
+    if (opened.exceptionOrNull() is FileAlreadyExistsException) {
+        error("identity seed path $path was created concurrently — refusing to write through it")
+    }
+    // Non-POSIX FS: create-with-perms unsupported. Best-effort restrict + verify.
+    file.outputStream().use(write)
+    if (runCatching { Files.setPosixFilePermissions(path, OWNER_ONLY) }.isFailure) {
+        RumorLog.w(TAG, "could not make identity seed owner-only ($path) — " +
+            "unencrypted key may be readable by other users on this machine")
     }
 }
 
