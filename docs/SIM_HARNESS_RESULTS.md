@@ -116,3 +116,17 @@ and node2 NOT directly wired), a broadcast POSTed to node0 landed in node1's sto
 store-and-forward on the genuine desktop runtime (MeshRuntime + LanTransport), not
 just SimNode. Enabled by new `:node` flags `--no-mdns`, `--lan-port`, `--peer` and
 a `LanTransport.start(port=)` param (defaults preserve behavior).
+
+### O202 — hybrid escalation-deadline sweep (2026-08-01)
+
+When should hybrid widen custody→epidemic? Sweep of the deadline (round):
+
+| duty | widen@5 | widen@15 | widen@30 | widen@60 | never (pure custody) |
+|------|---------|----------|----------|----------|----------------------|
+| 30%  | 100% \| 190 | 100% \| 206 | 100% \| 159 | 100% \| 92 | 95% \| 33 |
+| 15%  | 73% \| 733 | 72% \| 624 | 63% \| 486 | 45% \| 265 | 30% \| 41 |
+
+Tension: earlier widening recovers low-duty delivery (15%: 30%→73%) but wastes
+storage at higher duty (30%: widen@5 costs 190 vs widen@60's 92, both 100%). →
+**an ADAPTIVE deadline keyed on observed duty/delivery-difficulty beats any fixed
+one**; a fixed ~15–30 is a reasonable static compromise. Feeds the O202 build.

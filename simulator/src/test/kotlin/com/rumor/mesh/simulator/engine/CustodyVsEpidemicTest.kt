@@ -39,7 +39,7 @@ class CustodyVsEpidemicTest {
 
     private data class Res(val delivered: Boolean, val storage: Long)
 
-    private fun runOnce(mode: Mode, duty: Double, seed: Long): Res {
+    private fun runOnce(mode: Mode, duty: Double, seed: Long, escalateAfter: Int = ESCALATE_AFTER): Res {
         val rng = Random(seed)
         val contacts = (2 until 2 + CONTACTS).toSet()
         // Who is allowed to retain a copy for R this round. HYBRID starts narrow
@@ -48,7 +48,7 @@ class CustodyVsEpidemicTest {
         fun retains(i: Int, t: Int): Boolean = when (mode) {
             Mode.EPIDEMIC -> true
             Mode.CUSTODY -> i == S || i in contacts
-            Mode.HYBRID -> i == S || i in contacts || t >= ESCALATE_AFTER
+            Mode.HYBRID -> i == S || i in contacts || t >= escalateAfter
         }
         val holds = BooleanArray(N)
         holds[S] = true
@@ -80,10 +80,35 @@ class CustodyVsEpidemicTest {
         return Res(delivered, storage)
     }
 
-    private fun measure(mode: Mode, duty: Double): Pair<Double, Double> {
+    private fun measure(mode: Mode, duty: Double, escalateAfter: Int = ESCALATE_AFTER): Pair<Double, Double> {
         var del = 0; var store = 0L
-        for (s in 0 until SEEDS) { val r = runOnce(mode, duty, s * 7919L + 3); if (r.delivered) del++; store += r.storage }
+        for (s in 0 until SEEDS) { val r = runOnce(mode, duty, s * 7919L + 3, escalateAfter); if (r.delivered) del++; store += r.storage }
         return del.toDouble() / SEEDS to store.toDouble() / SEEDS
+    }
+
+    @Test
+    fun hybridEscalationDeadlineSweep() {
+        val sb = StringBuilder("\nO202 — hybrid escalation-deadline sweep (when to widen custody→epidemic)\n")
+        sb.append("cell = delivery% | storage. Earlier widen = more delivery under scarcity, more storage.\n\n")
+        val deadlines = listOf(5, 15, 30, 60, 120)   // 120 = never widen (= pure custody)
+        sb.append("duty".padEnd(7)); for (e in deadlines) sb.append("widen@$e".padEnd(16)); sb.append('\n')
+        for (d in listOf(0.30, 0.15)) {
+            sb.append("%3.0f%%".format(d * 100).padEnd(7))
+            for (e in deadlines) {
+                val m = measure(Mode.HYBRID, d, e)
+                sb.append("%.0f%% | %.0f".format(m.first * 100, m.second).padEnd(16))
+            }
+            sb.append('\n')
+        }
+        sb.append("\nEarlier escalation recovers delivery under scarcity at a storage cost — the knee\n")
+        sb.append("informs a default deadline (or an adaptive one keyed on observed duty cycle).\n")
+        println(sb.toString())
+        runCatching { java.io.File("build/o202-escalation-report.txt").writeText(sb.toString()) }
+
+        // Teeth: at 15% duty, widening earlier (@5) delivers more than widening late (@60).
+        val early = measure(Mode.HYBRID, 0.15, 5).first
+        val late = measure(Mode.HYBRID, 0.15, 60).first
+        assertTrue("earlier escalation should deliver more under scarcity ($early vs $late)", early >= late)
     }
 
     @Test
