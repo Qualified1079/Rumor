@@ -24,6 +24,40 @@ Fidelity ladder: abstract math → real engine / sim wire → real engine / real
 
 ---
 
+## Cross-cutting synthesis (2026-08-01)
+
+Across every delivery experiment below, **one variable dominates: node duty-cycle**
+(how often nodes are online). It is the delivery limiter (O202), the weak point of
+eclipse defense (O194), and the pressure source for storage eviction (O23). Loss
+and dead-relays the mesh shrugs off (re-offer + reroute); *being offline* is what
+hurts. → **duty-cycle hardening is the top priority (O202).**
+
+The validated design stack that emerges:
+1. **Delivery engine** — store-and-forward + per-round re-offer already IS a retry;
+   normal conditions hit ~100% on the real engine.
+2. **Under scarcity (low duty):**
+   - **Custody** (keep R's DMs on R's known contacts, not everyone) = 6.6–12× less
+     storage at equal delivery; **widen to epidemic if undelivered by a deadline**
+     (hybrid, ideally adaptive) — O202.
+   - **Delivery/ACK-aware eviction** (drop delivered DMs first), never FIFO = +19pp
+     under storage pressure — O23.
+   - **Sender retry-until-ACK** pushes delivery 2%→89% but plateaus; needs light
+     carrier persistence to close the last ~10%.
+3. **Trust-weighted peering** (prefer known contacts) defeats sybil eclipse at any
+   sybil density — O194/O135.
+4. **Airtime** — probabilistic/neighbour-aware forwarding halves broadcast airtime
+   at ~full coverage — O102.
+5. **Privacy costs latency, honestly (O27)** — mix-batching ~1/k unlinkability at
+   latency ∝ k/rate; onion routing is partial (contact-degree-gated).
+
+**The unifying enabler is per-message delivery-knowledge (an ACK).** It powers
+on-ack eviction (O193), delivery-aware storage eviction (O23), sender-retry-until-
+quit, and hybrid-custody escalation. It does NOT exist yet (O40 `MESSAGE_DELETE` is
+the closest substrate) — **building a lightweight delivery-ACK unlocks the whole
+stack.** That's the single highest-leverage protocol addition these sims point to.
+
+---
+
 ## LAN harness (`LanMeshHarness`) — sliders to add (add each as we go)
 
 The real-wire tier is slow (~10 s/gossip round) so it does **fidelity spot-checks**
