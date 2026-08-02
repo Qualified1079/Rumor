@@ -172,3 +172,25 @@ routing can afford) is degree-gated: viable within ≤3 hops only at contact deg
 contacts), ≤3-hop onion serves 9–24% of pairs — a minority; the rest fall back to
 normal gossip. Ship it as "use onion when a short contact-path exists, else gossip,"
 and document that coverage scales with the user's contact density.
+
+## O195 experiment — traffic-analysis resistance (mixing) (2026-08-01)
+
+`TrafficAnalysisTest` (abstract). An observer links a relay's inbound↔outbound by
+timing; lower link% = better unlinkability. Cost = added latency (arrival-intervals).
+
+| policy | observer link accuracy | added latency |
+|--------|------------------------|---------------|
+| immediate | 100% | 0.0 |
+| delay D=2 | 18% | 1.0 |
+| delay D=8 | 10% | 4.0 |
+| mix k=4  | 15% | 1.5 |
+| mix k=16 | 5%  | 7.5 |
+
+**Conclusion → O195 dial.** Immediate forward is a perfect timing fingerprint;
+both mitigations break it. Mix batching gives the strongest unlinkability per
+message (~1/k) but latency scales with `k / arrival-rate` — cheap on a busy relay,
+brutal on a quiet one → **adaptive batch size scaling with traffic** is the lever.
+None of it is free (O27/O55 latency budget). **Honest caveat:** the modeled
+observer is a simple greedy timing-matcher, so these link% are an *upper bound* on
+unlinkability (a rate/intersection-attack adversary does better); only the ordering
+mix > delay > immediate is robust. Matches the O27 "no Tor-parity anonymity" stance.
