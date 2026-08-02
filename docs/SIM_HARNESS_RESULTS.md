@@ -73,3 +73,31 @@ the stressor's "95%" is a sender-escape artifact, and ~20–30% sender uptime �
 8-core / 16 GB desktop: ~90–120 MB RSS per node, **CPU-bound** (mDNS full-mesh,
 O(N²)). Comfortable to ~16–24 nodes; cliff at 40 (load 0.4 → 26). RAM would allow
 ~60–70. Real-time propagation (no downclock knob). Small-N/high-fidelity tier.
+
+## O202 experiment — custody vs epidemic storage under duty-cycle (2026-08-01)
+
+`CustodyVsEpidemicTest` (abstract). Custody = store R's DMs only on R's known
+contacts (nodes that meet R); epidemic = everyone carries everything.
+
+| duty | epidemic (del% \| storage) | custody | custody vs epidemic |
+|------|----------------------------|---------|---------------------|
+| 100% | 100% \| 4523 | 100% \| 685 | same delivery, **6.6× less storage** |
+| 50%  | 100% \| 4324 | 100% \| 560 | same, **7.7×** |
+| 30%  | 100% \| 3832 | 95% \| 317  | −5% delivery, **12×** |
+| 15%  | 81% \| 1729  | 30% \| 64   | delivery COLLAPSES, 27× |
+
+**Conclusion → O202 design: hybrid custody.** Custody is the right default —
+near-identical delivery at 6.6–12× less relay storage down to ~30% duty, because
+R's contacts ARE who meets R (the stranger copies epidemic keeps are mostly
+wasted). But it collapses under extreme scarcity (15% duty: 30% vs 81%) — S can't
+reach R's few contacts and epidemic's brute redundancy wins. So: **custody by
+default, widen toward epidemic when delivery is failing / duty is very low.**
+Pairs with presence-triggered flush (O30) and priority persistence.
+
+## Revalidation (2026-08-01)
+
+Reran O193 abstract (`RelayEvictionModelTest`) — main table + accuracy
+decomposition **byte-identical** to the original run (deterministic). MeshHarness
+real-engine sweeps **trend-stable** (duty-cycle dominant 30%→~33%, loss defeated,
+dead-relay graceful); ±few% run-to-run from real-engine async ingest timing (the
+real-engine tier is approximate, not deterministic — expected).
