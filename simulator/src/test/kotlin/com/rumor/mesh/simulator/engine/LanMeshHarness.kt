@@ -24,7 +24,13 @@ import kotlinx.coroutines.launch
  * [LanTransport.onPeerLocated]. Gossip rounds are 10 s (transport constant), so
  * multi-hop delivery is wall-clock slow — fidelity, not speed; keep N small.
  */
-class LanMeshHarness(private val n: Int, private val seed: Long = 1) {
+class LanMeshHarness(
+    private val n: Int,
+    private val seed: Long = 1,
+    /** Nodes that refuse to relay: they still receive/absorb, but offer nothing
+     *  to peers (a real "won't forward" blackhole over the wire). */
+    private val hostile: Set<Int> = emptySet(),
+) {
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val clock = SimClock(System.currentTimeMillis())
@@ -42,7 +48,8 @@ class LanMeshHarness(private val n: Int, private val seed: Long = 1) {
                 localUserId = node.userId,
                 localPublicKey = Base64.getEncoder().encodeToString(node.identityProvider.identity.value!!.publicKeyBytes),
                 signer = { bytes -> node.identityProvider.identity.value?.let { CryptoManager.sign(bytes, it.privateKeyBytes) } },
-                messageProvider = node.gossipEngine::messagesForExchange,
+                // A hostile relay absorbs but offers nothing onward.
+                messageProvider = if (i in hostile) { _ -> emptyList() } else node.gossipEngine::messagesForExchange,
                 messagesByIds = node.gossipEngine::messagesByIds,
                 knownIdsProvider = node.gossipEngine::knownMessageIds,
                 onlineUsersProvider = node.onlineTracker::currentSnapshot,

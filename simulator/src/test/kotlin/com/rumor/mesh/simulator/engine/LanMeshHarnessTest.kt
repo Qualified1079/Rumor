@@ -82,4 +82,51 @@ class LanMeshHarnessTest {
             h.stop()
         }
     }
+
+    /**
+     * Dead/hostile relay over real wire. Diamond 0—{1,2}—3 with node 1 refusing
+     * to forward: the DM must still reach node 3 by routing around it through
+     * the honest node 2. Real-mesh resilience to a non-relaying node, on real TCP.
+     */
+    @Test
+    fun dmRoutesAroundHostileRelayOverRealWire() {
+        val h = LanMeshHarness(n = 4, seed = 3, hostile = setOf(1))
+        try {
+            runBlocking {
+                h.start(edges = listOf(0 to 1, 1 to 3, 0 to 2, 2 to 3))
+                val id = h.sendDm(from = 0, to = 3, text = "route around node 1")!!
+                assertTrue("DM should reach node 3 via honest node 2 despite hostile node 1",
+                    h.awaitDelivered(id, to = 3, timeoutMs = 40_000))
+            }
+        } finally {
+            h.stop()
+        }
+    }
+
+    /**
+     * Negative control proving the hostile relay actually blocks: line 0—1—2
+     * with node 1 refusing to forward and NO alternate path. Node 1 absorbs the
+     * ciphertext (it still receives) but never offers it onward, so node 2 never
+     * gets it. (Pairs with the diamond test above — same defect, opposite outcome.)
+     */
+    @Test
+    fun hostileRelayWithNoAlternatePathBlocksDelivery() {
+        val h = LanMeshHarness(n = 3, seed = 4, hostile = setOf(1))
+        try {
+            runBlocking {
+                h.start(edges = listOf(0 to 1, 1 to 2))
+                val id = h.sendDm(from = 0, to = 2, text = "should be swallowed by node 1")!!
+
+                // The hostile node still absorbs it (proves it reached the block).
+                assertTrue("hostile relay should have received the DM it refuses to forward",
+                    h.awaitDelivered(id, to = 1, timeoutMs = 30_000))
+                // ...but never forwards it: node 2 stays empty even after ample rounds.
+                delay(15_000)
+                assertFalse("hostile relay must not forward — node 2 should never receive it",
+                    h.nodes[2].messageRepo.getById(id) != null)
+            }
+        } finally {
+            h.stop()
+        }
+    }
 }
