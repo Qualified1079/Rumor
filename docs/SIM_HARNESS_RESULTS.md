@@ -215,3 +215,23 @@ its residual risk is **contact duty-cycle** ((1−duty)^contacts, ~0.4% with 8
 contacts @ 50%), NOT sybil count. Sybils become irrelevant once you prefer vetted
 contacts. Note the weak point is again duty-cycle → loops back to O202. Ties
 O135/O136 (friend/known allowlist is the same primitive).
+
+## O102 experiment — forward delegation: coverage vs airtime (2026-08-01)
+
+`ForwardDelegationTest` (abstract). Probabilistic forwarding: each receiver
+rebroadcasts with prob p. Dense mesh (N=400, degree 8):
+
+| forward p | coverage | airtime (tx/N) |
+|-----------|----------|----------------|
+| 1.00 | 100% | 1.00 |
+| 0.70 | 100% | 0.70 |
+| 0.50 | 99%  | 0.50 |
+| 0.30 | 92%  | 0.28 |
+| 0.15 | 36%  | 0.05 |
+
+**Conclusion → O102: p≈0.5 halves broadcast airtime at ~full coverage** in a dense
+mesh; coverage degrades below ~0.3 and collapses below ~0.2 (percolation). A
+neighbour-aware scheme (adapt p to local density, or suppress after hearing the
+message from k neighbours) beats a blind coin-flip — same coverage, less airtime,
+because fixed-p wastes forwards in dense spots and under-covers sparse ones. Real
+battery/airtime win (O33/O55 budget).
