@@ -74,25 +74,30 @@ the stressor's "95%" is a sender-escape artifact, and ~20–30% sender uptime �
 O(N²)). Comfortable to ~16–24 nodes; cliff at 40 (load 0.4 → 26). RAM would allow
 ~60–70. Real-time propagation (no downclock knob). Small-N/high-fidelity tier.
 
-## O202 experiment — custody vs epidemic storage under duty-cycle (2026-08-01)
+## O202 experiment — custody vs epidemic vs HYBRID under duty-cycle (2026-08-01)
 
 `CustodyVsEpidemicTest` (abstract). Custody = store R's DMs only on R's known
-contacts (nodes that meet R); epidemic = everyone carries everything.
+contacts (who meet R); epidemic = everyone carries; **hybrid = custody by default,
+widen to epidemic if undelivered by a deadline (round 30 of 120)**. Model refined
+2026-08-01 to **stop accumulating storage on delivery** (an ACK halts carrying,
+per O193) — so storage = carrier-rounds UNTIL delivery, the honest cost (this
+changed the absolute numbers vs the first custody run; trends unchanged).
 
-| duty | epidemic (del% \| storage) | custody | custody vs epidemic |
-|------|----------------------------|---------|---------------------|
-| 100% | 100% \| 4523 | 100% \| 685 | same delivery, **6.6× less storage** |
-| 50%  | 100% \| 4324 | 100% \| 560 | same, **7.7×** |
-| 30%  | 100% \| 3832 | 95% \| 317  | −5% delivery, **12×** |
-| 15%  | 81% \| 1729  | 30% \| 64   | delivery COLLAPSES, 27× |
+| duty | epidemic (del% \| storage) | custody | **hybrid** |
+|------|----------------------------|---------|------------|
+| 100% | 100% \| 34  | 100% \| 5  | 100% \| **5** |
+| 50%  | 100% \| 90  | 100% \| 15 | 100% \| **26** |
+| 30%  | 100% \| 222 | 95% \| 33  | 100% \| **159** |
+| 15%  | 81% \| 677  | 30% \| 41  | 63% \| **486** |
 
-**Conclusion → O202 design: hybrid custody.** Custody is the right default —
-near-identical delivery at 6.6–12× less relay storage down to ~30% duty, because
-R's contacts ARE who meets R (the stranger copies epidemic keeps are mostly
-wasted). But it collapses under extreme scarcity (15% duty: 30% vs 81%) — S can't
-reach R's few contacts and epidemic's brute redundancy wins. So: **custody by
-default, widen toward epidemic when delivery is failing / duty is very low.**
-Pairs with presence-triggered flush (O30) and priority persistence.
+**Conclusion → O202 design: HYBRID custody (validated).** Custody alone is cheap
+but collapses under scarcity (15%: 30% vs epidemic's 81%). Hybrid is the best of
+both in the common case (30–100% duty: **full delivery at custody-level storage** —
+it never widens because delivery beats the deadline). At extreme scarcity it's a
+genuine middle ground: **doubles** custody's delivery (30%→63%) at less storage
+than epidemic, though it can't fully match epidemic's 81% — earlier escalation
+would help (a tunable). Pairs with presence-triggered flush (O30) + priority
+persistence. Ship custody-by-default with a delivery-deadline widen.
 
 ## Revalidation (2026-08-01)
 
