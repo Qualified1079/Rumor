@@ -150,3 +150,25 @@ cap=5, delivery-aware holds 100% while FIFO drops to 81% (+19pp for the same
 budget). Converges only at unbounded cap. Ties O193 (ACK is the local "delivered"
 signal this needs) and O202 (storage efficiency under scarcity). Cheap connectivity
 (fast delivery) hides this — pressure needs slow delivery to appear.
+
+## O197 experiment — limited-onion-routing feasibility (2026-08-01)
+
+`OnionFeasibilityTest` (abstract, pure graph). Onion routing through known-contact
+relays needs S↔R connected in the contact graph within a small hop budget (layers
+are per-hop). % of random pairs reachable through contacts only:
+
+| avg contact degree | ≤3 hops | ≤5 hops | any path | mean hops |
+|--------------------|---------|---------|----------|-----------|
+| 2  | 9%  | 32%  | 100% | 6.3 |
+| 3  | 24% | 90%  | 100% | 4.2 |
+| 4  | 46% | 100% | 100% | 3.5 |
+| 6  | 86% | 100% | 100% | 2.8 |
+| 10 | 100%| 100% | 100% | 2.4 |
+
+**Conclusion → O197 is a PARTIAL, opportunistic feature.** A giant component means
+"any path" is ~always there, but a *short* contact-path (the only kind onion
+routing can afford) is degree-gated: viable within ≤3 hops only at contact degree
+≥6. In the sparse contact graphs a privacy-conscious mesh likely has (few vetted
+contacts), ≤3-hop onion serves 9–24% of pairs — a minority; the rest fall back to
+normal gossip. Ship it as "use onion when a short contact-path exists, else gossip,"
+and document that coverage scales with the user's contact density.
