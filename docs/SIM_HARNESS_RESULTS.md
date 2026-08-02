@@ -33,10 +33,10 @@ on the fast `MeshHarness` (sim-wire) tier. Checklist:
 - [x] **Arbitrary topology / peer-cap** — edges are a `start()` param (multi-hop line proven).
 - [x] **Node duty-cycle** (online/offline via transport stop/re-start + re-wire) — `setOnline()`; proven 2026-08-01: a DM sent to an OFFLINE recipient is carried by the relay over real TCP and delivered when the recipient returns (the O202/O55 store-and-forward property on real code).
 - [x] **Dead/hostile relay** — `hostile` set; a wired node that absorbs but offers nothing onward. Proven 2026-08-01: DM routes AROUND a hostile relay via an honest alternate path (diamond), and is BLOCKED when the hostile relay is the only path (line, negative control).
-- [ ] **Byzantine/malicious modes** — drop-but-claim, replay, flood — needs a misbehaving transport wrapper.
-- [ ] **Link loss / latency / jitter / bandwidth** — real TCP has none injected; needs a conditioning socket wrapper.
-- [ ] **Delivery-rate driver** — many DMs → aggregate %, if we accept the wall-clock cost (else keep on `MeshHarness`).
-- [ ] **Scale** — more nodes within the in-process socket/thread ceiling (~10–30).
+- [x] **Byzantine — flood** — `flood()`; proven 2026-08-01: a legit DM survives a 250-broadcast junk flood (past the 200 offer cap) over real wire (starvation resistance). Remaining byzantine variants (replay, drop-but-claim) need a misbehaving *session* wrapper — follow-up.
+- [defer] **Link loss / latency / jitter / bandwidth** — real TCP injects none; needs a socket-conditioning seam in `LanTransport` (prod change, not worth an autonomous edit). The fast `MeshHarness` tier already carries these and showed re-offer *defeats* independent per-message loss (0–50%→100%).
+- [by-design on MeshHarness] **Delivery-rate driver** — statistical sweeps stay on the fast sim-wire tier; the real-wire tier does fidelity spot-checks (10 s/round makes many-trial sweeps impractical).
+- [characterized] **Scale** — real-transport scale is the `:node` process cap (~32, CPU-bound; measured 2026-08-01); the in-process LAN harness is socket/thread-bound (dozens). No separate slow multi-hop scale test.
 
 ---
 

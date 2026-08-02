@@ -118,6 +118,15 @@ class LanMeshHarness(
         )?.id
     }
 
+    /** Compose a real signed broadcast from [from]; returns its message id. */
+    fun broadcast(from: Int, text: String): String? =
+        nodes[from].gossipEngine.composeBroadcast(text)?.id
+
+    /** Byzantine flood: [from] originates [count] junk broadcasts to load the mesh. */
+    fun flood(from: Int, count: Int, tag: String = "flood") {
+        for (i in 0 until count) nodes[from].gossipEngine.composeBroadcast("$tag-$i")
+    }
+
     /** Poll the recipient's real store until [id] arrives or [timeoutMs] elapses. */
     suspend fun awaitDelivered(id: String, to: Int, timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs

@@ -129,4 +129,25 @@ class LanMeshHarnessTest {
             h.stop()
         }
     }
+
+    /**
+     * Byzantine flood over real wire: the relay node floods the mesh with junk
+     * broadcasts (past the per-exchange offer cap), and a legitimate DM must
+     * still reach its recipient — real-transport starvation resistance.
+     */
+    @Test
+    fun legitDmSurvivesAByzantineFloodOverRealWire() {
+        val h = LanMeshHarness(n = 3, seed = 5)
+        try {
+            runBlocking {
+                h.start(edges = listOf(0 to 1, 1 to 2))
+                h.flood(from = 1, count = 250)                   // relay floods junk (> the 200 offer cap)
+                val id = h.sendDm(from = 0, to = 2, text = "must survive the flood")!!
+                assertTrue("legit DM starved by the flood — never reached node 2",
+                    h.awaitDelivered(id, to = 2, timeoutMs = 75_000))
+            }
+        } finally {
+            h.stop()
+        }
+    }
 }
