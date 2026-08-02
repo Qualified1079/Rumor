@@ -235,3 +235,21 @@ neighbour-aware scheme (adapt p to local density, or suppress after hearing the
 message from k neighbours) beats a blind coin-flip — same coverage, less airtime,
 because fixed-p wastes forwards in dense spots and under-covers sparse ones. Real
 battery/airtime win (O33/O55 budget).
+
+## Sender retry-budget experiment (2026-08-01)
+
+`SenderRetryBudgetTest` (abstract). With **forward-then-forget carriers** (no
+persistence), the sender's re-injection is the only delivery engine. Delivery vs
+the sender's give-up budget (rounds it keeps re-offering an un-ACKed DM), duty=0.6:
+
+| retry budget (rounds) | 1 | 5 | 15 | 30 | 60 | 120 | 160 |
+|-----------------------|---|---|----|----|----|-----|-----|
+| delivery% | 2 | 10 | 29 | 50 | 70 | 86 | 89 |
+
+**Conclusion.** Sender retry pushes delivery up steeply (2%→89%) — answers the
+user's O193 "how much do retries buy" — but **plateaus ~89%**: even maximal retry
+can't overcome duty-cycle connectivity gaps when carriers forget. So the last ~10%
+needs *some* carrier persistence (custody/TTL); retry alone isn't enough. on-ACK
+makes a long budget cheap (stop re-offering once delivered). Synthesizes with the
+O193 on-relay trap + O202 custody: retry + light persistence together, not either
+alone.
