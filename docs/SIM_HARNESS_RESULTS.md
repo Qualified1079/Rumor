@@ -287,3 +287,24 @@ needs *some* carrier persistence (custody/TTL); retry alone isn't enough. on-ACK
 makes a long budget cheap (stop re-offering once delivered). Synthesizes with the
 O193 on-relay trap + O202 custody: retry + light persistence together, not either
 alone.
+
+## O76 experiment — size-bucket padding: bandwidth vs anonymity (2026-08-01)
+
+`PaddingAnonymityTest` (abstract). 8000 msgs (70% short/25% med/5% long). Pad each
+to a geometric size bucket; same padded size = size-anonymity set.
+
+| buckets | overhead | min anonymity set |
+|---------|----------|-------------------|
+| 1  | 1337% | 8000 |
+| 6 (O76) | 71% | 304 |
+| 12 | 27% | 67 |
+| 24 | 13% | 30 |
+| none | 0% | 1 (25.6% of msgs size-identifiable) |
+
+**Conclusion.** Padding clearly helps (no-pad leaves 25.6% of messages in a tiny
+size-set). But **O76's 6 buckets costs 71% bandwidth overhead** — steep under the
+O55 bandwidth-scarce model — while **12 buckets gives 27% overhead at still-strong
+anonymity (≥67-msg sets)**. Suggest revisiting toward ~12 buckets, or making bucket
+count **traffic-adaptive** (min-anon-set scales with volume, so finer buckets are
+safe on busy meshes, coarser needed on quiet ones). Compression runs before padding
+(shifts sizes smaller) but doesn't remove the need to pad.
