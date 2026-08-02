@@ -194,3 +194,24 @@ None of it is free (O27/O55 latency budget). **Honest caveat:** the modeled
 observer is a simple greedy timing-matcher, so these link% are an *upper bound* on
 unlinkability (a rate/intersection-attack adversary does better); only the ordering
 mix > delay > immediate is robust. Matches the O27 "no Tor-parity anonymity" stance.
+
+## O194 experiment — eclipse resistance via trust-weighted peering (2026-08-01)
+
+`EclipseResistanceTest` (abstract). Eclipse = all of R's connection slots filled
+by non-relaying sybils. % of trials R stays reachable (≥1 honest relay neighbour):
+
+| sybil fraction | random peering | trust-weighted |
+|----------------|----------------|----------------|
+| 50% | 98% | 100% |
+| 80% | 72% | 100% |
+| 90% | 44% | 100% |
+| 95% | 23% | 100% |
+| 99% | 5%  | 100% |
+
+**Conclusion → confirms O194 (trust-weighted view, not radio fingerprinting).**
+Random peering is eclipsed as sybil density → 1. Trust-weighted (fill R's slots
+from known honest contacts first) stays reachable whenever ≥1 contact is online —
+its residual risk is **contact duty-cycle** ((1−duty)^contacts, ~0.4% with 8
+contacts @ 50%), NOT sybil count. Sybils become irrelevant once you prefer vetted
+contacts. Note the weak point is again duty-cycle → loops back to O202. Ties
+O135/O136 (friend/known allowlist is the same primitive).
