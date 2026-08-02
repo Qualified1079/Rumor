@@ -130,3 +130,23 @@ Tension: earlier widening recovers low-duty delivery (15%: 30%→73%) but wastes
 storage at higher duty (30%: widen@5 costs 190 vs widen@60's 92, both 100%). →
 **an ADAPTIVE deadline keyed on observed duty/delivery-difficulty beats any fixed
 one**; a fixed ~15–30 is a reasonable static compromise. Feeds the O202 build.
+
+## O23 experiment — bounded-store eviction: delivery-aware vs FIFO (2026-08-01)
+
+`StorageEvictionTest` (abstract). Under a bounded per-node store + pressure
+(sparse mesh, 60% duty, 90 DMs, cap sweep), which eviction policy delivers more?
+
+| cap | FIFO | delivery-aware |
+|-----|------|----------------|
+| 3   | 77%  | 88%  |
+| 5   | 81%  | **100%** |
+| 8   | 85%  | 100% |
+| 15  | 90%  | 100% |
+| ∞   | 100% | 100% |
+
+**Conclusion → O23 design: eviction MUST be delivery/ACK-aware, not FIFO.**
+Shedding already-delivered DMs first keeps undelivered ones alive longer — at
+cap=5, delivery-aware holds 100% while FIFO drops to 81% (+19pp for the same
+budget). Converges only at unbounded cap. Ties O193 (ACK is the local "delivered"
+signal this needs) and O202 (storage efficiency under scarcity). Cheap connectivity
+(fast delivery) hides this — pressure needs slow delivery to appear.
