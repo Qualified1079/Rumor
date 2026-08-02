@@ -101,3 +101,13 @@ decomposition **byte-identical** to the original run (deterministic). MeshHarnes
 real-engine sweeps **trend-stable** (duty-cycle dominant 30%→~33%, loss defeated,
 dead-relay graceful); ±few% run-to-run from real-engine async ingest timing (the
 real-engine tier is approximate, not deterministic — expected).
+
+## Real `:node` binary — multi-hop relay (2026-08-01)
+
+Beyond the earlier full-mesh broadcast check: with 3 REAL `node.jar` processes in
+a deterministic line (`--no-mdns --lan-port` + `--peer`; node0—node1—node2, node0
+and node2 NOT directly wired), a broadcast POSTed to node0 landed in node1's store
+(round 1) then RELAYED to node2 (round 2) over real TCP. Confirms multi-hop
+store-and-forward on the genuine desktop runtime (MeshRuntime + LanTransport), not
+just SimNode. Enabled by new `:node` flags `--no-mdns`, `--lan-port`, `--peer` and
+a `LanTransport.start(port=)` param (defaults preserve behavior).

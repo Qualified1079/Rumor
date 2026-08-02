@@ -107,13 +107,15 @@ class LanTransport(
 
     private val serviceName get() = config.localUserId.take(16)
 
-    fun start(bindAddress: InetAddress) {
+    fun start(bindAddress: InetAddress, port: Int = 0) {
         if (scope != null) return
         val s = CoroutineScope(Dispatchers.IO + SupervisorJob())
         scope = s
         s.launch {
             try {
-                val ss = ServerSocket(0, 8, bindAddress)
+                // port 0 = ephemeral (default). A fixed port lets multi-node
+                // deployments/tests wire deterministic topologies via onPeerLocated.
+                val ss = ServerSocket(port, 8, bindAddress)
                 serverSocket = ss
                 // mDNS is best-effort: multicast can be filtered (test
                 // containers, exotic APs). The TCP server must survive that —

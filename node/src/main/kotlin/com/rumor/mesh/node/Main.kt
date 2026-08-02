@@ -114,6 +114,7 @@ fun main(args: Array<String>) {
             onlineUsersProvider = onlineTracker::currentSnapshot,
             onExchangeFailed = gossipEngine::onExchangeFailed,
             rbsrItemsProvider = gossipEngine::rbsrSnapshot,
+            enableMdns = !opts.noMdns,
         )
     )
 
@@ -157,7 +158,12 @@ fun main(args: Array<String>) {
         }
     }
 
-    lan.start(bindAddress)
+    lan.start(bindAddress, opts.lanPort)
+    // Directly dial any --peer endpoints (deterministic topology; no mDNS needed).
+    for (p in opts.peers) {
+        val (h, port) = p.split(":").let { it[0] to it[1].toInt() }
+        lan.onPeerLocated("peer-$p", InetAddress.getByName(h), port)
+    }
     status.start()
     println("LAN transport on ${bindAddress.hostAddress} — status page http://127.0.0.1:${opts.httpPort}/")
     println("Type to broadcast, 'quit' to stop. (EOF = headless: keeps running until killed.)")
@@ -190,6 +196,9 @@ private data class Opts(
     val sybilTarget: String? = null,
     val sybilCount: Int = 20,
     val sybilDelayMs: Long = 200,
+    val noMdns: Boolean = false,
+    val lanPort: Int = 0,
+    val peers: List<String> = emptyList(),   // host:port endpoints to dial directly
 )
 
 private fun parseArgs(args: Array<String>): Opts {
@@ -204,7 +213,10 @@ private fun parseArgs(args: Array<String>): Opts {
             "--sybil" -> { opts = opts.copy(sybilTarget = args[++i]) }
             "--sybil-count" -> { opts = opts.copy(sybilCount = args[++i].toInt()) }
             "--sybil-delay" -> { opts = opts.copy(sybilDelayMs = args[++i].toLong()) }
-            else -> error("unknown arg ${args[i]} — usage: node [--bind <ip>] [--http <port>] [--data <dir>] [--quiet] | --sybil <ip:port> [--sybil-count N] [--sybil-delay ms]")
+            "--no-mdns" -> { opts = opts.copy(noMdns = true) }
+            "--lan-port" -> { opts = opts.copy(lanPort = args[++i].toInt()) }
+            "--peer" -> { opts = opts.copy(peers = opts.peers + args[++i]) }
+            else -> error("unknown arg ${args[i]} — usage: node [--bind <ip>] [--http <port>] [--data <dir>] [--quiet] [--no-mdns] [--lan-port <port>] [--peer <host:port>]... | --sybil <ip:port> [--sybil-count N] [--sybil-delay ms]")
         }
         i++
     }
