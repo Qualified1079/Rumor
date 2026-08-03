@@ -51,8 +51,13 @@ two counts, and the sims proved it:**
 Bottom line: routing IS better, but for the honest reason (less spray), and I've
 corrected the docs/commit messages to say so.
 
-*(This session continues — away mode re-enabled at your request. Still unfinished:
-O176 unbounded breadcrumb map, O177 dead prune code.)*
+*(Away mode re-enabled at your request. Since then: routing validated (see
+correction above — it targets 2.6× tighter), and the two loose ends closed:*
+- *O176 — the breadcrumb cache's in-memory map could grow forever under a spam
+  flood of fake senders; now capped (safe, it's just a cache).*
+- *O177 — a fourth "cleanup routine nobody called" is now wired in and guarded by
+  a test so it can't silently rot again.*
+*Continuing with more bounded pure-core fixes.)*
 
 ---
 

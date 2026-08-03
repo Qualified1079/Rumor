@@ -237,6 +237,11 @@ class TransferAssembler(
         activeBySender.remove(transferId)
         chunkHashesByTransfer.remove(transferId)
         transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, SystemClock.now())
+        // O158: release the raw chunk BLOBs now that the file is assembled — the
+        // happy path leaked them forever (cancel() and the abandon path already
+        // free theirs). The reassembled bytes are handed to the caller via the
+        // emit below; the per-chunk rows have no further use.
+        chunkRepo.deleteAllForTransfer(transferId)
         RumorLog.i(TAG, "Transfer ${transferId.take(8)}… complete (${data.size}B)")
         _assembledTransfers.emit(AssembledTransfer(meta, data))
     }

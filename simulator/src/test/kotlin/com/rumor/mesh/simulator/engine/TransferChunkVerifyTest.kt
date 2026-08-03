@@ -62,10 +62,24 @@ class TransferChunkVerifyTest {
             SimTransport(sender, receiver).exchange(kotlin.random.Random(1))
             awaitUntil(5_000) { receiver.reassembledTransfers.value == 1L }
             assertEquals("a clean transfer must reassemble", 1L, receiver.reassembledTransfers.value)
+
+            // O158: the raw chunk BLOBs must be released once the file is
+            // assembled — the happy path used to leak them forever. The delete
+            // runs before the emit that bumps reassembledTransfers, so by here
+            // it has already happened.
+            assertEquals(
+                "chunk rows must be freed after a completed transfer (O158 leak guard)",
+                emptyList<Int>(),
+                receiver.chunkRepoForTest().getReceivedIndices(meta.transferId),
+            )
         } finally {
             scope.cancel()
         }
     }
+
+    private fun SimNode.chunkRepoForTest(): com.rumor.mesh.core.data.memory.InMemoryChunkRepository =
+        this::class.java.getDeclaredField("chunkRepo").apply { isAccessible = true }
+            .get(this) as com.rumor.mesh.core.data.memory.InMemoryChunkRepository
 
     @Test
     fun `poisoned chunk is dropped and the transfer completes only after a good repair`() = runBlocking {
