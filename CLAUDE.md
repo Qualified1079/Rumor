@@ -232,6 +232,9 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O196 | **`[DECISION]`** Reject handheld cover traffic + adaptive/incremental fill (joules-not-bits; adaptive-signal-leak); cover traffic = infrastructure-node-only future work (privacy workshop) |
 | O197 | **`[TODO/SIM]`** Limited onion routing for high-sensitivity DMs — source-routed through known contact-relays only (privacy workshop) |
 | O198 | **`[TODO/SIM]`** Breadcrumb minimization — least per-node routing state holding delivery constant (info-vs-utility sim curve) (privacy workshop) |
+| O202 | **`[TODO/CODE+SIM]`** DM delivery hardening under low node duty-cycle — DIRECT_ACK substrate shipped (2026-08-02) |
+| O203 | **`[DECISION-NEEDED]`** Delivery-ACK follow-ups — "delivered ✓✓" UI + delivery-state Room column (schema bump); sender offer-suppression; relay on-ack eviction defaults |
+| O204 | **`[DECISION, sim-DONE 2026-08-03]`** `hopsToLive` doesn't bound DM/broadcast reach (store-backfill re-offers as-received copies); routing's win is targeting not reach |
 #### Tier 5 — bridge hardware track
 
 | # | Item |
