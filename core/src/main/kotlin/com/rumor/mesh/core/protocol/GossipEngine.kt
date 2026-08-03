@@ -199,6 +199,17 @@ class GossipEngine(
     private val _deliveryEvents = MutableSharedFlow<String>(extraBufferCapacity = 256)
     val deliveryEvents: SharedFlow<String> = _deliveryEvents
 
+    /**
+     * O202 — end-to-end delivery receipts. Emits the messageId of a DIRECT DM
+     * we authored once its final recipient sent back a [MessageType.DIRECT_ACK]
+     * and that ACK reached us. Distinct from [deliveryEvents], which fires on
+     * mere peer-hop acceptance (session-layer `Ack`) and says nothing about the
+     * message ever reaching the person it was addressed to. The host/UI marks
+     * the DM "delivered" (double-check) on this signal.
+     */
+    private val _deliveryReceipts = MutableSharedFlow<String>(extraBufferCapacity = 256)
+    val deliveryReceipts: SharedFlow<String> = _deliveryReceipts
+
     /** Emits outbound DMs composed with a registered [DmEnvelopeRegistry] envelope. */
     private val _outboundBridgedDm = MutableSharedFlow<BridgedDmOutbound>(extraBufferCapacity = 64)
     val outboundBridgedDm: SharedFlow<BridgedDmOutbound> = _outboundBridgedDm
@@ -528,6 +539,30 @@ class GossipEngine(
         if (msg.trustLevel == TrustLevel.BRIDGED) return
         enqueueImmediate(messageStore.boostHopsForManualRelay(msg))
         scope.launch { messageStore.markRelayed(msg.id) }
+    }
+
+    /**
+     * O202 — compose an on-receipt delivery ACK for [ackedMessageId] and route
+     * it back to [originalSenderId]. Called automatically when a DIRECT DM
+     * addressed to us lands (see [processIncoming]); exposed for the host loop /
+     * tests. The acked id rides `payload.content` and is covered by the signed
+     * transcript (recipientId + content are both signed), so a relay can neither
+     * redirect the ACK nor forge which message it confirms.
+     */
+    fun composeDirectAck(
+        originalSenderId: String,
+        ackedMessageId: String,
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val msg = buildMessage(
+            identity = identity,
+            type = MessageType.DIRECT_ACK,
+            hopsToLive = DEFAULT_DIRECT_HOPS,
+            payload = MessagePayload(ContentType.CONTROL, ackedMessageId),
+            recipientId = originalSenderId,
+        )
+        enqueueImmediate(msg)
+        return msg
     }
 
     fun composeChunkRequest(
@@ -1109,6 +1144,29 @@ class GossipEngine(
             handleSelfPresence(msg)
         }
 
+        // O202: on-receipt delivery ACK. A DIRECT DM that actually reached its
+        // final recipient (recipientId == us) is acknowledged straight back to
+        // the sender, giving them an end-to-end "delivered" signal that survives
+        // low duty-cycle meshes far better than hoping for a reply. Gated on
+        // recipientId == self so a relay forwarding someone else's DM never
+        // ACKs it; bridged traffic is skipped (the synthetic senderId has no
+        // Rumor-mesh return path); DIRECT_ACK itself is NOT re-ACKed, so there
+        // is no acknowledgement loop.
+        val localUserId = identityProvider.identity.value?.userId
+        if (!bridged && msg.type == MessageType.DIRECT && msg.recipientId == localUserId &&
+            msg.senderId != localUserId) {
+            composeDirectAck(originalSenderId = msg.senderId, ackedMessageId = msg.id)
+        }
+
+        // O202: inbound DIRECT_ACK addressed to us confirms one of our own DMs
+        // was delivered end-to-end. Surface the acked messageId on
+        // deliveryReceipts; never emit it to the inbox (pure control signal).
+        if (msg.type == MessageType.DIRECT_ACK && msg.recipientId == localUserId) {
+            msg.payload?.content?.takeIf { it.isNotBlank() }?.let { ackedId ->
+                scope.launch { _deliveryReceipts.emit(ackedId) }
+            }
+        }
+
         // O79: room message dispatch. Match the routing tag against the
         // local subscription cache; on match, decrypt (ENCRYPTED) or
         // pass through (OPEN), emit the resulting plaintext-bearing
@@ -1123,7 +1181,9 @@ class GossipEngine(
         // ONLY on subscription match. Skip the unconditional emit here so that
         // non-subscribed nodes (relay-only) don't surface the message in their
         // local inbox. Relay still happens unconditionally below.
-        if (msg.type != MessageType.ROOM_MESSAGE) {
+        // DIRECT_ACK is a control signal consumed via deliveryReceipts above, not
+        // a user-visible message — keep it out of the inbox like ROOM_MESSAGE.
+        if (msg.type != MessageType.ROOM_MESSAGE && msg.type != MessageType.DIRECT_ACK) {
             // O41: identity rotation. The outer signature on `msg` is by the *new*
             // key (already verified above). We additionally check the *inner*
             // continuity signature against the existing contact's old public key —
@@ -1304,7 +1364,10 @@ class GossipEngine(
                 } else forwarded
                 enqueueRelayed(boosted)
             }
-            MessageType.DIRECT -> {
+            // DIRECT_ACK (O202) routes identically to a DIRECT DM: next-hop back
+            // toward the original sender via breadcrumbs, dropped once it reaches
+            // that sender (recipientId == self).
+            MessageType.DIRECT, MessageType.DIRECT_ACK -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
                 val forwarded = messageStore.decrementHops(msg) ?: return
@@ -1385,7 +1448,8 @@ class GossipEngine(
             MessageType.PREKEY_PUBLISH,
             MessageType.BRIDGE_VOUCHED,
             MessageType.ROOM_MESSAGE -> MAX_BROADCAST_HOPS
-            MessageType.DIRECT, MessageType.TRANSFER_METADATA,
+            MessageType.DIRECT, MessageType.DIRECT_ACK,
+            MessageType.TRANSFER_METADATA,
             MessageType.CHUNK, MessageType.CHUNK_REQUEST,
             MessageType.TRANSFER_CANCEL,
             MessageType.PRIORITY_LINK_REQUEST,

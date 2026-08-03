@@ -308,3 +308,39 @@ anonymity (≥67-msg sets)**. Suggest revisiting toward ~12 buckets, or making b
 count **traffic-adaptive** (min-anon-set scales with volume, so finer buckets are
 safe on busy meshes, coarser needed on quiet ones). Compression runs before padding
 (shifts sizes smaller) but doesn't remove the need to pad.
+
+## O202/O58 — on-receipt end-to-end delivery ACK (DIRECT_ACK) shipped (2026-08-02)
+
+New protocol substrate: `MessageType.DIRECT_ACK`. When a node receives a DIRECT
+DM addressed to **it** (recipientId == self, sig verified), it auto-composes a
+tiny INFRASTRUCTURE-class ACK carrying the acked DM's messageId and routes it
+back to the original sender exactly like a DIRECT (breadcrumb next-hop, dropped
+when it reaches the sender). The sender surfaces the acked id on
+`GossipEngine.deliveryReceipts` — an **end-to-end** "delivered" signal, distinct
+from the pre-existing `deliveryEvents` (session-layer peer-hop `Ack`, which only
+means "a direct peer accepted the frame", not "it reached the person").
+
+Security/loop properties (all enforced in `processIncoming`):
+- Gated on `recipientId == self` so a **relay never ACKs** a DM it's only
+  forwarding (discrimination control in `DirectAckDeliveryTest`).
+- `DIRECT_ACK` never itself triggers an ACK → no acknowledgement loop.
+- Acked id rides `payload.content`, which (with `recipientId`) is in the signed
+  transcript — a relay can neither redirect the ACK nor forge which DM it
+  confirms.
+- Bridged traffic skipped (synthetic senderId has no mesh return path).
+- Suppressed from the inbox (control signal, not a user-visible message).
+- Dedup means a DM re-delivered by multiple relay paths ACKs exactly once
+  (`processIncoming` returns early on `!isNew`).
+
+Validated: `simulator/.../engine/DirectAckDeliveryTest.kt` (real engine + real
+`SimTransport`): (1) A→B DM ⇒ B auto-ACKs ⇒ ACK returns to A ⇒ A raises a
+delivery receipt for the DM id; (2) relay-not-recipient does not ACK; (3)
+assertThrows teeth guard.
+
+**Why this is the enabling substrate for O193/O202:** custody/retry both need a
+delivery-confirmation signal to know when to *stop*. Sender-side retry (O193)
+can now cancel its budget on receipt; presence-flush (O202) can clear a DM from
+custody once acked instead of holding it for the full TTL. Next: sender-side
+retry/cancel loop keyed on `deliveryReceipts`, and app-side "delivered" UI +
+delivery-state persistence (Room column — needs a schema bump, flagged for the
+user).

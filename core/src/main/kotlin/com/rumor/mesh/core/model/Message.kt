@@ -245,6 +245,21 @@ enum class MessageType {
      * media → BULK, CONTROL → INFRASTRUCTURE).
      */
     @SerialName("room_message") ROOM_MESSAGE,
+    /**
+     * On-receipt delivery acknowledgement for a DIRECT message (O202 delivery
+     * hardening; the O58 Tier-1 DM-ACK return path). The final recipient of a
+     * DIRECT DM emits one of these back to the original sender the moment the
+     * DM lands in its inbox — proving end-to-end delivery, not merely peer-hop
+     * acceptance (that is [com.rumor.mesh.core.model.GossipPacket.Ack], a
+     * session-layer frame). `payload.content` carries the acked DM's messageId
+     * (CONTROL content type); `recipientId` is the original sender. Routed and
+     * relayed exactly like a DIRECT DM (breadcrumb next-hop back toward the
+     * sender), INFRASTRUCTURE traffic class (tiny). A DIRECT_ACK never itself
+     * triggers an ACK, so there is no acknowledgement loop. Not surfaced in the
+     * recipient's inbox — it is pure delivery signalling consumed via
+     * [com.rumor.mesh.core.protocol.GossipEngine.deliveryReceipts].
+     */
+    @SerialName("direct_ack") DIRECT_ACK,
 }
 
 @Serializable
@@ -365,6 +380,7 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT,
             MessageType.SELF_PRESENCE,
+            MessageType.DIRECT_ACK,
             MessageType.MESSAGE_DELETE -> TrafficClass.INFRASTRUCTURE
             // A full blocklist snapshot is bulky sync data, not handshake-tier
             // traffic — only the small incremental diff stays INFRASTRUCTURE.

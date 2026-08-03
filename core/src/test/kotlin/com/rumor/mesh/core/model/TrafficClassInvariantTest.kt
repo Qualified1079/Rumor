@@ -70,6 +70,9 @@ class TrafficClassInvariantTest {
     @Test fun `MESSAGE_DELETE is INFRASTRUCTURE`() =
         assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.MESSAGE_DELETE).trafficClass)
 
+    @Test fun `DIRECT_ACK is INFRASTRUCTURE`() =
+        assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.DIRECT_ACK).trafficClass)
+
     // ── TRANSFER_SETUP-tier types ────────────────────────────────────────────
 
     @Test fun `TRANSFER_METADATA is TRANSFER_SETUP`() =
@@ -184,6 +187,7 @@ class TrafficClassInvariantTest {
             MessageType.DIRECT,
             MessageType.BRIDGE_VOUCHED,
             MessageType.ROOM_MESSAGE,
+            MessageType.DIRECT_ACK,
         )
         val missing = MessageType.values().toSet() - tested
         assertEquals(emptySet(), missing,
