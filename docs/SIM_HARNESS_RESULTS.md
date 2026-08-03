@@ -344,3 +344,51 @@ custody once acked instead of holding it for the full TTL. Next: sender-side
 retry/cancel loop keyed on `deliveryReceipts`, and app-side "delivered" UI +
 delivery-state persistence (Room column — needs a schema bump, flagged for the
 user).
+
+## O160/O204 — is breadcrumb routing really better? (2026-08-03)
+
+`SmartRoutingReachTest` (simulator). **Key methodology note:** `SimTransport`
+cannot answer this — it offers a peer the raw `messageRepo.snapshot()`, so it
+neither decrements `hopsToLive`, honours `intendedPeers`, nor applies the
+`offerable` `hopsToLive>0` filter. So this test drives propagation through the
+**real** offer path (`GossipEngine.messagesForExchange` + `deliverExchange`) AND
+round-trips every offered message through `WireJson` (serialize→deserialize) so
+`@Transient` fields — above all `intendedPeers`, the sender's LOCAL routing
+decision — are stripped exactly as a socket wire would strip them. (Passing the
+live object, as `SimTransport` does, leaks `intendedPeers` across the hop and
+wedges routed delivery after 2 hops — a harness-fidelity trap, not a protocol
+bug; cost me an hour, documented so it doesn't recur.)
+
+**Finding 1 — routing does NOT extend reach; the hop budget doesn't bound reach
+at all (O204).** On a plain 24-node line with no crumbs, a *flooded* DM reached
+index 23 — far past the 15-hop `hopsToLive` budget. Cause: `MessageStore.ingest`
+stores a message at its *as-received* `hopsToLive`, and the durable store-backfill
+(`offerable`, re-offered every exchange by `messagesForExchange`) re-offers that
+stored copy as long as `hopsToLive>0`. The per-hop decrement lives only on the
+one-shot scheduler relay copy, which the backfill overrides. So reach = the whole
+dedup-bounded connected component, for both flood and routed. Good for delivery
+robustness; a concern for O27/O58 (a DM/broadcast floods every node) — filed
+**O204**.
+
+**Finding 2 — routing's real win is TARGETING (measured, clean).** Topology: a
+10-node backbone line A…B with 2 leaf nodes hung off each of the 8 interior
+backbone nodes (26 nodes total). Both arms deliver to B:
+
+| arm | delivered to B | nodes touched |
+|-----|----------------|---------------|
+| routed (crumb trail A→B along the backbone) | yes | **10** (backbone only — all 16 leaves untouched) |
+| flood (no crumbs) | yes | **26** (whole component) |
+
+`messagesForExchange` offers a relayed DM only to breadcrumb candidates for its
+recipient (flood fallback when no crumb). So a DM with a crumb trail travels a
+narrow path; without one it sprays everyone. **2.6× fewer nodes see the ciphertext
+for the same delivery** — the honest benefit of routing is bandwidth + privacy
+(O27/O58), NOT reach. The backbone front advanced exactly 1 hop/round, confirming
+clean directional forwarding.
+
+**Note on further fidelity:** the sim already runs the real `GossipEngine` + real
+`WireJson` framing + real offer path; the only remaining gap vs a live multi-`:node`
+run (LanMeshHarness over real TCP) is socket/`GossipSession` framing + timing,
+which don't touch the routing/targeting logic (all in `:core`, run verbatim). A
+multi-node `:node` cross-check of the 10-backbone topology is a possible deeper
+confirmation but is not expected to change the result.

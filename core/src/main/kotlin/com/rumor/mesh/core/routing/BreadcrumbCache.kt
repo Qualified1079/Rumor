@@ -38,6 +38,17 @@ class BreadcrumbCache(
     private val snapshot = ConcurrentMap<String, List<String>>()
     private val SNAPSHOT_LIMIT = 5
 
+    /**
+     * O176: cap on distinct targets held in the in-memory [snapshot]. targetUserId
+     * is a message *sender*, so under a sybil flood of distinct fake senders this
+     * map would grow without bound (O120's prune fix only touched the persistent
+     * repo). The snapshot is a pure cache — a miss falls back to the persistent
+     * [candidatePeers] or to flood — so evicting arbitrary cold entries only costs
+     * a temporary flood-fallback until the next inbound refreshes it. Generous vs
+     * any node's real routable-target set.
+     */
+    private val SNAPSHOT_MAX_TARGETS = 2048
+
     fun record(targetUserId: String, fromPeerId: String, hopCount: Int = 1) {
         // Update the synchronous snapshot first so callers see the change
         // immediately, even before the persistent upsert finishes.
@@ -45,6 +56,7 @@ class BreadcrumbCache(
             val deduped = (listOf(fromPeerId) + (existing ?: emptyList()).filter { it != fromPeerId })
             deduped.take(SNAPSHOT_LIMIT)
         }
+        if (snapshot.size > SNAPSHOT_MAX_TARGETS) trimSnapshot(keep = targetUserId)
         scope.launch {
             val crumb = Breadcrumb(
                 targetUserId = targetUserId,
@@ -80,6 +92,22 @@ class BreadcrumbCache(
      */
     suspend fun candidatePeers(targetUserId: String, limit: Int = 3): List<String> =
         breadcrumbRepo.getCandidates(targetUserId, limit).map { it.arrivedFromPeerId }
+
+    /**
+     * Evict cold entries down under [SNAPSHOT_MAX_TARGETS], never touching
+     * [keep] (the target just recorded). Order is arbitrary (CHM iteration) —
+     * fine for a safety cap, since a wrongly-evicted hot entry is re-populated
+     * on its next inbound message and the persistent store is unaffected.
+     */
+    private fun trimSnapshot(keep: String) {
+        val overBy = snapshot.size - SNAPSHOT_MAX_TARGETS
+        if (overBy <= 0) return
+        var removed = 0
+        for (k in snapshot.keys) {
+            if (removed >= overBy) break
+            if (k != keep && snapshot.remove(k) != null) removed++
+        }
+    }
 
     fun pruneOld() {
         scope.launch {

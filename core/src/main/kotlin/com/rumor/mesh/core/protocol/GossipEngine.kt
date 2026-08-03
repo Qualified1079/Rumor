@@ -1025,6 +1025,11 @@ class GossipEngine(
         breadcrumbs?.pruneOld()
         topologyTracker.pruneStale()
         onlineStatusTracker.pruneStale()
+        // O177: MeshViewTracker.pruneStale() was the fourth orphaned prune — a
+        // freshness sweep with zero call sites. It's bounded by maxPeers (LRU),
+        // but without this stale beacons linger as ghost routing anchors past
+        // their freshness window. Hooked in here like the other three.
+        meshView?.pruneStale()
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────

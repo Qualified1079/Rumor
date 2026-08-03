@@ -17,21 +17,42 @@ proved it works.
    *actually delivered to the person* — not just "handed to a nearby phone".
    Validated in the simulator. ✅ shipped + committed.
 
-2. **Fixed a routing bug where "smart-routed" DMs died just as early as dumb
-   ones** (O160). A direct message that knows the way to its recipient is
-   supposed to be allowed to travel *twice as far* as one that's just blindly
-   flooding the mesh — but a counter bug meant both died at the same 15-hop
-   limit, so the smart routing bought nothing. Now smart-routed DMs get their
-   full 30-hop reach. Pure protocol fix, sim-validated. ✅ shipped.
+2. **Made "smart routing" actually mean something** (O160, then redesigned after
+   your feedback). A direct message that knows the way to its recipient (via
+   breadcrumb trails) should ride that trail *freely* and only fall back to
+   blind flooding when the trail runs out — not be rationed like a flood. First
+   I mis-fixed it as "routed gets 2× the budget"; you rightly pointed out that's
+   just a bigger ration. Redesigned so routed hops are free along the breadcrumb
+   (bounded only by a loop-safety cap). **Then I validated it in sims and the
+   honest benefit turned out to be *targeting*, not reach** (see the correction
+   below). ✅ shipped + sim-validated.
 
 3. **Fixed a concurrency crash risk in the backbone coordinator** (O171). A
    shared list was being read and written by three background loops at once
    without a lock, which could throw and silently kill the loop that keeps
    persistent links healthy. Now locked. Pure-core fix. ✅ shipped.
 
-*(Session ended by user 2026-08-03; away mode disabled. Next-up that I did NOT
-start: O176 unbounded breadcrumb snapshot map, O177 dead prune code — both
-bounded pure-core, no approval needed.)*
+## ⚠️ Correction to #2 after sim validation (important, honest)
+
+I originally told you routing gives DMs "twice the reach." **That was wrong on
+two counts, and the sims proved it:**
+
+- **The hop budget doesn't limit reach at all** (filed O204). Because relays
+  keep re-offering messages they've stored, a message — routed *or* flooded —
+  spreads to the entire connected group of phones regardless of its hop counter.
+  Good for reliability; it just means "reach" isn't the axis routing improves.
+- **What routing actually buys is *targeting*.** In a test with a 10-phone
+  "backbone" path from A to B plus 16 bystander phones hanging off it: with
+  breadcrumbs, the DM reached B by touching only the **10 backbone phones** —
+  the 16 bystanders never saw it. Without breadcrumbs (flooding), the DM sprayed
+  **all 26**. Same delivery, **2.6× fewer phones see your ciphertext** — a real
+  bandwidth + privacy win, not a reach win.
+
+Bottom line: routing IS better, but for the honest reason (less spray), and I've
+corrected the docs/commit messages to say so.
+
+*(This session continues — away mode re-enabled at your request. Still unfinished:
+O176 unbounded breadcrumb map, O177 dead prune code.)*
 
 ---
 

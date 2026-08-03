@@ -5,10 +5,10 @@ import kotlin.test.Test
 import kotlin.test.fail
 
 /**
- * O120 source guard: three independent subsystems (BreadcrumbCache,
- * TopologyTracker, OnlineStatusTracker) each shipped a prune that no
- * production code ever called, so their tables grew without bound over
- * exactly the months-long uptimes O55 designs for. The fix is one hygiene
+ * O120/O177 source guard: four independent subsystems (BreadcrumbCache,
+ * TopologyTracker, OnlineStatusTracker, MeshViewTracker) each shipped a prune
+ * that no production code ever called, so their tables grew (or lingered stale)
+ * over exactly the months-long uptimes O55 designs for. The fix is one hygiene
  * entry point ([GossipEngine.pruneMaintenance]) ticked by MeshRuntime.
  *
  * This test greps the source for both halves of that wiring — the tick and
@@ -50,7 +50,7 @@ class PruneWiringInvariantTest {
         val body = Regex("""fun pruneMaintenance\(\)\s*\{(.*?)\n    \}""", RegexOption.DOT_MATCHES_ALL)
             .find(engine)?.groupValues?.get(1)
             ?: fail("GossipEngine.pruneMaintenance() not found — O120 hygiene entry point deleted")
-        for (call in listOf("breadcrumbs?.pruneOld()", "topologyTracker.pruneStale()", "onlineStatusTracker.pruneStale()")) {
+        for (call in listOf("breadcrumbs?.pruneOld()", "topologyTracker.pruneStale()", "onlineStatusTracker.pruneStale()", "meshView?.pruneStale()")) {
             if (call !in body) {
                 fail(
                     """
