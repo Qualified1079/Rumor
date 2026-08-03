@@ -922,7 +922,7 @@ class GossipEngine(
             // authoritative (repo-backed) suspend lookup, NOT the sync
             // snapshot — the snapshot can be stale by offer time, and this
             // filter must see the same view relay() saw when it decided.
-            if (breadcrumbs != null && msg.type == MessageType.DIRECT &&
+            if (breadcrumbs != null && (msg.type == MessageType.DIRECT || msg.type == MessageType.DIRECT_ACK) &&
                 msg.recipientId != null && msg.senderId != localUserId &&
                 msg.recipientId != peerUserId
             ) {
@@ -939,7 +939,7 @@ class GossipEngine(
         // Stable-partition preserves scheduler order within each class.
         val (preferred, rest) = routedFiltered.partition { msg ->
             msg.intendedPeers == null &&
-                msg.type == MessageType.DIRECT &&
+                (msg.type == MessageType.DIRECT || msg.type == MessageType.DIRECT_ACK) &&
                 msg.recipientId != null &&
                 peerUserId in breadcrumbs.candidatePeersSync(msg.recipientId)
         }

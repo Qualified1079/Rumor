@@ -63,7 +63,7 @@ class InMemoryMessageRepository : MessageRepository {
 
     override suspend fun offerable(limit: Int): List<RumorMessage> =
         messages.values
-            .filter { (it.type.name == "BROADCAST" || it.type.name == "DIRECT") && it.hopsToLive > 0 }
+            .filter { (it.type.name == "BROADCAST" || it.type.name == "DIRECT" || it.type.name == "DIRECT_ACK") && it.hopsToLive > 0 }
             .sortedByDescending { it.sentAtMs }
             .take(limit)
     override suspend fun knownIds(limit: Int): List<String> =

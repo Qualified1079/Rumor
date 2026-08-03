@@ -54,7 +54,7 @@ interface MessageDao {
     /** O92 reseed source: offer-eligible content only, freshest first. */
     @Query("""
         SELECT * FROM messages
-        WHERE type IN ('BROADCAST', 'DIRECT') AND ttl > 0
+        WHERE type IN ('BROADCAST', 'DIRECT', 'DIRECT_ACK') AND ttl > 0
         ORDER BY sentAtMs DESC
         LIMIT :limit
     """)

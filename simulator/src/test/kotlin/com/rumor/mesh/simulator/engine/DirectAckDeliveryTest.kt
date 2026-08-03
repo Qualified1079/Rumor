@@ -57,6 +57,16 @@ class DirectAckDeliveryTest {
             assertEquals("ACK must reference the acked DM id", dm.id, ackOnB!!.payload?.content)
             assertEquals("ACK must be routed back to the original sender A", a.userId, ackOnB.recipientId)
 
+            // The ACK must survive scheduler drain via store-backfill (offerable),
+            // exactly like a DM — otherwise a single mis-timed offer loses it and
+            // the sender never learns of delivery. Drain B's scheduler, then B must
+            // still offer the ACK toward A.
+            b.gossipEngine.messagesForExchange(b.userId)  // drains scheduler head
+            assertTrue(
+                "DIRECT_ACK must be re-offerable from the store (backfill), not scheduler-only",
+                b.gossipEngine.messagesForExchange(a.userId).any { it.id == ackOnB.id },
+            )
+
             // B → A: the ACK returns to A, which raises a delivery receipt.
             SimTransport(b, a).exchange(kotlin.random.Random(2))
             awaitUntil { dm.id in receipts }
