@@ -27,6 +27,7 @@ import com.rumor.mesh.core.model.withTtlSplit
 import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.routing.BreadcrumbCache
 import com.rumor.mesh.core.routing.MeshViewTracker
+import com.rumor.mesh.core.model.OnlineStatus
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.scheduler.Scheduler
@@ -156,6 +157,19 @@ class GossipEngine(
      */
     private val meshView: MeshViewTracker? = null,
 ) {
+    /**
+     * O198/liveness routing prototype (default OFF — preserves baseline behaviour;
+     * sim-validated in `RoutingBandwidthSweepTest` / `SmartRoutingDropoutTest`, see
+     * docs/SIM_HARNESS_RESULTS.md "mid-path dropout"). When ON, [messagesForExchange]
+     * floods a routed DM when NONE of its breadcrumb candidates are currently ONLINE,
+     * instead of offering only to a stale (possibly dead) next-hop and stranding the
+     * DM at a mid-path dropout. Uses [OnlineStatusTracker]'s 5-minute direct-contact
+     * window as the "reachable now" signal. A prototype toggle, not yet a shipped
+     * default — the residual downstream-cut case still wants the O202 ACK backstop.
+     */
+    @Volatile
+    var livenessRouting: Boolean = false
+
     /** O79 receive-side subscription snapshot consumed by ROOM_MESSAGE dispatch. */
     interface RoomSubscriptionProvider {
         /** OPEN-mode roomIds the local user is subscribed to. */
@@ -927,7 +941,22 @@ class GossipEngine(
                 msg.recipientId != peerUserId
             ) {
                 val candidates = breadcrumbs.candidatePeers(msg.recipientId)
-                if (candidates.isNotEmpty() && peerUserId !in candidates) continue
+                if (candidates.isNotEmpty()) {
+                    if (livenessRouting) {
+                        // O198/liveness prototype (default off — sim-backed, see
+                        // docs/SIM_HARNESS_RESULTS.md "mid-path dropout"). A crumb
+                        // whose next-hop isn't currently ONLINE is a dead route, not
+                        // a valid target: restrict to live candidates, and flood
+                        // (don't skip) when NONE are live — instead of faithfully
+                        // offering into a hole and stranding the DM at the break.
+                        val live = candidates.filter {
+                            onlineStatusTracker.statusFor(it) == OnlineStatus.ONLINE
+                        }
+                        if (live.isNotEmpty() && peerUserId !in live) continue
+                    } else if (peerUserId !in candidates) {
+                        continue
+                    }
+                }
             }
             routedFiltered.add(msg)
         }
