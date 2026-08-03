@@ -1370,31 +1370,34 @@ class GossipEngine(
             MessageType.DIRECT, MessageType.DIRECT_ACK -> {
                 val localId = identityProvider.identity.value?.userId
                 if (msg.recipientId == localId) return
-                val forwarded = messageStore.decrementHops(msg) ?: return
 
                 // O29 per-peer routing decision. If breadcrumbs name candidate
-                // peers for the recipient, mark this relay as routed-to-those-
-                // peers and increment routedHops (NOT floodedHops). Otherwise
-                // fall back to flood: leave intendedPeers null and decrement
-                // floodedHops via the legacy hopsToLive path. Hard ceiling at
-                // MAX_TOTAL_HOPS regardless of split.
-                val recipientId = forwarded.recipientId
+                // peers for the recipient, take the ROUTED path; otherwise flood.
+                // O160: decide FIRST, then spend the matching budget — a routed
+                // hop must NOT touch the legacy hopsToLive/floodedHops flood
+                // budget, or every routed DM still dies at MAX_DIRECT_HOPS and
+                // the wider MAX_TOTAL_HOPS ceiling the split exists to unlock is
+                // never reachable (routed reach collapses to blind-flood reach).
+                val recipientId = msg.recipientId
                 val candidates = if (breadcrumbs != null && recipientId != null) {
                     breadcrumbs.candidatePeersSync(recipientId).toSet().takeIf { it.isNotEmpty() }
                 } else null
 
                 val withSplit = if (candidates != null) {
-                    // Routed hop: increment routedHops, leave floodedHops at
-                    // the inherited value (don't decrement). intendedPeers
-                    // restricts the next offer batch to the matched peers.
-                    val newRouted = (forwarded.routedHops + 1).coerceAtMost(MAX_TOTAL_HOPS)
-                    forwarded.withTtlSplit(
+                    // Routed hop: consume a routedHop only. hopsToLive and
+                    // floodedHops are preserved so the confirmed-route path
+                    // reaches farther than a flood, bounded solely by the
+                    // MAX_TOTAL_HOPS ceiling below. intendedPeers restricts the
+                    // next offer batch to the matched peers.
+                    val newRouted = (msg.routedHops + 1).coerceAtMost(MAX_TOTAL_HOPS)
+                    msg.withTtlSplit(
                         routedHops = newRouted,
-                        floodedHops = forwarded.floodedHops,
+                        floodedHops = msg.floodedHops,
                     ).copy(intendedPeers = candidates)
                 } else {
-                    // Flood fallback: floodedHops decrements via the existing
-                    // hopsToLive path already done by decrementHops.
+                    // Flood fallback: burn one unit of the legacy hopsToLive
+                    // budget (dies at 0) and mirror it into floodedHops.
+                    val forwarded = messageStore.decrementHops(msg) ?: return
                     forwarded.withTtlSplit(
                         routedHops = forwarded.routedHops,
                         floodedHops = forwarded.hopsToLive,

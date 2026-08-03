@@ -17,7 +17,14 @@ proved it works.
    *actually delivered to the person* — not just "handed to a nearby phone".
    Validated in the simulator. ✅ shipped + committed.
 
-2. *(further level-1 items appended below as I work through them)*
+2. **Fixed a routing bug where "smart-routed" DMs died just as early as dumb
+   ones** (O160). A direct message that knows the way to its recipient is
+   supposed to be allowed to travel *twice as far* as one that's just blindly
+   flooding the mesh — but a counter bug meant both died at the same 15-hop
+   limit, so the smart routing bought nothing. Now smart-routed DMs get their
+   full 30-hop reach. Pure protocol fix, sim-validated. ✅ shipped.
+
+3. *(further level-1 items appended below as I work through them)*
 
 ---
 
@@ -77,6 +84,36 @@ purely in the protocol layer (no UI needed) and honest.
 
 ---
 
+## 2. O160 — routed DMs now actually reach farther than flooded ones
+
+### ELI5
+Every message has a "hop budget" — how many phone-to-phone relays it's allowed
+before it gives up. Rumor has two ways to move a direct message:
+- **Flooding**: shout it in every direction hoping it reaches the person (budget:
+  15 hops).
+- **Routing**: when phones have learned a breadcrumb trail toward the recipient,
+  pass it deliberately along that trail (allowed a bigger budget: up to 30 hops,
+  because a deliberate path is worth spending more on).
+
+The bug: the code subtracted from the *flood* budget on **every** hop, even
+routed ones. So a routed message ran out of its flood budget at 15 hops and died
+— never getting to use the extra 15 hops routing was supposed to grant. Smart
+routing gave **zero extra reach**. A test even had a fudged assertion quietly
+hiding this.
+
+### The fix
+Routed hops now spend only the routing counter and leave the flood budget
+untouched. A routed DM can travel its full 30 hops; a flooded one still stops at
+15. Fixed the fudged test to assert the budgets exactly (it would now catch a
+regression instead of hiding it).
+
+### Where / proof
+`GossipEngine.relay()` DIRECT branch (`core/.../protocol/GossipEngine.kt`).
+`PerPeerRoutingTest` tightened: a routed hop must leave `floodedHops` and
+`hopsToLive` exactly unchanged. Full `:core` + `:simulator` suites green.
+
+---
+
 ## Things that need YOUR decision (I did NOT do these — flagged and moved on)
 
 *(populated below as I hit them)*
@@ -87,3 +124,21 @@ purely in the protocol layer (no UI needed) and honest.
   `deliveredAtMs` column) + Compose UI work. Per our rule I don't ship schema
   migrations without you. Want me to do the schema bump (dev uses destructive
   migration, so it's low-risk pre-release) next session, or hold it?
+
+- **O193/O202 delivery-hardening full build-out (retry-cancel + on-ack
+  eviction).** My DIRECT_ACK just *unblocked* O193's on-ack trigger (the backlog
+  literally said "not built: no delivery-receipt message type exists"). The next
+  steps — (a) sender stops re-offering a DM once it's confirmed delivered, and
+  (b) a relay drops its cached copy of a DM when it sees the matching ACK go by —
+  both need decisions only you should make:
+  - **Sender-side suppression** needs a "delivered" flag on the stored message =
+    the same **Room schema bump** as above.
+  - **Relay-side on-ack eviction** is per-message, sender-opt-in, **default OFF**
+    per O193 (forward-then-forget fights store-and-forward, the mesh's whole
+    value). That means new **policy knobs + a UI toggle** and a choice of
+    defaults (the sim recommended bundle is *spray-k + on-ack + TTL*, k≈4,
+    X≈24h). I don't want to pick your privacy/deliverability defaults for you.
+  - **My recommendation:** next session, do the schema bump once and wire BOTH
+    the "delivered ✓✓" UI and sender-side offer-suppression on top of it (safe,
+    default-on, pure win). Hold relay-eviction until you've set the policy
+    defaults. Flagged, moving on.

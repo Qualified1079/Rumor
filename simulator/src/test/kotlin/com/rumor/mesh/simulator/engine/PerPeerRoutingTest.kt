@@ -125,12 +125,18 @@ class PerPeerRoutingTest {
                 "(was $originalRoutedHops, now ${relayed!!.routedHops})",
             relayed.routedHops > originalRoutedHops,
         )
-        // floodedHops must not decrement on a routed hop — the routed path
-        // carries the inherited value forward rather than burning flood budget.
-        assertTrue(
-            "floodedHops must not be smaller than the original after a routed hop " +
+        // O160: a routed hop must NOT burn the flood budget at all — floodedHops
+        // is preserved exactly (the previous `>= original - 1` fudge masked the
+        // bug where hopsToLive was decremented unconditionally, collapsing routed
+        // reach to flood reach). It stays equal, and hopsToLive is untouched.
+        assertEquals(
+            "floodedHops must be unchanged after a routed hop " +
                 "(was $originalFloodedHops, now ${relayed.floodedHops})",
-            relayed.floodedHops >= originalFloodedHops - 1,  // allow a single decrementHops
+            originalFloodedHops, relayed.floodedHops,
+        )
+        assertEquals(
+            "hopsToLive (legacy flood budget) must be unchanged after a routed hop",
+            dm.hopsToLive, relayed.hopsToLive,
         )
     }
 
