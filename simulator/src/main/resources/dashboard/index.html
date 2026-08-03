@@ -54,7 +54,9 @@
     <button id="btnReset">Reset</button>
   </div>
   <div class="controls">
-    <button id="btnRandom">Randomize all</button>
+    <button id="btnRandom" title="Randomize every slider to a watchable-mesh value. Leave the seed blank for a fresh random config (its seed is shown so you can replay it); type a seed to reproduce a past config exactly.">Randomize all</button>
+    <input id="randSeed" type="text" inputmode="numeric" placeholder="seed (blank = random)" style="width:150px;">
+    <span id="lastSeed" style="font-size:12px;opacity:0.75;"></span>
     <button id="btnReport" title="Point-in-time snapshot of current world state">Snapshot live sim</button>
     <button id="btnTrace" title="Download the per-tick history of this dashboard run (last 10 sim-minutes)">Download run history</button>
   </div>
@@ -108,7 +110,15 @@ $("btnStart").onclick  = e => post("/api/start", e.currentTarget);
 $("btnStop").onclick   = e => post("/api/stop",  e.currentTarget);
 $("btnStep").onclick   = e => post("/api/step",  e.currentTarget);
 $("btnReset").onclick  = e => { post("/api/reset", e.currentTarget); nodeActivity.clear(); edgeActivity.clear(); };
-$("btnRandom").onclick = e => post("/api/randomize", e.currentTarget).then(loadParams);
+$("btnRandom").onclick = async e => {
+  flash(e.currentTarget);
+  const s = $("randSeed").value.trim();
+  const q = s ? ("?seed=" + encodeURIComponent(s)) : "";
+  const res = await fetch("/api/randomize" + q, { method:"POST" });
+  const j = await res.json().catch(() => null);
+  if (j && j.seed !== undefined) { $("lastSeed").textContent = "seed: " + j.seed; $("randSeed").value = j.seed; }
+  loadParams();
+};
 $("btnReport").onclick = e => { flash(e.currentTarget); window.location = "/api/report"; };
 $("btnTrace").onclick = async e => {
   flash(e.currentTarget);

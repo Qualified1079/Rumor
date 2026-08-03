@@ -108,8 +108,14 @@ class DashboardServer(
                 }
 
                 post("/api/randomize") {
-                    world.params.randomizeAll(Random.Default)
-                    call.ok()
+                    // Reproducible: an explicit ?seed= replays a past config exactly;
+                    // otherwise mint a fresh seed, randomize from it, and return it so
+                    // a surprising config can be re-run. (The values are also visible
+                    // on the refreshed sliders — this makes the *generator* replayable.)
+                    val seed = call.request.queryParameters["seed"]?.trim()?.toLongOrNull()
+                        ?: Random.Default.nextLong()
+                    world.params.randomizeAll(Random(seed))
+                    call.respondText("""{"seed":$seed}""", ContentType.Application.Json)
                 }
 
                 get("/api/report") {
