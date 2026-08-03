@@ -38,6 +38,90 @@ should still be treated with normal suspicion regardless of this note.
 
 ---
 
+# Handoff — DIRECT_ACK + routing redesign/validation + audit cleanup (2026-08-02 → 08-03)
+
+Away-mode session (user stepped in and out; corrected me twice — both corrections
+were right). Pure `:core`/`:simulator`, no phone. Everything below is committed +
+pushed to `main` and green EXCEPT the one `@Ignore`d WIP test called out first.
+
+## ⭐ TOP PRIORITY FOR NEXT INSTANCE — finish the mid-path-dropout routing test
+
+**The open question the user most wants answered:** when a relay *on a routed
+DM's breadcrumb path* drops offline, does breadcrumb routing still deliver (fall
+back / re-route), or is it MORE fragile than dumb flooding (which has redundant
+copies in flight)? This is the honest flip-side of this session's headline result
+(routing "targets" 2.6× tighter — fewer nodes touched — which by construction
+means fewer redundant copies).
+
+- **Test exists but is `@Ignore`d, WIP:** `simulator/.../engine/SmartRoutingDropoutTest.kt`.
+  Topology = two node-disjoint parallel paths A→B; take a mid-path relay (`p2`)
+  offline; 3 arms — FLOOD, ROUTED-single-path-crumbs, ROUTED-both-paths-crumbs.
+- **Why it's ignored:** the FLOOD arm currently returns `false` (should trivially
+  deliver via path 2) → almost certainly a HARNESS bug, not a real finding. Debug
+  suspects are written in the test's class KDoc: `dmId` resolution
+  (`knownMessages().first()` may not be the DM / scheduler copy not yet in repo),
+  two-path topology connectivity, propagation timing. Add the
+  `println("DROPOUT-RESULT flood=$flood single=$single multi=$multi")` I was about
+  to add when interrupted, print per-node has-DM, and fix the harness.
+- **Expected/intended finding once flood works:** single-path routing STRANDS the
+  DM at the dead relay (the `intendedPeers`/crumb filter offers only to the dead
+  next-hop, never floods to path 2) → `single=false`; multi-path crumb diversity
+  (top-K candidate set holds both first hops) recovers it → `multi=true`. If that
+  holds, it's an important honest caveat to the targeting win: **tight targeting
+  trades delivery-robustness for privacy/bandwidth; crumb diversity (top-K), not
+  flooding, is what buys resilience back.** Write it up in `docs/SIM_HARNESS_RESULTS.md`
+  and consider whether `messagesForExchange` should fall back to flood when all
+  crumb candidates are demonstrably stale (hard — a node can't easily tell a
+  candidate is offline; ties to O194/O198).
+- **Faithful-harness rule (learned the hard way this session):** `SimTransport`
+  CANNOT test routing — it offers the raw repo snapshot, ignoring `hopsToLive`
+  decrement, the `offerable` filter, and (critically) leaking `@Transient`
+  `intendedPeers` across the in-process "wire". Drive routing tests through the
+  REAL `GossipEngine.messagesForExchange` + `deliverExchange`, and round-trip every
+  offered message through `WireJson.encode/decode` to strip transients exactly as a
+  socket would. `SmartRoutingReachTest`/`SmartRoutingDropoutTest` show the pattern.
+
+## What shipped this session (all committed + pushed to main, suites green)
+- **O202 — on-receipt end-to-end DM delivery ACK (`DIRECT_ACK`).** New MessageType;
+  recipient auto-ACKs on receipt; sender learns via `GossipEngine.deliveryReceipts`.
+  Relay-never-ACKs, no ack-loop, signed acked-id, inbox-suppressed, once-per-DM.
+  Later hardened: DIRECT_ACK now backfills from `offerable` + routes with the
+  breadcrumb re-derivation like a DIRECT (was scheduler-copy-only = fragile).
+  `DirectAckDeliveryTest`.
+- **O160 — routed/flooded TTL split, redesigned after user correction.** First fix
+  (routed = 2× flood budget) was a flat ration; user: routed hops should ride the
+  breadcrumb FREE and only spend flood budget where the trail ends. Final: routed
+  hops advance a `routedHops` odometer bounded only by `MAX_ROUTED_HOPS=64` (a
+  stale-trail cap; dedup is the real loop-breaker); flood budget spent only on the
+  no-crumb fallback. Removed the coupled `MAX_TOTAL_HOPS` ceiling.
+- **O204 (filed, sim-DONE) — `hopsToLive` does NOT bound reach.** The durable
+  store-backfill (`offerable`, `hopsToLive>0` only) re-offers stored copies at
+  their as-received TTL; the per-hop decrement lives only on the ephemeral relay
+  copy. So flood + routed both reach the whole dedup-bounded component. **Routing's
+  real, validated benefit is TARGETING, not reach:** `SmartRoutingReachTest` — a
+  routed DM touched 10/26 nodes (backbone only) vs flood 26/26. (This is what the
+  dropout test above is stress-testing.)
+- **O171 / O176 / O177 / O158** — audit-residue fixes: lock `PersistenceCoordinator.recent`;
+  cap `BreadcrumbCache.snapshot` (2048); wire the 4th orphaned prune
+  (`MeshViewTracker.pruneStale`) into `pruneMaintenance` + guard test; release chunk
+  BLOBs after a completed transfer (happy-path storage leak) + regression guard
+  (first real coverage toward O159).
+
+## Still parked on USER DECISION (do not build without a call — O203)
+- "Delivered ✓✓" UI + delivery-state persistence → needs a **Room schema bump**.
+- Relay-side on-ack eviction (O193) → needs privacy/deliverability **policy
+  defaults** (sim-recommended bundle: spray-k + on-ack + TTL, k≈4, X≈24h, default-OFF).
+- Recommendation recorded in `docs/OPEN_BACKLOG.md` O203: do the schema bump once,
+  wire the ✓✓ UI + safe default-on sender-side offer-suppression together; hold
+  relay-eviction until defaults are set.
+
+## Where the prose lives
+- Plain-English ELI5 of the whole session (for the user): `docs/SESSION_ELI5_2026-08-02.md`.
+- Sim numbers + methodology: `docs/SIM_HARNESS_RESULTS.md` (O160/O204 section).
+- Backlog rows: O202/O203/O204 (+ indexed in CLAUDE.md Tier 4); O158/O160/O171/O176/O177 marked DONE.
+
+---
+
 # Handoff — simulation campaign for delivery/privacy design (2026-08-01 → 08-02)
 
 Away-mode session (user: "simulation session, validating concepts in the todo").
