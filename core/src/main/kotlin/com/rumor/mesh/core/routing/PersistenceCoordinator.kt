@@ -21,7 +21,12 @@ import com.rumor.mesh.core.model.UserMode
  * beacons computes the identical link set, so both endpoints of a backbone edge
  * independently decide to hold it — no coordinator, no election.
  *
- * Not thread-safe; drive it from one coroutine (the mesh loop).
+ * O171: on Android [onExchanged] (exchange callback), [beaconNeighbors] (beacon
+ * loop) and [recompute] (recompute loop) fire from independent coroutines on
+ * `Dispatchers.Default`, so the [recent] MRU set is guarded by [recentLock] —
+ * an unsynchronized `LinkedHashSet` there risked a `ConcurrentModificationException`
+ * that would silently kill whichever loop was iterating. Everything else is
+ * either `@Volatile` or written only from [recompute].
  */
 class PersistenceCoordinator(
     private val selfId: String,
@@ -42,6 +47,9 @@ class PersistenceCoordinator(
      */
     private val recent = LinkedHashSet<String>()
 
+    /** Guards [recent] — see O171 note in the class KDoc. */
+    private val recentLock = Any()
+
     @Volatile
     private var _backbonePeers: Set<String> = emptySet()
 
@@ -55,15 +63,17 @@ class PersistenceCoordinator(
     /** Record a completed exchange so the peer counts as a realizable edge. */
     fun onExchanged(peerUserId: String) {
         if (peerUserId == selfId) return
-        recent.remove(peerUserId)          // re-insert at MRU end
-        recent.add(peerUserId)
-        while (recent.size > recentPeerLimit) {
-            recent.remove(recent.iterator().next())
+        synchronized(recentLock) {
+            recent.remove(peerUserId)          // re-insert at MRU end
+            recent.add(peerUserId)
+            while (recent.size > recentPeerLimit) {
+                recent.remove(recent.iterator().next())
+            }
         }
     }
 
     /** The adjacency to advertise in this node's SELF_PRESENCE beacon. */
-    fun beaconNeighbors(): List<String> = recent.toList()
+    fun beaconNeighbors(): List<String> = synchronized(recentLock) { recent.toList() }
 
     /**
      * Recompute the backbone from the current view and fold it through the
@@ -75,7 +85,7 @@ class PersistenceCoordinator(
         val view = meshView.assembleView(
             selfId = selfId,
             selfMode = selfMode(),
-            selfNeighbors = recent.toList(),
+            selfNeighbors = synchronized(recentLock) { recent.toList() },
         )
         val plan = PersistencePlanner.plan(view, redundancy)
         val delta = reconciler.reconcile(plan)
