@@ -11,124 +11,132 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 
 /**
- * O160/O204 follow-up — what happens to a routed DM when a relay ON THE PATH
- * drops off? This is the honest stress test of the "routing targets tighter than
- * flooding" result: tighter targeting means fewer redundant copies, so it should
- * be MORE fragile to a mid-path dropout. Measured here, faithfully (real offer
- * path + WireJson wire round-trip, same as SmartRoutingReachTest).
+ * O160/O204 follow-up — does breadcrumb routing (a) save bandwidth vs flooding
+ * and (b) stay as reliable as flooding when a relay ON THE PATH drops off, by
+ * falling back to flood where the trail breaks?
  *
- * Topology: TWO node-disjoint parallel paths from A to B, each 3 relays long:
- *   A ── p1 ── p2 ── p3 ── B          (path 1)
- *   A ── q1 ── q2 ── q3 ── B          (path 2)
- * We take **p2 offline** (skip its edges) so path 1 is severed but B is still
- * reachable via path 2. Three arms, same topology:
- *   1. FLOOD (no crumbs): A sprays both paths → survives via path 2.
- *   2. ROUTED, single-path crumbs (trail only along path 1): A offers only to p1,
- *      p1 only to the dead p2 → the DM is stranded, B never gets it. This is the
- *      fragility cost of tight targeting, made concrete.
- *   3. ROUTED, multi-path crumbs (A also holds a crumb via q1, top-K): routing
- *      fans to both first hops → survives via path 2. So crumb *diversity* (the
- *      top-K candidate set) is what buys back resilience, not flooding.
+ * Measured faithfully (real `messagesForExchange` + `deliverExchange` offer path,
+ * every offer round-tripped through `WireJson` to strip `@Transient` `intendedPeers`
+ * exactly as a socket would — see SmartRoutingReachTest for why `SimTransport`
+ * cannot model routing). Two metrics per arm: **delivered?** (B has the DM) and
+ * **touched** (# nodes that received it = bandwidth proxy; re-offers are
+ * summary-suppressed on the real wire, so nodes-reached ≈ payload transmissions).
+ *
+ * Topology — one straight crumb chain A→m1→m2→m3→B, a BYPASS around m2 (m1─r─m3),
+ * and bystander leaves hung off the interior relays so flood has extra to spray:
+ *
+ *        L1a L1b            L3a L3b
+ *          \ /                \ /
+ *   A ──── m1 ──── m2 ──── m3 ──── B
+ *           \______ r ______/          (bypass: m1─r─m3)
+ *
+ * m2 is taken OFFLINE. B is still reachable via the bypass m1─r─m3.
+ *
+ * Three arms:
+ *   1. FLOOD (no crumbs): delivers via the bypass, sprays every bystander. Reliable, expensive.
+ *   2. ROUTED, naive single crumb (straight line only; m1's ONE crumb is the dead m2):
+ *      m1 faithfully offers only to the dead m2 and — critically — does NOT fall
+ *      back to flood, because it still HAS a crumb (a stale one is not "no route").
+ *      The DM is STRANDED at m1. Cheap but BROKEN. This is the honest fragility of
+ *      tight targeting: the current fallback is "flood if no crumb", not "flood if
+ *      the crumb target is unreachable", and a node can't cheaply tell m2 is dead.
+ *   3. ROUTED, crumb diversity (m1 caches BOTH next-hops toward B: m2 AND r — a
+ *      top-K trail, all from locally-available cache): m1 still offers to the live
+ *      r, r has no crumb so it floods onward to m3, m3's crumb carries it to B.
+ *      Delivers AND still skips every bystander. Reliable AND cheap.
+ *
+ * Conclusion the arms encode: crumb *diversity* (keeping >1 cached next-hop), not
+ * flooding, is what buys back delivery-robustness while preserving the bandwidth
+ * win. A single stale crumb is strictly worse than flooding under a mid-path drop.
  */
 class SmartRoutingDropoutTest {
 
-    // 0=A, 1=B, path1 = 2,3,4 (p1,p2,p3), path2 = 5,6,7 (q1,q2,q3)
+    // 0=A 1=B 2=m1 3=m2(dead) 4=m3 5=r(bypass) 6,7=leaves off m1 8,9=leaves off m3
     private val A = 0; private val B = 1
-    private val p1 = 2; private val p2 = 3; private val p3 = 4
-    private val q1 = 5; private val q2 = 6; private val q3 = 7
+    private val m1 = 2; private val m2 = 3; private val m3 = 4; private val r = 5
+    private val leaves = listOf(6, 7, 8, 9)
 
-    private enum class Crumbs { NONE, PATH1_ONLY, BOTH_PATHS }
+    private enum class Crumbs { NONE, SINGLE, DIVERSE }
+    private data class Arm(val delivered: Boolean, val touched: Int)
 
-    // WIP — DO NOT trust the assertions yet. Current state: the FLOOD arm returns
-    // false (line-46 assert fails), which is almost certainly a HARNESS bug, not a
-    // real finding — flood should trivially deliver via path 2. Likely suspects to
-    // debug next: (1) `dmId` resolution — `knownMessages().first()` may not be the
-    // DM (ordering) or composeDirect's scheduler copy isn't in the repo yet; add a
-    // `println("DROPOUT-RESULT flood=$flood single=$single multi=$multi dmId=...")`
-    // and print each node's has-DM; (2) the two-path topology may not actually
-    // connect A→B (check edge wiring / that q-path relays forward with NONE crumbs);
-    // (3) 30 rounds / propagation timing on 8 nodes. Once flood delivers, the REAL
-    // question this test exists to answer is whether SINGLE-PATH routing strands the
-    // DM at the dead relay (expected true) and MULTI-PATH (top-K crumb diversity)
-    // recovers it. @Ignore so the suite stays green until it's validated.
-    @Ignore("WIP — flood arm returns false (harness bug, not a finding); see class KDoc + handoff")
     @Test
-    fun `mid-path dropout — flood and multi-path routing survive, single-path routing does not`() = runBlocking<Unit> {
-        val flood = deliversToB(Crumbs.NONE)
-        val single = deliversToB(Crumbs.PATH1_ONLY)
-        val multi = deliversToB(Crumbs.BOTH_PATHS)
-        println("DROPOUT-RESULT flood=$flood single=$single multi=$multi")
+    fun `mid-path dropout — flood and crumb-diverse routing deliver, a single stale crumb strands`() = runBlocking<Unit> {
+        val flood = run(Crumbs.NONE)
+        val single = run(Crumbs.SINGLE)
+        val diverse = run(Crumbs.DIVERSE)
+        println("DROPOUT-RESULT flood=$flood single=$single diverse=$diverse")
 
-        assertTrue("FLOOD must deliver via the alternate path when p2 drops", flood)
+        // Positive control: plain flood must deliver via the bypass and — being
+        // flood — must spray the bystanders too (high bandwidth).
+        assertTrue("FLOOD must deliver via the bypass when m2 drops", flood.delivered)
+        assertTrue("FLOOD must spray bystanders (high touch)", flood.touched >= 8)
+
+        // The fragility: a naive single (now-stale) crumb strands the DM at m1 —
+        // strictly WORSE than flooding under a mid-path drop.
         assertFalse(
-            "SINGLE-PATH routing must FAIL when its one path's relay drops — the " +
-                "honest fragility cost of tight targeting (no redundant copies)",
-            single,
+            "A single stale crumb must STRAND the DM (m1 offers only to the dead m2, " +
+                "never falls back to flood) — the honest cost of tight targeting",
+            single.delivered,
         )
+
+        // The variation that works, using only locally-cached alternates: crumb
+        // diversity delivers AND stays cheaper than flood (bystanders untouched).
+        assertTrue("crumb-diverse routing must deliver via the cached bypass hop", diverse.delivered)
         assertTrue(
-            "MULTI-PATH routing (crumb diversity / top-K) must survive the dropout",
-            multi,
+            "crumb-diverse routing must be cheaper than flood " +
+                "(diverse=${diverse.touched} < flood=${flood.touched})",
+            diverse.touched < flood.touched,
         )
     }
 
-    /** Build the two-path topology, sever p2, run to steady state, return "did B get the DM?". */
-    private suspend fun deliversToB(crumbs: Crumbs): Boolean {
+    private suspend fun run(crumbs: Crumbs): Arm {
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         try {
-            val n = (0..7).map { SimNode(it, scope) }
+            val n = (0..9).map { SimNode(it, scope) }
             registerContact(n[A], n[B])
 
-            // All edges of the two disjoint paths.
             val allEdges = listOf(
-                A to p1, p1 to p2, p2 to p3, p3 to B,   // path 1
-                A to q1, q1 to q2, q2 to q3, q3 to B,   // path 2
+                A to m1, m1 to m2, m2 to m3, m3 to B,   // straight chain
+                m1 to r, r to m3,                       // bypass around m2
+                m1 to 6, m1 to 7, m3 to 8, m3 to 9,     // bystander leaves
             )
-            // p2 is offline: drop every edge that touches it.
-            val liveEdges = allEdges.filterNot { it.first == p2 || it.second == p2 }
+            val liveEdges = allEdges.filterNot { it.first == m2 || it.second == m2 }
 
             when (crumbs) {
                 Crumbs.NONE -> {}
-                Crumbs.PATH1_ONLY -> {
-                    // "to reach B, go via the next node up path 1"
-                    n[A].breadcrumbs.record(n[B].userId, n[p1].userId)
-                    n[p1].breadcrumbs.record(n[B].userId, n[p2].userId)
-                    n[p3].breadcrumbs.record(n[B].userId, n[B].userId)
+                Crumbs.SINGLE -> {
+                    n[A].breadcrumbs.record(n[B].userId, n[m1].userId)
+                    n[m1].breadcrumbs.record(n[B].userId, n[m2].userId)   // single crumb → the dead node
+                    n[m3].breadcrumbs.record(n[B].userId, n[B].userId)
                 }
-                Crumbs.BOTH_PATHS -> {
-                    // A holds crumbs toward B via BOTH first hops (top-K), and each
-                    // path's relays know their own next hop.
-                    n[A].breadcrumbs.record(n[B].userId, n[p1].userId)
-                    n[A].breadcrumbs.record(n[B].userId, n[q1].userId)
-                    n[p1].breadcrumbs.record(n[B].userId, n[p2].userId)
-                    n[p3].breadcrumbs.record(n[B].userId, n[B].userId)
-                    n[q1].breadcrumbs.record(n[B].userId, n[q2].userId)
-                    n[q2].breadcrumbs.record(n[B].userId, n[q3].userId)
-                    n[q3].breadcrumbs.record(n[B].userId, n[B].userId)
+                Crumbs.DIVERSE -> {
+                    n[A].breadcrumbs.record(n[B].userId, n[m1].userId)
+                    n[m1].breadcrumbs.record(n[B].userId, n[m2].userId)   // top-K: the (dead) straight hop
+                    n[m1].breadcrumbs.record(n[B].userId, n[r].userId)    //   AND the live bypass hop
+                    n[m3].breadcrumbs.record(n[B].userId, n[B].userId)
                 }
             }
             if (crumbs != Crumbs.NONE) delay(50)
 
-            n[A].gossipEngine.composeDirect(
+            val dmId = n[A].gossipEngine.composeDirect(
                 recipientId = n[B].userId,
                 recipientPublicKey = n[B].identityProvider.identity.value!!.publicKeyBytes,
                 text = "survive?",
-            ) ?: error("composeDirect null")
-            val dmId = n[A].knownMessages().firstOrNull()?.id
-                ?: n[A].gossipEngine.messagesForExchange(n[p1].userId).firstOrNull()?.id
+            )?.id ?: error("composeDirect null")
 
             repeat(30) {
                 for ((x, y) in liveEdges) {
                     realExchange(n[x], n[y]); realExchange(n[y], n[x])
                 }
                 delay(5)
-                if (dmId != null && n[B].messageRepo.getById(dmId) != null) return true
             }
             delay(40)
-            return dmId != null && n[B].messageRepo.getById(dmId) != null
+
+            val touched = (0..9).count { n[it].messageRepo.getById(dmId) != null }
+            return Arm(delivered = n[B].messageRepo.getById(dmId) != null, touched = touched)
         } finally {
             scope.cancel()
         }

@@ -392,3 +392,95 @@ run (LanMeshHarness over real TCP) is socket/`GossipSession` framing + timing,
 which don't touch the routing/targeting logic (all in `:core`, run verbatim). A
 multi-node `:node` cross-check of the 10-backbone topology is a possible deeper
 confirmation but is not expected to change the result.
+
+---
+
+## Mid-path dropout — routing robustness vs bandwidth, and scheme permutations (2026-08-03)
+
+Follow-up to O204's "routing buys targeting, not reach": if the win is *tighter*
+targeting (fewer redundant copies), is routing MORE fragile than flooding when a
+relay **on the path** drops off? And can we buy the robustness back with
+locally-available information? Two artifacts:
+
+- `SmartRoutingDropoutTest` (real `GossipEngine`, the anchor) — a "diamond"
+  topology: straight crumb chain A→m1→m2→m3→B, a bypass m1─r─m3, bystander leaves
+  on m1/m3; **m2 killed**. Three arms, measured through the real offer path:
+  flood delivers/touches 9; a single (now-stale) crumb **strands** (delivered=false,
+  touches 2); crumb-diversity delivers/touches 5.
+- `RoutingBandwidthSweepTest` (abstract model, **gated** to reproduce the real
+  engine's 9/2/5 exactly before any sweep is trusted) — composable schemes swept
+  over chains and 300 random geometric meshes (n=40), plus a learned-crumb
+  population/staleness/relearn regime.
+
+**This is dynamic next-hop routing (O59), confirmed in code.** `RumorMessage`
+carries no path (only `recipientId` + TTL counters); `intendedPeers` is `@Transient`
+(stripped at the wire); each relay consults ITS OWN `breadcrumbs.candidatePeers`.
+The model matches this: the origin always floods to neighbours (targeting is
+relay-only), each relay offers only to its own crumb candidates, flooding when it
+holds none.
+
+### The fragility (answers "is routing as reliable as flooding?")
+
+The current fallback (`GossipEngine.kt:929`) is **"flood iff I hold NO crumb."** A
+*stale* crumb — pointing at a now-dead neighbour — is not "none", so the relay keeps
+offering into the void and never falls back. Naive straight-line routing therefore
+**drops ~26% of deliveries** under a single mid-path dropout (random mesh: 73.7% vs
+flood's 98.7%), while being the cheapest on bandwidth precisely because it strands.
+So "route, then flood when the cache is empty" is **NOT** as reliable as flooding —
+the flood-fallback can't fire on a stale crumb.
+
+### Random mesh, n=40, 300 trials, ideal crumbs (delivery% / mean nodes-touched / rounds)
+
+| scheme | del% | touched | rounds |
+|--------|-----:|--------:|------:|
+| FLOOD | 98.7 | 38.7 | 3.4 |
+| NAIVE (k=1) | 73.7 | 12.0 | 3.2 |
+| DIVERSE (k=3) | 96.0 | 18.8 | 3.4 |
+| LIVE (k=1 + flood-if-next-hop-not-connected) | 95.7 | 17.1 | 3.4 |
+| DIV+LIVE | 96.0 | 18.8 | 3.4 |
+| NAIVE+ACK | 98.7 | 28.1 | 4.7 |
+| **LIVE+ACK** | **98.7** | **26.2** | **3.6** |
+| ALL | 98.7 | 26.3 | 3.6 |
+
+**Reliability lines up on an information axis:** one stale hop (NAIVE) →
+local-neighbourhood (DIVERSE/LIVE, ~96%, but a residual ~3% gap they can't close
+because a single-hop view can't see a *downstream* cut) → end-to-end (any ACK
+scheme, 98.7% = flood).
+
+**Bandwidth:** every delivering routing scheme is < flood, *including the ACK
+schemes* — ACK only pays flood cost on the rare (~3%) routing failure, so in
+aggregate it beats pure flood while matching its reliability.
+
+**Two synergies the permutations revealed:**
+1. **`LIVE+ACK` dominates** — flood-level delivery, ~32% cheaper than flood, and
+   *lower latency* than `NAIVE+ACK` (3.6 vs 4.7 rounds): liveness recovers most
+   deliveries locally and fast, so the slow ACK-escalation path fires far less
+   often. `DIVERSE` adds nothing on top (`ALL`≈`LIVE+ACK`) — once you have liveness,
+   top-K is redundant.
+2. **`LIVENESS` is the best cheap *local* fix** (near-DIVERSE reliability, lower
+   bandwidth, and *much* cheaper on long chains — 28 vs 45 touched at 24 hops —
+   because top-K DIVERSE sprays some off-path neighbours while liveness stays on the
+   one best hop and only floods at the actual break). It needs only the transport's
+   live-peer set.
+
+### Learned-crumb regime (population → staleness → relearn)
+
+Crumbs learned by flooding traffic from the target and recording the reverse-path
+parent, then going stale when a node dies:
+
+- **1 stale flood, no relearn:** DIVERSE == NAIVE (81.7%) — only one parent learned,
+  so top-K degenerates to top-1. Crumb *diversity requires repeated traffic* to
+  accumulate (3 floods → DIVERSE 90.3%).
+- **`relearnOnLive=true`** (fresh post-dropout traffic re-teaches a route around the
+  hole): **everything, incl. NAIVE, → 98.7% at the cheapest cost.** Fresh crumbs beat
+  every heuristic.
+
+**Practical takeaway:** dynamic routing's robustness is governed by crumb
+freshness/diversity, which comes from ongoing traffic. The heuristics matter most in
+the **window between a dropout and re-learning**. Recommendation: **`LIVE+ACK`** —
+liveness covers the common local-dropout case cheaply/fast in that window, ACK
+backstops the rare downstream-cut residual; keep crumbs fresh (cheap background
+traffic / the O202 ACKs already do this) so the naive path recovers between events.
+`LIVENESS` is filed as the concrete next `GossipEngine` change (small: flood a
+routed DM when no crumb candidate is in the current connected-peer set); prototyped
+in `messagesForExchange` and re-validated through `SmartRoutingDropoutTest`.
