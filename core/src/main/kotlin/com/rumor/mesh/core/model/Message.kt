@@ -86,14 +86,24 @@ val RumorMessage.displayTimeMs: Long
     get() = minOf(sentAtMs, receivedAtMs)
 
 /**
- * O32 split-TTL helpers. `floodedHops` decrements only when the relay falls
- * back to flood (no breadcrumb match for this hop); `routedHops` counts
- * confirmed-route hops separately for diagnostics and the hard ceiling.
- * Stored inside the O37-reserved `_ext` map so v0.1 ignores them gracefully.
+ * O32 split-TTL helpers. The two counters are deliberately NOT the same kind of
+ * budget, because a routed hop and a flood hop are not the same kind of cost:
  *
+ *  - `floodedHops` is a *spend-down* budget (default = `hopsToLive`). A flood hop
+ *    is an omnidirectional broadcast — expensive, multiplicative — so it is
+ *    rationed: decremented only when the relay falls back to flood (no breadcrumb
+ *    for the next hop), the message dies at 0.
+ *  - `routedHops` is a *count-up* odometer, NOT a ration. A routed hop is a
+ *    directional unicast forward along a confirmed breadcrumb toward the
+ *    recipient — cheap and convergent — so it does not consume flood budget at
+ *    all: a DM rides a breadcrumb trail of ANY length for free. `routedHops` only
+ *    exists as a staleness/resource bound: the primary loop-breaker is dedup
+ *    (each node relays a given id at most once — see [MAX_ROUTED_HOPS]).
+ *
+ * Stored inside the O37-reserved `_ext` map so v0.1 ignores them gracefully.
  * Default reads when `_ext` is absent: `floodedHops = hopsToLive` (legacy
- * behaviour), `routedHops = 0`. This preserves bit-exact compatibility for
- * any pre-O32 message that hits a post-O32 node.
+ * behaviour), `routedHops = 0` — bit-exact compatibility for any pre-O32 message
+ * that hits a post-O32 node.
  */
 val RumorMessage.routedHops: Int
     get() = (ext?.get("routedHops") as? kotlinx.serialization.json.JsonPrimitive)
@@ -103,8 +113,18 @@ val RumorMessage.floodedHops: Int
     get() = (ext?.get("floodedHops") as? kotlinx.serialization.json.JsonPrimitive)
         ?.content?.toIntOrNull() ?: hopsToLive
 
-/** Hard ceiling on total path length regardless of routed/flooded split (O32). */
-const val MAX_TOTAL_HOPS: Int = 30
+/**
+ * Loop/staleness bound on the number of consecutive-or-total breadcrumb-routed
+ * hops a DM may take (O32/O160). This is deliberately generous — NOT a "reach
+ * ration": routing is meant to carry a message along the *entire* known
+ * breadcrumb path A→B however long it is (the whole point of routing over
+ * flooding). The real loop-breaker is dedup (a node relays a given message id at
+ * most once), so this only caps how far a DM will chase a possibly-stale trail
+ * across a very large mesh before giving up. Far above any realistic mesh
+ * diameter; flood budget ([RumorMessage.hopsToLive], 15) is spent separately and
+ * only at the ends of the known route.
+ */
+const val MAX_ROUTED_HOPS: Int = 64
 
 fun RumorMessage.withTtlSplit(routedHops: Int, floodedHops: Int): RumorMessage {
     val updated = (ext ?: emptyMap()).toMutableMap().apply {

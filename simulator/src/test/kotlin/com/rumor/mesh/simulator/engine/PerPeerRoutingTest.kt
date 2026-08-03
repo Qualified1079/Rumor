@@ -3,9 +3,11 @@ package com.rumor.mesh.simulator.engine
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.floodedHops
 import com.rumor.mesh.core.model.routedHops
+import com.rumor.mesh.core.model.withTtlSplit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -138,6 +140,55 @@ class PerPeerRoutingTest {
             "hopsToLive (legacy flood budget) must be unchanged after a routed hop",
             dm.hopsToLive, relayed.hopsToLive,
         )
+    }
+
+    @Test
+    fun `a deep routed path is not truncated by the flood budget`() = runBlocking {
+        // O160/user-correction: routing is not a "2x flood" ration. A DM that has
+        // already taken many routed hops (more than a flood would ever survive)
+        // must STILL be forwarded along the breadcrumb — the routed odometer is
+        // bounded only by MAX_ROUTED_HOPS, never coupled to the flood budget. The
+        // pre-correction code dropped it (routedHops+floodedHops > 30); the fixed
+        // code carries it on.
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        val a = SimNode(0, scope)
+        val b = SimNode(1, scope)
+        val c = SimNode(2, scope)
+
+        // Lay the breadcrumb "to reach A, go via C" on B (the real way: A→C→B).
+        val seed = a.gossipEngine.composeBroadcast("seed")!!
+        a.flushSchedulerToRepo()
+        SimTransport(a, c).exchange(kotlin.random.Random(21))
+        awaitUntil { c.knownMessages().any { it.id == seed.id } }
+        c.flushSchedulerToRepo()
+        SimTransport(c, b).exchange(kotlin.random.Random(22))
+        awaitUntil { b.breadcrumbs.candidatePeersSync(a.userId).isNotEmpty() }
+
+        registerContact(c, a)
+        val dm = c.gossipEngine.composeDirect(
+            recipientId = a.userId,
+            recipientPublicKey = a.identityProvider.identity.value!!.publicKeyBytes,
+            text = "deep routed",
+        )!!
+        // Stamp the DM as already 40 routed hops in — far past the old 30-hop
+        // coupled ceiling, but with its flood budget fully intact. _ext is
+        // unsigned, so the outer signature stays valid. Seed it into C's repo so
+        // C offers this variant (dedup keeps the pristine scheduler copy out).
+        val deep = dm.withTtlSplit(routedHops = 40, floodedHops = dm.floodedHops)
+        c.seedMessage(deep)
+
+        SimTransport(c, b).exchange(kotlin.random.Random(23))
+        awaitUntil { b.knownMessages().any { it.id == dm.id } && b.schedulerQueueDepth > 0 }
+
+        val relayed = b.gossipEngine.messagesForExchange(c.userId).firstOrNull { it.id == dm.id }
+        assertNotNull("A deep routed DM must still be forwarded along the breadcrumb", relayed)
+        assertTrue(
+            "routedHops must advance past the old flood-coupled ceiling (now ${relayed!!.routedHops})",
+            relayed.routedHops > 30,
+        )
+        assertEquals("flood budget must remain fully intact on a deep routed hop",
+            dm.hopsToLive, relayed.hopsToLive)
+        scope.cancel()
     }
 
     private suspend fun registerContact(host: SimNode, other: SimNode) {

@@ -16,7 +16,7 @@ import com.rumor.mesh.core.model.ChunkRequest
 import com.rumor.mesh.core.model.ContentType
 import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
-import com.rumor.mesh.core.model.MAX_TOTAL_HOPS
+import com.rumor.mesh.core.model.MAX_ROUTED_HOPS
 import com.rumor.mesh.core.model.MultiRecipientEnvelope
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.TrustLevel
@@ -1373,37 +1373,37 @@ class GossipEngine(
 
                 // O29 per-peer routing decision. If breadcrumbs name candidate
                 // peers for the recipient, take the ROUTED path; otherwise flood.
-                // O160: decide FIRST, then spend the matching budget — a routed
-                // hop must NOT touch the legacy hopsToLive/floodedHops flood
-                // budget, or every routed DM still dies at MAX_DIRECT_HOPS and
-                // the wider MAX_TOTAL_HOPS ceiling the split exists to unlock is
-                // never reachable (routed reach collapses to blind-flood reach).
                 val recipientId = msg.recipientId
                 val candidates = if (breadcrumbs != null && recipientId != null) {
                     breadcrumbs.candidatePeersSync(recipientId).toSet().takeIf { it.isNotEmpty() }
                 } else null
 
                 val withSplit = if (candidates != null) {
-                    // Routed hop: consume a routedHop only. hopsToLive and
-                    // floodedHops are preserved so the confirmed-route path
-                    // reaches farther than a flood, bounded solely by the
-                    // MAX_TOTAL_HOPS ceiling below. intendedPeers restricts the
-                    // next offer batch to the matched peers.
-                    val newRouted = (msg.routedHops + 1).coerceAtMost(MAX_TOTAL_HOPS)
+                    // Routed hop (O160): a directional unicast forward along a
+                    // known breadcrumb toward the recipient. It does NOT spend
+                    // any flood budget — a DM rides the breadcrumb trail for its
+                    // full length, however long. Only the routedHops odometer
+                    // advances, bounded by MAX_ROUTED_HOPS purely as a
+                    // stale-trail/resource cap (dedup is the real loop-breaker).
+                    // hopsToLive/floodedHops are preserved untouched, ready to be
+                    // spent as flood budget only once the trail runs out.
+                    val newRouted = msg.routedHops + 1
+                    if (newRouted > MAX_ROUTED_HOPS) return
                     msg.withTtlSplit(
                         routedHops = newRouted,
                         floodedHops = msg.floodedHops,
                     ).copy(intendedPeers = candidates)
                 } else {
-                    // Flood fallback: burn one unit of the legacy hopsToLive
-                    // budget (dies at 0) and mirror it into floodedHops.
+                    // End of the known route: no breadcrumb for the next hop, so
+                    // fall back to flood and spend the ordinary flood budget from
+                    // here (dies at hopsToLive 0). intendedPeers stays null so the
+                    // message is offered to every peer, not a routed subset.
                     val forwarded = messageStore.decrementHops(msg) ?: return
                     forwarded.withTtlSplit(
                         routedHops = forwarded.routedHops,
                         floodedHops = forwarded.hopsToLive,
                     )
                 }
-                if (withSplit.routedHops + withSplit.floodedHops > MAX_TOTAL_HOPS) return
                 enqueueRelayed(withSplit)
             }
             MessageType.PING -> {
