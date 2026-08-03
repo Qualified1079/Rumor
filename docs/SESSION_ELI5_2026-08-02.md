@@ -24,7 +24,14 @@ proved it works.
    limit, so the smart routing bought nothing. Now smart-routed DMs get their
    full 30-hop reach. Pure protocol fix, sim-validated. ✅ shipped.
 
-3. *(further level-1 items appended below as I work through them)*
+3. **Fixed a concurrency crash risk in the backbone coordinator** (O171). A
+   shared list was being read and written by three background loops at once
+   without a lock, which could throw and silently kill the loop that keeps
+   persistent links healthy. Now locked. Pure-core fix. ✅ shipped.
+
+*(Session ended by user 2026-08-03; away mode disabled. Next-up that I did NOT
+start: O176 unbounded breadcrumb snapshot map, O177 dead prune code — both
+bounded pure-core, no approval needed.)*
 
 ---
 
