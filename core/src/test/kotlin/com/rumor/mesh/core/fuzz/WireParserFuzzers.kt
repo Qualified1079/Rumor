@@ -19,6 +19,24 @@ import com.rumor.mesh.core.transport.wifidirect.BloomFilterData
 import com.rumor.mesh.core.wire.WireJson
 
 /**
+ * Run a wire parser under the fuzzer / seed corpus. Production wraps every parser
+ * in `runCatching { … }.getOrNull()`, so a malformed-input [Exception] (the kotlinx
+ * `SerializationException` / `IllegalArgumentException` these parsers throw on bad
+ * bytes, and any NPE) is absorbed here IDENTICALLY to prod — not a finding. But
+ * `runCatching` also catches [Error]: OOM and `StackOverflowError`, the O13-class
+ * resource exhaustion these harnesses EXIST to surface, were being masked (the same
+ * crash-masking bug O170 fixed in `:app`). Catch only [Exception]; let [Error]
+ * propagate — to Jazzer under `JAZZER_FUZZ=1`, or to fail the seed test otherwise.
+ */
+internal inline fun fuzzParse(block: () -> Unit) {
+    try {
+        block()
+    } catch (e: Exception) {
+        // Documented contract: malformed input → prod returns null. Not a crash.
+    }
+}
+
+/**
  * O28 — wire-parser fuzzing. Every parser that deserializes untrusted bytes
  * gets a harness. Jazzer feeds adversarial inputs and asserts the parser
  * doesn't throw anything outside the documented exception types — anything
@@ -40,121 +58,128 @@ import com.rumor.mesh.core.wire.WireJson
  * cases that pattern *misses*: OOM on adversarial sizes (O13 is the known
  * BloomFilter case), stack overflow on deeply nested JSON, integer overflow
  * on length fields, AEAD constructions on truncated Base64.
+ *
+ * **Contract (O170 sibling fix):** every harness runs the parser through
+ * [fuzzParse], NOT `runCatching`. `runCatching` catches [Throwable] — it was
+ * swallowing the OOM / StackOverflowError this harness exists to find, so a
+ * `JAZZER_FUZZ=1` run could never report those. [fuzzParse] absorbs only the
+ * documented malformed-input [Exception] (exactly as prod's
+ * `runCatching{}.getOrNull()` does) and lets [Error] reach Jazzer.
  */
 class WireParserFuzzers {
 
     @FuzzTest
     fun fuzzGossipPacket(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<GossipPacket>(json) }
+        fuzzParse { WireJson.decodeFromString<GossipPacket>(json) }
     }
 
     @FuzzTest
     fun fuzzRumorMessage(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<RumorMessage>(json) }
+        fuzzParse { WireJson.decodeFromString<RumorMessage>(json) }
     }
 
     @FuzzTest
     fun fuzzBlocklist(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<Blocklist>(json) }
+        fuzzParse { WireJson.decodeFromString<Blocklist>(json) }
     }
 
     @FuzzTest
     fun fuzzBlocklistDiff(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<BlocklistDiff>(json) }
+        fuzzParse { WireJson.decodeFromString<BlocklistDiff>(json) }
     }
 
     @FuzzTest
     fun fuzzTransferMetadata(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<TransferMetadata>(json) }
+        fuzzParse { WireJson.decodeFromString<TransferMetadata>(json) }
     }
 
     @FuzzTest
     fun fuzzChunk(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<Chunk>(json) }
+        fuzzParse { WireJson.decodeFromString<Chunk>(json) }
     }
 
     @FuzzTest
     fun fuzzChunkRequest(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<ChunkRequest>(json) }
+        fuzzParse { WireJson.decodeFromString<ChunkRequest>(json) }
     }
 
     @FuzzTest
     fun fuzzTransferCancel(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<TransferCancel>(json) }
+        fuzzParse { WireJson.decodeFromString<TransferCancel>(json) }
     }
 
     @FuzzTest
     fun fuzzBridgeVouchedPayload(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<BridgeVouchedPayload>(json) }
+        fuzzParse { WireJson.decodeFromString<BridgeVouchedPayload>(json) }
     }
 
     @FuzzTest
     fun fuzzSelfPresencePayload(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<SelfPresencePayload>(json) }
+        fuzzParse { WireJson.decodeFromString<SelfPresencePayload>(json) }
     }
 
     @FuzzTest
     fun fuzzRbsrFrameWire(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<RbsrFrameWire>(json) }
+        fuzzParse { WireJson.decodeFromString<RbsrFrameWire>(json) }
     }
 
     @FuzzTest
     fun fuzzKeywordFilterList(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<KeywordFilterList>(json) }
+        fuzzParse { WireJson.decodeFromString<KeywordFilterList>(json) }
     }
 
     @FuzzTest
     fun fuzzMessageDeletePayload(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<MessageDeletePayload>(json) }
+        fuzzParse { WireJson.decodeFromString<MessageDeletePayload>(json) }
     }
 
     @FuzzTest
     fun fuzzPrekeyPublish(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.PrekeyPublish>(json) }
+        fuzzParse { WireJson.decodeFromString<com.rumor.mesh.core.model.PrekeyPublish>(json) }
     }
 
     @FuzzTest
     fun fuzzRoomCreate(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.RoomCreate>(json) }
+        fuzzParse { WireJson.decodeFromString<com.rumor.mesh.core.model.RoomCreate>(json) }
     }
 
     @FuzzTest
     fun fuzzRoomInvite(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.RoomInvite>(json) }
+        fuzzParse { WireJson.decodeFromString<com.rumor.mesh.core.model.RoomInvite>(json) }
     }
 
     @FuzzTest
     fun fuzzRoomAction(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.RoomAction>(json) }
+        fuzzParse { WireJson.decodeFromString<com.rumor.mesh.core.model.RoomAction>(json) }
     }
 
     @FuzzTest
     fun fuzzMultiRecipientEnvelope(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.MultiRecipientEnvelope>(json) }
+        fuzzParse { WireJson.decodeFromString<com.rumor.mesh.core.model.MultiRecipientEnvelope>(json) }
     }
 
     @FuzzTest
     fun fuzzKeyWrap(data: FuzzedDataProvider) {
         val json = data.consumeRemainingAsString()
-        runCatching { WireJson.decodeFromString<com.rumor.mesh.core.model.KeyWrap>(json) }
+        fuzzParse { WireJson.decodeFromString<com.rumor.mesh.core.model.KeyWrap>(json) }
     }
 
     /**
@@ -168,6 +193,6 @@ class WireParserFuzzers {
     fun fuzzBloomFilterData(data: FuzzedDataProvider) {
         val expectedItems = data.consumeInt(1, 100_000)
         val payload = data.consumeRemainingAsString()
-        runCatching { BloomFilterData.deserialize(payload, expectedItems) }
+        fuzzParse { BloomFilterData.deserialize(payload, expectedItems) }
     }
 }
