@@ -429,27 +429,37 @@ flood's 98.7%), while being the cheapest on bandwidth precisely because it stran
 So "route, then flood when the cache is empty" is **NOT** as reliable as flooding —
 the flood-fallback can't fire on a stale crumb.
 
-### Random mesh, n=40, 300 trials, ideal crumbs (delivery% / mean nodes-touched / rounds)
+### Random mesh, n=40, ideal crumbs — 20 000 trials, 19 458 reachable (542 partitioned/excluded)
 
-| scheme | del% | touched | rounds |
-|--------|-----:|--------:|------:|
-| FLOOD | 98.7 | 38.7 | 3.4 |
-| NAIVE (k=1) | 73.7 | 12.0 | 3.2 |
-| DIVERSE (k=3) | 96.0 | 18.8 | 3.4 |
-| LIVE (k=1 + flood-if-next-hop-not-connected) | 95.7 | 17.1 | 3.4 |
-| DIV+LIVE | 96.0 | 18.8 | 3.4 |
-| NAIVE+ACK | 98.7 | 28.1 | 4.7 |
-| **LIVE+ACK** | **98.7** | **26.2** | **3.6** |
-| ALL | 98.7 | 26.3 | 3.6 |
+**The delivery rate is conditioned on B being reachable after the dropout.** A
+loss-free flood can only fail when the killed relay was an *articulation point* —
+its removal PARTITIONS B from A, which no protocol can beat. Those trials are
+unwinnable, not lossy, so they're excluded from the denominator. Once they are, the
+flood ceiling is **exactly 100%** — the earlier "~98.7%" was entirely partitions.
+(The model itself has zero link loss; real link loss/duty-cycle is a separate axis,
+studied in the MeshHarness sweeps above.)
 
-**Reliability lines up on an information axis:** one stale hop (NAIVE) →
-local-neighbourhood (DIVERSE/LIVE, ~96%, but a residual ~3% gap they can't close
-because a single-hop view can't see a *downstream* cut) → end-to-end (any ACK
-scheme, 98.7% = flood).
+| scheme | delivery% | touched | rounds |
+|--------|----------:|--------:|------:|
+| FLOOD | **100.0000** | 38.72 | 3.46 |
+| NAIVE (k=1) | 75.1465 | 11.86 | 3.21 |
+| DIVERSE (k=3) | 97.7079 | 19.13 | 3.41 |
+| LIVE (k=1 + flood-if-next-hop-not-connected) | 97.7490 | 17.10 | 3.42 |
+| DIV+LIVE | 97.7079 | 19.13 | 3.41 |
+| NAIVE+ACK | **100.0000** | 27.47 | 4.65 |
+| **LIVE+ACK** | **100.0000** | **26.20** | **3.58** |
+| ALL | **100.0000** | 26.59 | 3.57 |
+
+**Reliability lines up on an information axis, now exactly:** one stale hop (NAIVE,
+75.1%) → local-neighbourhood (DIVERSE/LIVE, ~97.7%, a *precise* residual ~2.25% that
+a single-hop view provably can't close — it can't see a *downstream* cut) →
+end-to-end (**any ACK scheme = 100.0000%**, a guarantee, not a near-miss). The ACK
+backstop is what turns "very good local routing" into "exactly as reliable as flood."
 
 **Bandwidth:** every delivering routing scheme is < flood, *including the ACK
-schemes* — ACK only pays flood cost on the rare (~3%) routing failure, so in
-aggregate it beats pure flood while matching its reliability.
+schemes* — ACK only pays flood cost on the rare routing failure. **`LIVE+ACK`
+delivers 100.0000% at 68% of flood's bandwidth (26.20 vs 38.72).** No reliability
+sacrifice for the bandwidth win, given the end-to-end backstop.
 
 **Two synergies the permutations revealed:**
 1. **`LIVE+ACK` dominates** — flood-level delivery, ~32% cheaper than flood, and

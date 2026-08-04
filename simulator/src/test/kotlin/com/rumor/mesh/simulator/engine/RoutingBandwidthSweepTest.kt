@@ -153,12 +153,13 @@ class RoutingBandwidthSweepTest {
         var deliverRound = -1
         val maxRounds = 2 * t.n + ACK_DEADLINE + 5
         for (round in 1..maxRounds) {
+            var anyNew = false
             val dmSnap = hasDM.copyOf()
             for (p in 0 until t.n) {
                 if (dmSnap[p] || p in t.dead) continue
                 for (h in t.adj[p]) {
                     if (!dmSnap[h] || h == t.dest) continue
-                    if (offersDM(t, c, s, h, p, escalated)) { hasDM[p] = true; break }
+                    if (offersDM(t, c, s, h, p, escalated)) { hasDM[p] = true; anyNew = true; break }
                 }
             }
             if (hasDM[t.dest] && deliverRound < 0) { deliverRound = round; hasAck[t.dest] = true }
@@ -169,12 +170,17 @@ class RoutingBandwidthSweepTest {
                         if (ackSnap[p] || p in t.dead) continue
                         for (h in t.adj[p]) {
                             if (!ackSnap[h] || h == t.origin) continue
-                            if (offersAck(t, c, s, h, p)) { hasAck[p] = true; break }
+                            if (offersAck(t, c, s, h, p)) { hasAck[p] = true; anyNew = true; break }
                         }
                     }
                 }
-                if (!escalated && !hasAck[t.origin] && round >= ACK_DEADLINE) escalated = true
+                // Escalation restarts propagation next round (flood) — mark the round
+                // as changed so the settle-check below doesn't break before it runs.
+                if (!escalated && !hasAck[t.origin] && round >= ACK_DEADLINE) { escalated = true; anyNew = true }
             }
+            // Settled: nothing changed and we're not still waiting for an ACK-timeout
+            // escalation that could restart propagation.
+            if (!anyNew && !(s.ack && !escalated && !hasAck[t.origin])) break
         }
         return Res(hasDM[t.dest], hasDM.count { it }, deliverRound)
     }
@@ -268,15 +274,18 @@ class RoutingBandwidthSweepTest {
         val agg = sweep(learned = false)
         printTable("random mesh, n=40, ideal crumbs", agg)
         val d = agg.mapValues { it.value.deliveredPct }
-        // Reliability: flood is the ceiling; naive the floor. Local heuristics (live,
-        // diverse) sit well above naive but below flood (single-hop view can't see
-        // downstream cuts). Any scheme carrying ACK matches flood (end-to-end signal).
-        assertTrue("flood ceiling", d["FLOOD"]!! >= d["DIVERSE"]!! && d["FLOOD"]!! >= d["LIVE"]!!)
+        // Conditioned on B being reachable, a loss-free flood delivers EVERY time —
+        // the ceiling is exactly 100.000%, not ~98.7% (that gap was graph partitions,
+        // not loss). Any scheme carrying the end-to-end ACK backstop also hits 100%.
+        assertEquals("flood ceiling is exactly 100% once partitions are excluded", 100.0, d["FLOOD"]!!, 1e-9)
+        assertEquals("ACK backstop reaches the flood ceiling", 100.0, d["NAIVE+ACK"]!!, 1e-9)
+        assertEquals("ALL reaches the flood ceiling", 100.0, d["ALL"]!!, 1e-9)
+        assertEquals("LIVE+ACK reaches the flood ceiling", 100.0, d["LIVE+ACK"]!!, 1e-9)
+        // Local heuristics sit well above naive but strictly below 100% — a single-hop
+        // view can't see a downstream cut, so a residual gap survives.
         assertTrue("diverse >> naive", d["DIVERSE"]!! > d["NAIVE"]!! + 10)
         assertTrue("liveness >> naive", d["LIVE"]!! > d["NAIVE"]!! + 10)
-        assertTrue("local heuristics below flood", d["DIVERSE"]!! < d["FLOOD"]!! && d["LIVE"]!! < d["FLOOD"]!!)
-        assertEquals("ACK matches flood delivery", d["FLOOD"]!!, d["NAIVE+ACK"]!!, 0.4)
-        assertEquals("ALL matches flood delivery", d["FLOOD"]!!, d["ALL"]!!, 0.4)
+        assertTrue("local heuristics below the flood ceiling", d["DIVERSE"]!! < 100.0 && d["LIVE"]!! < 100.0)
         // Bandwidth: every delivering routing scheme is cheaper than flood — including
         // the ACK schemes, which only pay flood cost on the rare routing failure.
         val b = agg.mapValues { it.value.meanTouched }
@@ -289,14 +298,14 @@ class RoutingBandwidthSweepTest {
     fun `crumb population and decay sweep (learned, staling, relearn)`() {
         println("== learned crumbs: population (floods) + staleness + relearn ==")
         for (floods in listOf(1, 3)) for (relearn in listOf(false, true)) {
-            val agg = sweep(learned = true, floods = floods, relearn = relearn)
+            val agg = sweep(learned = true, floods = floods, relearn = relearn, trials = 6_000)
             printTable("learned: floods=$floods relearnOnLive=$relearn", agg)
         }
         // Two learned-regime claims, asserted on the extremes:
         // (a) with only 1 stale flood (single learned parent, no relearn) NAIVE is
         //     badly fragile; more floods OR relearning lifts delivery.
-        val stale1 = sweep(learned = true, floods = 1, relearn = false)
-        val fresh = sweep(learned = true, floods = 1, relearn = true)
+        val stale1 = sweep(learned = true, floods = 1, relearn = false, trials = 6_000)
+        val fresh = sweep(learned = true, floods = 1, relearn = true, trials = 6_000)
         assertTrue(
             "relearning on the live graph repairs delivery vs stale crumbs " +
                 "(${fresh["NAIVE"]!!.deliveredPct} > ${stale1["NAIVE"]!!.deliveredPct})",
@@ -312,31 +321,52 @@ class RoutingBandwidthSweepTest {
 
     // ---- sweep harness ----------------------------------------------------
 
-    private class Agg { var delivered = 0; var touchSum = 0L; var touchCnt = 0; var roundSum = 0L; var trials = 0
-        val deliveredPct get() = 100.0 * delivered / trials
+    /** Is B still reachable from A after the dropout? A flood can only fail when it
+     *  isn't (the killed relay was an articulation point → the graph is PARTITIONED,
+     *  not lossy). Conditioning the delivery rate on this removes the unwinnable
+     *  trials, so a loss-free model's flood ceiling is exactly 100%. */
+    private fun reachable(t: Topo): Boolean {
+        val seen = BooleanArray(t.n); seen[t.origin] = true
+        val q = ArrayDeque<Int>(); q.add(t.origin)
+        while (q.isNotEmpty()) { val x = q.removeFirst(); if (x == t.dest) return true; for (y in t.adj[x]) if (!seen[y]) { seen[y] = true; q.add(y) } }
+        return false
+    }
+
+    // deliveredPct is conditioned on the shared reachable-trial denominator.
+    private class Agg { var delivered = 0; var touchSum = 0L; var touchCnt = 0; var roundSum = 0L; var denom = 1
+        val deliveredPct get() = 100.0 * delivered / denom
         val meanTouched get() = if (touchCnt > 0) touchSum.toDouble() / touchCnt else 0.0
         val meanRounds get() = if (touchCnt > 0) roundSum.toDouble() / touchCnt else 0.0
     }
 
-    private fun sweep(learned: Boolean, floods: Int = 1, relearn: Boolean = false, trials: Int = 300): Map<String, Agg> {
+    // trials default is high for multi-decimal precision; conditioned on reachability.
+    private fun sweep(learned: Boolean, floods: Int = 1, relearn: Boolean = false, trials: Int = 20_000): Map<String, Agg> {
         val agg = schemes.associate { it.name to Agg() }
+        var total = 0; var reachableN = 0
         for (seed in 1..trials) {
             val t = randomGeo(seed.toLong()) ?: continue
+            total++
+            if (!reachable(t)) continue     // partitioned → unwinnable for EVERY scheme; exclude
+            reachableN++
             val c = if (learned) learnedCrumbs(t, floods, relearn, Random(seed * 7919L)) else idealCrumbs(t)
             for (s in schemes) {
-                val a = agg[s.name]!!; a.trials++
                 val r = simulate(t, c, s)
-                if (r.delivered) { a.delivered++; a.touchSum += r.touched; a.touchCnt++; a.roundSum += r.deliverRound }
+                if (r.delivered) { agg[s.name]!!.let { it.delivered++; it.touchSum += r.touched; it.touchCnt++; it.roundSum += r.deliverRound } }
             }
         }
+        agg.values.forEach { it.denom = reachableN }
+        lastReachable = reachableN; lastPartitioned = total - reachableN
         return agg
     }
 
+    private var lastReachable = 0
+    private var lastPartitioned = 0
+
     private fun printTable(title: String, agg: Map<String, Agg>) {
-        println("-- $title --")
-        println("scheme        delivery%   mean-touched   mean-rounds")
+        println("-- $title --  (reachable trials=$lastReachable, partitioned/excluded=$lastPartitioned)")
+        println("scheme        delivery%    mean-touched   mean-rounds")
         for (s in schemes) agg[s.name]!!.let {
-            println("%-12s  %7.1f   %10.1f   %10.1f".format(s.name, it.deliveredPct, it.meanTouched, it.meanRounds))
+            println("%-12s  %9.4f   %10.2f   %10.2f".format(s.name, it.deliveredPct, it.meanTouched, it.meanRounds))
         }
     }
 
