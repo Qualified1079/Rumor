@@ -130,16 +130,36 @@ interface RbsrStorage {
 class SortedListRbsrStorage(items: Collection<RbsrItem>) : RbsrStorage {
     private val sorted: List<RbsrItem> = items.sorted()
 
-    override fun items(lower: RbsrBound, upper: RbsrBound): List<RbsrItem> =
-        sorted.filter { item ->
-            val lowOk = lower.timestamp < item.timestamp ||
-                (lower.timestamp == item.timestamp && lower.id <= item.id) ||
-                lower == RbsrBound.MIN
-            val highOk = item.timestamp < upper.timestamp ||
-                (item.timestamp == upper.timestamp && item.id < upper.id) ||
-                upper == RbsrBound.MAX
-            lowOk && highOk
+    // O121(d): the list is sorted by (timestamp, id) and a [lower, upper) query is
+    // a contiguous slice, so binary-search both ends (O(log n)) instead of the old
+    // per-query O(n) `filter`. RBSR splits its range recursively — many queries per
+    // round on large anchor stores (O55/O98) — so the linear scan was the hot path.
+    override fun items(lower: RbsrBound, upper: RbsrBound): List<RbsrItem> {
+        val from = lowerBound(lower)
+        val to = lowerBound(upper)
+        return if (from >= to) emptyList() else sorted.subList(from, to)
+    }
+
+    /**
+     * First index `i` with `sorted[i] >= bound` in (timestamp, id) order.
+     * MIN → 0, MAX → size — matching the original filter's explicit sentinel
+     * escapes exactly (MAX's `"￿"` id would otherwise mis-order an item id
+     * that sorts above it).
+     */
+    private fun lowerBound(bound: RbsrBound): Int {
+        if (bound == RbsrBound.MIN) return 0
+        if (bound == RbsrBound.MAX) return sorted.size
+        var lo = 0
+        var hi = sorted.size
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            val item = sorted[mid]
+            val c = if (item.timestamp != bound.timestamp) item.timestamp.compareTo(bound.timestamp)
+            else item.id.compareTo(bound.id)
+            if (c >= 0) hi = mid else lo = mid + 1
         }
+        return lo
+    }
 }
 
 /** Frame exchanged between peers during reconciliation. */
