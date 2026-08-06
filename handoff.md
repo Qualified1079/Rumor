@@ -38,6 +38,78 @@ should still be treated with normal suspicion regardless of this note.
 
 ---
 
+# Handoff — routing-robustness sim + liveness prototype + hardening pins (2026-08-03, away)
+
+Away mode ON (user turned it on mid-session for autonomous device testing + foundational
+work — **do NOT delete `~/.claude/away-mode.flag`; only the user ends it**). All pure
+`:core`/`:simulator` + one dashboard change; everything committed + pushed to `main`, all
+suites green. Build with `JAVA_HOME=/home/user/jdk17`.
+
+## The headline result — routing robustness vs flooding, quantified
+Answered the honest flip-side of O204 ("routing targets tighter → fewer redundant copies →
+is it MORE fragile to a mid-path relay dropout?"). Full write-up: `docs/SIM_HARNESS_RESULTS.md`
+"Mid-path dropout" section. This is **dynamic next-hop routing (O59)** — message carries no
+path, `intendedPeers` is `@Transient`, each relay consults its OWN breadcrumbs.
+- `SmartRoutingDropoutTest` (real GossipEngine anchor) + `RoutingBandwidthSweepTest`
+  (abstract model, **gated to reproduce the real engine's diamond numbers 9/2/5 exactly**).
+- **The fragility is real:** naive straight-line routing's fallback is "flood iff I hold NO
+  crumb" — a *stale* crumb (points at a now-dead node) is not "none", so the relay offers
+  into the void and never floods → strands. ~25% delivery loss under one mid-path dropout.
+- **Reliability lines up on an information axis:** stale-hop NAIVE (75.1%) → local-neighbourhood
+  DIVERSE/LIVE (~97.7%, a residual a single-hop view can't close — downstream cuts) →
+  end-to-end ACK (exactly 100%). **LIVE+ACK is the winner:** 100.0000% at 68% of flood's
+  bandwidth, lower latency than NAIVE+ACK (liveness makes ACK-escalation rare).
+- **Precision fix the user asked for:** the "~2.3% flood loss" was NOT loss — it was graph
+  **partitions** (killed relay = articulation point). Conditioning delivery on B-reachability
+  (BFS) + 20k trials → flood ceiling is **exactly 100.0000%**. Same lesson applies to other
+  delivery sims (**RelayEvictionModelTest** is the top candidate — its abs numbers drive O193;
+  it also has an RNG-perturbation confound: ACK-loss draws shift the meeting sequence). Left
+  for USER REVIEW — changing that decision sim's reported conclusions shouldn't be unattended.
+- Learned-crumb regime: crumb *diversity* needs repeated traffic to accumulate; fresh
+  post-dropout traffic (relearn) lifts even NAIVE to 100% — heuristics matter most in the
+  dropout→relearn window.
+
+## Liveness prototype SHIPPED (default OFF) — needs on-device A/B eventually
+`GossipEngine.livenessRouting` (`@Volatile`, default false, no DI churn): when ON, a routed
+DM floods when NONE of its crumb candidates are currently ONLINE (`OnlineStatusTracker` 5-min
+window) instead of stranding at a dead next-hop. `SmartRoutingLivenessTest` proves the A/B on
+the REAL engine (off=strands, on=delivers via bypass). **Open decision:** flip to default-on?
+It's a live-path behaviour change (slightly more flooding on brief blips); sim says clear net
+win; wants a two-phone DM round-trip first. Pair with the ACK-backstop layer (O202) for the
+downstream-cut residual.
+
+## Device test (2 phones, away-mode autonomous) — discovery works, group-formation doesn't
+Moto G Play 2024 (`ZY22KP7F59`) + OnePlus CPH2515 (`ec5b0707`), both API 34. Fresh current-main
+debug build installs + runs clean, auto-unlocks (`passphrase1`), **zero crashes**; the two
+**discover each other over Wi-Fi Direct**. BUT group formation **churns**
+(`connect → connected=false → Disconnected` loop), no `GossipSession`/HELLO, **no delivery** —
+the documented O98/O99/O94 limitation, not a regression. No WPS dialog pending (framework-level
+connect fail). No shared Wi-Fi (saved AP auto-join off, no password) so the reliable LAN path
+was unavailable. **Cross-phone delivery is blocked on user-only input:** shared Wi-Fi creds, or
+on-screen involvement for the O98 Wi-Fi Direct tuning. Base routing *logic* is thoroughly
+`:core`/sim-validated; the unverified-on-device piece is specifically the Wi-Fi Direct transport.
+Phones left running.
+
+## Foundational hardening pins shipped (all green, all pushed)
+- **`:core` fuzz crash-masking fix (O170 sibling)** — `WireParserFuzzers`/`SeedCorpusTest`
+  wrapped parsers in `runCatching{}` (catches Throwable → swallowed the OOM/SOE they exist to
+  find). New `fuzzParse{}` fence catches only Exception, lets Error propagate. Fixed a
+  factually-wrong comment in SeedCorpusTest + added a deterministic fence-has-teeth assertion.
+- **RBSR range-query O(n)→O(log n) (O121(d))** — `SortedListRbsrStorage.items()` now binary-
+  searches the sorted slice instead of a per-query full filter (hot path on large anchor
+  stores). `SortedListRbsrStorageTest` pins equivalence to the old filter over 400 random cases.
+- **MessageStore eviction coverage (O121(e), eviction-over-cap half)** — `MessageStoreEvictionTest`.
+- **Dashboard: reproducible Randomize-all seed** — `POST /api/randomize?seed=N` replays; blank
+  mints+returns a seed (shown in UI). The button already existed; reproducibility was the gap.
+
+## Next-session candidates (no device needed)
+- Flip liveness default-on (after a two-phone DM round-trip) + wire the O202 ACK-escalation layer.
+- RelayEvictionModelTest precision/confound rework (USER-REVIEW — changes O193 conclusions).
+- O121(e) remainder: GossipEngine-level coverage. O159: TransferAssembler needs a testability
+  refactor (self-created IO scope + real 60s NACK delays) before unit tests — flagged, not done.
+
+---
+
 # Handoff — DIRECT_ACK + routing redesign/validation + audit cleanup (2026-08-02 → 08-03)
 
 Away-mode session (user stepped in and out; corrected me twice — both corrections
