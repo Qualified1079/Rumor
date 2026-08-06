@@ -235,6 +235,9 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O202 | **`[TODO/CODE+SIM]`** DM delivery hardening under low node duty-cycle — DIRECT_ACK substrate shipped (2026-08-02) |
 | O203 | **`[DECISION-NEEDED]`** Delivery-ACK follow-ups — "delivered ✓✓" UI + delivery-state Room column (schema bump); sender offer-suppression; relay on-ack eviction defaults |
 | O204 | **`[DECISION, sim-DONE 2026-08-03]`** `hopsToLive` doesn't bound DM/broadcast reach (store-backfill re-offers as-received copies); routing's win is targeting not reach |
+| O205 | **`[TODO/CODE]`** Mode-aware liveness routing window — derive `livenessWindowMs` from scan cadence (longer under LOW_POWER), not a fixed 30s (follow-up to shipped O198 liveness) |
+| O206 | **`[TODO/CODE]`** Socket-level persistent connections for static/infra nodes — keep-open vs per-round reconnect on always-on/O104 nodes (amortize HELLO, exact liveness signal); O98 does the link-selection half |
+| O207 | **`[TODO/CODE+UI+DECISION]`** Presence sharing model — drop unknowable "offline" for last-seen-by-you + last-reported-online; scope sharing (all/contacts/whitelist/off, private default) |
 #### Tier 5 — bridge hardware track
 
 | # | Item |
