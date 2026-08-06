@@ -96,6 +96,11 @@ class SmartRoutingDropoutTest {
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         try {
             val n = (0..9).map { SimNode(it, scope) }
+            // This test characterises the crumb-only mechanism (no liveness fallback):
+            // it's what demonstrates the baseline fragility that O198 liveness fixes,
+            // so it opts OUT of the now-default-on liveness routing. The liveness
+            // recovery of the SINGLE-crumb strand is covered by SmartRoutingLivenessTest.
+            n.forEach { it.gossipEngine.livenessRouting = false }
             registerContact(n[A], n[B])
 
             val allEdges = listOf(

@@ -27,7 +27,6 @@ import com.rumor.mesh.core.model.withTtlSplit
 import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.routing.BreadcrumbCache
 import com.rumor.mesh.core.routing.MeshViewTracker
-import com.rumor.mesh.core.model.OnlineStatus
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
 import com.rumor.mesh.core.scheduler.Scheduler
@@ -66,6 +65,16 @@ private const val DEDUP_RESEED_LIMIT = 50_000
 private const val RBSR_SNAPSHOT_LIMIT = 50_000
 /** Deeper O92: per-exchange ceiling on fetch-by-id so a hostile Request can't scan the store. */
 private const val MAX_BY_ID_FETCH = 500
+/**
+ * O198 liveness window: a breadcrumb candidate counts as "reachable now" only if we
+ * exchanged with it within this long. ~3 LAN gossip rounds (ROUND_INTERVAL_MS=10s) —
+ * a routing-cadence threshold, deliberately NOT the 5-min presence-DISPLAY window.
+ * Mode-aware tuning (longer under LOW_POWER duty-cycling) is future work; settable
+ * per-engine via [GossipEngine.livenessWindowMs].
+ */
+private const val DEFAULT_LIVENESS_WINDOW_MS = 30_000L
+/** Bound on the first-hand-exchange map so a sybil id-flood can't grow it unboundedly. */
+private const val LIVENESS_MAX_PEERS = 512
 /**
  * Core protocol logic. No radio code. No transport types.
  *
@@ -158,17 +167,47 @@ class GossipEngine(
     private val meshView: MeshViewTracker? = null,
 ) {
     /**
-     * O198/liveness routing prototype (default OFF — preserves baseline behaviour;
-     * sim-validated in `RoutingBandwidthSweepTest` / `SmartRoutingDropoutTest`, see
-     * docs/SIM_HARNESS_RESULTS.md "mid-path dropout"). When ON, [messagesForExchange]
-     * floods a routed DM when NONE of its breadcrumb candidates are currently ONLINE,
+     * O198/liveness routing (sim-validated at all three fidelity tiers —
+     * `RoutingBandwidthSweepTest`, `SmartRoutingLivenessTest`, and real-wire
+     * `LanLivenessValidationTest`; see docs/SIM_HARNESS_RESULTS.md "mid-path
+     * dropout"). When ON, [messagesForExchange] floods a routed DM when NONE of its
+     * breadcrumb candidates were exchanged-with in the last [livenessWindowMs],
      * instead of offering only to a stale (possibly dead) next-hop and stranding the
-     * DM at a mid-path dropout. Uses [OnlineStatusTracker]'s 5-minute direct-contact
-     * window as the "reachable now" signal. A prototype toggle, not yet a shipped
-     * default — the residual downstream-cut case still wants the O202 ACK backstop.
+     * DM at a mid-path dropout.
+     *
+     * The "reachable now" signal is first-hand recent exchange ([isRecentlyExchanged]),
+     * NOT the presence-display 5-minute window: routing needs a cadence-scaled
+     * threshold (a few gossip rounds), and a gossip mesh has no persistent session,
+     * so "connected now" is honestly "exchanged a round or two ago". The residual
+     * downstream-cut case (next hop live, path behind it severed) still wants the
+     * O202 ACK backstop.
      */
     @Volatile
-    var livenessRouting: Boolean = false
+    var livenessRouting: Boolean = true
+
+    /** Recent-exchange window for [livenessRouting]; settable for tests / future mode-aware tuning. */
+    @Volatile
+    var livenessWindowMs: Long = DEFAULT_LIVENESS_WINDOW_MS
+
+    // O198: first-hand "I directly exchanged with this peer at time T", for the
+    // liveness routing filter only. Distinct from OnlineStatusTracker, which also
+    // merges second-hand peer-asserted presence and serves a 5-min DISPLAY window.
+    // Bounded: prune stale on write so it stays ~= the current neighbour set even
+    // under a sybil id-flood.
+    private val directContactMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun recordDirectExchange(peerUserId: String) {
+        val now = clock.now()
+        directContactMs[peerUserId] = now
+        if (directContactMs.size > LIVENESS_MAX_PEERS) {
+            directContactMs.entries.removeAll { now - it.value > livenessWindowMs }
+        }
+    }
+
+    private fun isRecentlyExchanged(peerUserId: String): Boolean {
+        val t = directContactMs[peerUserId] ?: return false
+        return clock.now() - t < livenessWindowMs
+    }
 
     /** O79 receive-side subscription snapshot consumed by ROOM_MESSAGE dispatch. */
     interface RoomSubscriptionProvider {
@@ -266,6 +305,7 @@ class GossipEngine(
                     overlapFraction  = result.peerOverlapFraction,
                 )
                 onlineStatusTracker.recordDirectContact(result.peerUserId)
+                recordDirectExchange(result.peerUserId)   // O198 liveness signal (first-hand, routing-cadence)
                 // O76 capability cache — store the peer's advertised features
                 // for use by future compose-side feature gating. JSON-encoded
                 // list; setSupportedFeatures is a no-op if the contact isn't
@@ -943,15 +983,17 @@ class GossipEngine(
                 val candidates = breadcrumbs.candidatePeers(msg.recipientId)
                 if (candidates.isNotEmpty()) {
                     if (livenessRouting) {
-                        // O198/liveness prototype (default off — sim-backed, see
-                        // docs/SIM_HARNESS_RESULTS.md "mid-path dropout"). A crumb
-                        // whose next-hop isn't currently ONLINE is a dead route, not
-                        // a valid target: restrict to live candidates, and flood
-                        // (don't skip) when NONE are live — instead of faithfully
-                        // offering into a hole and stranding the DM at the break.
-                        val live = candidates.filter {
-                            onlineStatusTracker.statusFor(it) == OnlineStatus.ONLINE
-                        }
+                        // O198/liveness (sim-backed, see docs/SIM_HARNESS_RESULTS.md
+                        // "mid-path dropout"). A crumb whose next-hop we haven't
+                        // exchanged with in the last [livenessWindowMs] is a dead
+                        // route, not a valid target: restrict to live candidates and
+                        // flood (don't skip) when NONE are live — instead of offering
+                        // into a hole and stranding the DM at the break. Uses
+                        // first-hand recent exchange, NOT the 5-min presence-display
+                        // window: liveness needs a routing-cadence threshold (~a few
+                        // gossip rounds), and a gossip mesh has no persistent session
+                        // — "connected now" IS "exchanged a round or two ago".
+                        val live = candidates.filter { isRecentlyExchanged(it) }
                         if (live.isNotEmpty() && peerUserId !in live) continue
                     } else if (peerUserId !in candidates) {
                         continue

@@ -40,6 +40,11 @@ class PerPeerRoutingTest {
         val b = SimNode(1, scope)
         val c = SimNode(2, scope)
         val d = SimNode(3, scope)
+        // Characterises the pure O29 crumb-restriction on messagesForExchange, so it
+        // opts OUT of now-default-on O198 liveness (which would flood a candidate not
+        // yet recently-exchanged). Liveness is covered by SmartRoutingLivenessTest /
+        // RoutingBandwidthSweepTest.
+        listOf(a, b, c, d).forEach { it.gossipEngine.livenessRouting = false }
 
         // Phase 1: A → D → B lays the crumb "to A, via D" on B.
         val seed = a.gossipEngine.composeBroadcast("seed")!!
@@ -91,6 +96,7 @@ class PerPeerRoutingTest {
         val a = SimNode(0, scope)
         val b = SimNode(1, scope)
         val c = SimNode(2, scope)
+        listOf(a, b, c).forEach { it.gossipEngine.livenessRouting = false } // isolate O29 crumb path (see above)
 
         val seed = a.gossipEngine.composeBroadcast("seed")!!
         a.flushSchedulerToRepo()

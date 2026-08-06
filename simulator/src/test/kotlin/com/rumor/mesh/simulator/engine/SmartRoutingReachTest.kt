@@ -129,6 +129,12 @@ class SmartRoutingReachTest {
                 }
             }
             val all = bb + leaves
+            // Measures the crumb-TARGETING reach property from a cold start (DM composed
+            // at t=0, before any exchange warms the liveness window), so it isolates the
+            // O29 crumb mechanism by opting OUT of now-default-on O198 liveness. Steady-
+            // state targeting WITH liveness is covered by RoutingBandwidthSweepTest (LIVE
+            // touches far fewer nodes than flood).
+            all.forEach { it.gossipEngine.livenessRouting = false }
             val a = bb[0]
             val b = bb[backbone - 1]
             registerContact(a, b)
