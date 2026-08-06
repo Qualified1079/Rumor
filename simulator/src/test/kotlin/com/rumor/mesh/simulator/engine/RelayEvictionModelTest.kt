@@ -1,5 +1,6 @@
 package com.rumor.mesh.simulator.engine
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
@@ -154,7 +155,15 @@ class RelayEvictionModelTest {
     private data class RunResult(val deliveredRound: Int, val storageRounds: Long, val everHeldCarriers: Int)
 
     private fun runOnce(n: Int, model: MeetingModel, sAvail: BooleanArray, rAvail: BooleanArray, policy: Policy, ackModel: AckModel, seed: Long): RunResult {
-        val rng = Random(seed)
+        // Two independent streams from the same seed: the PHYSICAL meeting sequence
+        // must be identical across policies for a given seed, so a policy's
+        // conditional ACK-loss coin flips can't perturb which nodes meet (they used
+        // to share one `rng`, so an on-ack policy silently saw a different topology
+        // than baseline — a confound that muddied every policy comparison AND broke
+        // the per-seed winnability oracle). meetRng drives meetings only; evtRng
+        // drives ACK-loss and any other policy-conditional draw.
+        val meetRng = Random(seed)
+        val evtRng = Random(seed xor 0x5DEECE66D5_ACC1L)
         val carriers = 2 until n
         val holds = BooleanArray(n)          // node currently caches the DM
         val acq = IntArray(n) { -1 }         // round the copy was acquired
@@ -175,7 +184,7 @@ class RelayEvictionModelTest {
             }
 
             // A node out of range this round makes no contacts.
-            var pairs = model.meetings(t, rng)
+            var pairs = model.meetings(t, meetRng)
             if (!sAvail[t]) pairs = pairs.filter { it.first != S && it.second != S }
             if (!rAvail[t]) pairs = pairs.filter { it.first != R && it.second != R }
 
@@ -204,7 +213,7 @@ class RelayEvictionModelTest {
                         AckModel.CARRIER -> everHeld[other]
                         AckModel.BREADCRUMB -> parent[holder] == other  // hand the ACK to my delivery-parent
                     }
-                    if (pass && rng.nextDouble() >= ACK_LOSS) ack[other] = true
+                    if (pass && evtRng.nextDouble() >= ACK_LOSS) ack[other] = true
                 }
             }
 
@@ -217,9 +226,37 @@ class RelayEvictionModelTest {
 
     private data class Metrics(val deliveryRate: Double, val meanLatency: Double, val meanStorage: Double)
 
+    /**
+     * Per-(env, scale) mask of seeds where delivery is even POSSIBLE — i.e. the
+     * keep-forever epidemic baseline reaches R. If baseline can't (R never came
+     * online while any holder was in range, or the DM never crossed a ferry gap
+     * before R's window closed), the trial is unwinnable for EVERY policy, so it's
+     * excluded from the denominator. This is the dynamic-duty-cycle analog of the
+     * routing sweep's reachability conditioning (a partition no scheme can beat is
+     * not a delivery failure to charge a policy for). Because baseline defines the
+     * mask, baseline conditions to exactly 100%; a policy that evicts a copy before
+     * it reaches R still fails on a winnable seed, so its real cost is preserved.
+     * Memoized — baseline delivery is independent of policy AND ack model, so one
+     * mask serves every measure() for that env/scale.
+     */
+    private val winnableCache = HashMap<String, BooleanArray>()
+    private fun winnableMask(env: Env, n: Int): BooleanArray =
+        winnableCache.getOrPut("${env.label}#$n") {
+            BooleanArray(SEEDS) { s ->
+                val seed = s.toLong() * 1_000_003L + 17
+                val sAvail = presenceSchedule(env.sKind, seed, 0x51_5eed)
+                val rAvail = presenceSchedule(env.rKind, seed, 0x52_5eed)
+                runOnce(n, env.factory(n), sAvail, rAvail, Policy("baseline"), AckModel.BREADCRUMB, seed)
+                    .deliveredRound >= 0
+            }
+        }
+
     private fun measure(env: Env, policy: Policy, ackModel: AckModel = AckModel.CARRIER, n: Int = DEFAULT_N): Metrics {
-        var delivered = 0; var latencySum = 0L; var storageSum = 0L
+        val mask = winnableMask(env, n)
+        var delivered = 0; var latencySum = 0L; var storageSum = 0L; var winnable = 0
         for (s in 0 until SEEDS) {
+            if (!mask[s]) continue                     // structurally undeliverable — excluded
+            winnable++
             val seed = s.toLong() * 1_000_003L + 17
             val sAvail = presenceSchedule(env.sKind, seed, 0x51_5eed)
             val rAvail = presenceSchedule(env.rKind, seed, 0x52_5eed)
@@ -228,11 +265,13 @@ class RelayEvictionModelTest {
             storageSum += r.storageRounds
         }
         val carriers = (n - 2).coerceAtLeast(1)
+        val denom = winnable.coerceAtLeast(1)
         return Metrics(
-            deliveryRate = delivered.toDouble() / SEEDS,
+            // Conditioned on winnability: delivery among trials any scheme could win.
+            deliveryRate = delivered.toDouble() / denom,
             meanLatency = if (delivered > 0) latencySum.toDouble() / delivered else Double.NaN,
             // normalized so scales are comparable: fraction of carrier·rounds a copy occupies.
-            meanStorage = storageSum.toDouble() / SEEDS / (carriers.toDouble() * HORIZON),
+            meanStorage = storageSum.toDouble() / denom / (carriers.toDouble() * HORIZON),
         )
     }
 
@@ -291,6 +330,8 @@ class RelayEvictionModelTest {
         val sb = StringBuilder()
         sb.append("\nO193 relay-ephemeral DM caching — delivery vs. storage trade-off\n")
         sb.append("N=$DEFAULT_N (${DEFAULT_N - 2} carriers), horizon=$HORIZON rounds, $SEEDS seeds/cell, ack-loss=$ACK_LOSS\n")
+        sb.append("delivery% is CONDITIONED on winnable seeds (keep-forever baseline reaches R) — structurally\n")
+        sb.append("undeliverable trials excluded, so baseline = 100%% by construction; meetings use a policy-independent RNG.\n")
         sb.append("cell = delivery% | latency(rounds) | storage(% of carrier·rounds a copy occupies — scale-comparable)\n\n")
 
         val colW = 26
@@ -304,7 +345,7 @@ class RelayEvictionModelTest {
                 val m = measure(env, p, AckModel.BREADCRUMB)
                 results[env.label to p.name] = m
                 val lat = if (m.meanLatency.isNaN()) "  -" else "%.0f".format(m.meanLatency)
-                val cell = "%.0f%% | %s | %.1f%%".format(m.deliveryRate * 100, lat, m.meanStorage * 100)
+                val cell = "%.1f%% | %s | %.1f%%".format(m.deliveryRate * 100, lat, m.meanStorage * 100)
                 sb.append(cell.padEnd(colW))
             }
             sb.append('\n')
@@ -314,7 +355,7 @@ class RelayEvictionModelTest {
 
         val stress = environments.first { it.label == "ferry(4)   S:early R~" }
         val sparse = environments.first { it.label == "mix-sparse S+ R~" }
-        fun cell(m: Metrics) = "%.0f%% | %.1f%%".format(m.deliveryRate * 100, m.meanStorage * 100)
+        fun cell(m: Metrics) = "%.1f%% | %.1f%%".format(m.deliveryRate * 100, m.meanStorage * 100)
 
         // ── (A) Spray-and-wait k-sweep — the delivery/storage knee as k varies ──
         sb.append("\n(A) spray-and-wait k-sweep (cell = delivery% | storage), BREADCRUMB ack:\n")
@@ -393,15 +434,27 @@ class RelayEvictionModelTest {
         // ── Negative controls / teeth (SIMULATOR_TESTING §3) ──────────────────
         // The prints are the deliverable; these guard against a vacuous harness.
 
+        // 0. Conditioning invariant: baseline DEFINES winnability, so it delivers on
+        //    every winnable seed — exactly 100% in every environment. Pins the
+        //    reachability-conditioning rework (the whole point of the denominator fix).
+        for (env in environments) {
+            assertEquals(
+                "baseline must be exactly 100% under winnability conditioning (${env.label})",
+                1.0, results[env.label to "baseline"]!!.deliveryRate, 1e-9,
+            )
+        }
+
         // 1. Baseline (keep-forever) is the delivery ceiling: no eviction policy
-        //    delivers MORE than baseline in any environment (small slack for RNG).
+        //    delivers MORE than baseline. Now an EXACT subset relationship (a policy's
+        //    delivered seeds ⊆ baseline's), so no RNG slack — the meeting sequence is
+        //    policy-independent after the RNG split.
         for (env in environments) {
             val base = results[env.label to "baseline"]!!.deliveryRate
             for (p in policies.filter { it.name != "baseline" }) {
                 val d = results[env.label to p.name]!!.deliveryRate
                 assertTrue(
                     "${p.name} delivered MORE than baseline in ${env.label} ($d > $base) — impossible if the model is sound",
-                    d <= base + 0.03,
+                    d <= base + 1e-9,
                 )
             }
         }

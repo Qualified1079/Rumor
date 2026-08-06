@@ -102,6 +102,34 @@ See `docs/SECURITY_RESEARCH.md` §O193 for the full writeup. Headline: recommend
 eviction bundle = **spray-k + on-ack + TTL**; on-relay is a scale-amplified trap;
 the stressor's "95%" is a sender-escape artifact, and ~20–30% sender uptime → 99–100%.
 
+### Accuracy rework — winnability conditioning + RNG-confound fix (2026-08-06)
+
+Applied the routing-sweep's reachability lesson to O193 and fixed a latent confound.
+Two coupled changes to `RelayEvictionModelTest`:
+1. **Split the RNG.** Meetings and the ACK-loss coin flips shared one `Random`, so an
+   `onAck` policy's extra draws *shifted the physical meeting sequence* — every policy
+   saw a slightly different topology than baseline. Now `meetRng` (meetings, identical
+   across policies per seed) is independent of `evtRng` (ACK loss). Policy comparisons
+   are now apples-to-apples on the same mobility.
+2. **Condition delivery on winnable seeds.** A trial where even the keep-forever
+   epidemic baseline can't reach R (sender went offline before the DM escaped; R never
+   met a holder) is unwinnable for *every* policy — the dynamic-duty-cycle analog of a
+   graph partition. Excluded from the denominator (memoized per env/scale).
+
+Effect — the numbers are now crisp and the ceiling is exact:
+- **baseline = 100.0% in every environment** (it *defines* winnability). The old "95%"
+  was exactly the sender-escape artifact; E1 decomposition confirms the excluded ~5%
+  is 100% "never-left-S", 0% stranded.
+- **on-relay (forward-then-forget) is the isolated trap**, and the scale collapse is
+  sharper than before: ferry/sender-offline/intermittent-R stressor **59.2% (N=32) →
+  23.1% (N=96) → 13.1% (N=256)**, while `spray4+ack+ttl24` holds ~100% at every scale.
+- k-sweep knee is clean: **k=1 → 59.2%, k=2 → 100%** in the stressor. Spray-2 already
+  recovers full delivery; the spray-k + on-ack + TTL bundle keeps ~100% at ⅓ the storage.
+
+The recommendation (spray-k + on-ack + TTL) is unchanged but now rests on
+confound-free, partition-excluded numbers. New teeth: baseline == 100% exactly, and
+`policy ≤ baseline` is now an exact subset relationship (no RNG slack).
+
 ## Real `:node` process caps (2026-08-01)
 
 8-core / 16 GB desktop: ~90–120 MB RSS per node, **CPU-bound** (mDNS full-mesh,
