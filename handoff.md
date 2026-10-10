@@ -38,6 +38,180 @@ should still be treated with normal suspicion regardless of this note.
 
 ---
 
+# Handoff — Rooms shipped (O89 write authority) + rumor-msg-v3 + transfer/O159 coverage + app silent-failure fixes (2026-10-10)
+
+**Interactive session on `main` (per the 2026-07-19 directive: commit + push
+straight to `main`, no feature branch).** Everything below is committed and
+pushed. Verified work is labelled as such; the `:app` work is explicitly NOT
+compiled — read "Verification honesty" before trusting any of it.
+
+## ⚠️ READ FIRST — the wire broke, reflash every phone together
+
+`rumor-msg-v2:` → **`rumor-msg-v3:`** (commit `831c2c6`). **Every existing
+signature is invalidated.** Mixed-version phones cannot talk. Pre-release hard
+cutover, same justification O144 used for v2 (no shipped users). v3 adds:
+- the rest of `MessagePayload` — `contentType` / `filename` / `mimeType` /
+  `sizeBytes` (**O212**, closed as G54);
+- the room posting cert `_ext.pc` for `ROOM_MESSAGE` (**O89**, closed as G53).
+`docs/RENAMED_FIELDS_NEVER_REUSE.md`, `docs/wire-format.md` (formula + tag
+tables) and `docs/SECURITY_RESEARCH.md` are updated; v2 is retired forever.
+
+## USER DECISION: Rooms SHIP in v1 (O210)
+
+User's call, and the reasoning is sound enough to record: *"ship rooms, they'd
+be necessary to not have everything be publicspam."* That is also O36's own
+logic — moving to a governed room IS the spam remedy — so shipping only the
+ungoverned feed would ship the failure mode. An earlier session (mine) had
+recommended CUTTING on wire-format risk; that weighed the wire risk correctly
+and the product risk not at all. **Superseded; do not re-litigate.**
+Consequence: **O89 and O187 are hard release blockers.** O89 is now done.
+**O187 is the next one and is NOT started** (see "Where to start").
+
+## What shipped, newest first
+
+- **`831c2c6` — O89 Rooms write authority + O212 payload metadata (G53, G54).**
+  `RoomPostingCertVerifier` had **zero production call sites**: compose attached
+  no cert, receive checked no authority. An OPEN room's routing tag is a
+  deterministic keyless function of its public roomId, so **anyone who could
+  compute the tag could post into a "governed" room** — governance was a UI
+  label with nothing behind it. Now `composeRoomMessage(postingCert =)` stamps
+  the cert pre-sign (same `buildMessage` slot as O157's tag) and
+  `GossipEngine.isAuthorizedToPost` gates receive with 7 checks: room requires a
+  cert / cert present and well-formed / scoped to THIS room / names THIS sender
+  (else a cert seen on the wire is replayable) / moderator sig + moderatorId↔
+  pubkey binding / **issuer is a moderator RIGHT NOW** (demotion bites without
+  waiting for expiry) / wall clock inside the window. **Fails CLOSED** for a
+  governed room, OPEN only where there is nothing to enforce. New
+  `GossipEngine.RoomAuthorityProvider` (`requiresPostingCert` / `isModerator`),
+  deliberately separate from `RoomSubscriptionProvider` — null = no enforcement
+  = the ungoverned feed. **The cert had to be SIGNED, not merely carried:** its
+  moderator signature protects its contents, but `_ext` is otherwise unsigned,
+  so a relay could STRIP it and every honest downstream node would then reject a
+  legitimate post — one relay amplified into mesh-wide censorship, same shape as
+  the §2 id-burn.
+- **`fe3777d` / `af7a1e5` / `3b30a0d` — O159 transfer coverage (G52).**
+  `TransferAssemblerTest` (9) + `TransferSenderTest` (6): first direct tests for
+  the two stateful classes holding ALL of O108/O109's hardening. Testability via
+  injected `scope` (defaults to the old self-created IO scope — no call site
+  changed; mirrors `PrekeyRotator`'s injected `Clock`) + `internal` entry points,
+  so ingest is driven directly with no flow timing and no waiting out the 60 s
+  NACK delay (the blocker the 2026-08-03 handoff flagged). Behaviour change:
+  `TransferSender`'s receiver-cancelled guard moved from the collector INTO
+  `handleChunkRequest` so every future path inherits it. The injected `Scheduler`
+  is the observable for "did anything go on the wire".
+- **`1259202` — O186 fix + O212 filed.** Corrected my own previous commit, which
+  claimed contentType was signed. It was not. With the media drop sitting AFTER
+  `recordAndCheck` (where O132's size drop correctly sits), a relay could retype
+  a TEXT feed post for free, the honest node would burn the id, and the genuine
+  post would be refused as a duplicate downstream — §2 rebuilt. Gate moved BEFORE
+  the commit; **that ordering is deliberate and must not be "tidied" back**, and
+  it stays even now that v3 signs contentType (an honest-but-wrong client's
+  non-TEXT post still should not burn a shared id; the cost is one re-offer).
+- **`27aed8a` — O186 text-only global feed.** O36's one hard protocol rule had
+  no implementation (text-only only because compose hardcodes TEXT). Enforced in
+  `MessageStore.ingest`, keyed on **"plaintext `payload` ⇒ feed-class"** —
+  governed rooms are ENCRYPTED (O155) so they arrive as `encryptedPayload` and
+  pass untouched with their creator's `allowMedia` policy. No new wire constant,
+  no invented global-feed id.
+- **`fe1889e` — seven `:app` rows.** O164 (sends vanished while the UI showed
+  success; the unbound window reopens on EVERY background→foreground cycle),
+  O184 (relay double-tap), O169 (bridge collector crash killed the process —
+  SupervisorJob does not absorb the throw), O168 (bridge shown ON after a
+  rolled-back attach), O165 (FLAG_SECURE on 4 secret-bearing screens, refcounted
+  because the flag is window-global while the need is per-screen), O178 + O183
+  (dead controls REMOVED not fake-wired), O179 (battery-optimisation warning now
+  actually detected — ties the G24 Moto/Doze field finding).
+- **`9ec4133` — O208–O211 filed** (below) + Coding-conventions Room version
+  corrected 11 → 12.
+
+## Verification honesty — what is and is NOT verified
+
+- **`:core` 484 tests, 0 skipped, 0 failures, 0 errors, no zero-test classes.**
+- **Every protection teeth-checked individually** (disable it, confirm exactly
+  the claiming test fails, restore): O186 gate, O108 plausibility gate,
+  per-sender cap, O158 chunk release, O18 cancel path, O89 enforcement (removing
+  one line fails exactly the 6 refusal tests and leaves the 2 delivery tests
+  passing).
+- **`:app` WAS NEVER COMPILED — this container has no Android SDK.** All seven
+  `:app` rows are hand-review only (every changed call site grepped for the new
+  Boolean signatures). CI is the gate and per O208 it currently has no verdict.
+  Highest residual risk: `SnackbarHost` is placed in the existing `Column`, not
+  a `Scaffold`, so the snackbar may render at the wrong edge — layout nit.
+- `:simulator` had 2 failures, both the real-socket LAN tests
+  (`LanLivenessValidationTest`, `LanMeshHarnessTest`); **both pass in
+  isolation** → load flake per the known-flaky list, not a regression.
+
+## Guard weaknesses found — THREE green-but-vacuous traps, two fixed
+
+The user pushed on "make sure 0 failures is 0 failures because it's successful,
+not because the test is misconfigured." It paid for itself three times:
+1. **`DomainTagInvariantTest` stayed green across the whole v2→v3 bump** because
+   `assertContainsTag` greps the FILE and a stale KDoc still said v2 while the
+   code emitted v3. **Fixed:** added a behavioural companion asserting the bytes
+   the signer actually emits. *A comment is not evidence.*
+2. **`SignableFramingGuardTest` never caught O212** because the bug was an
+   OMITTED field, not a bad delimiter. **NOT fixed** — teaching it to catch
+   omissions is open (recorded in G54).
+3. **`SourceInvariantTest`'s O5a scan matches COMMENTS, not just code** — an
+   explanatory comment of mine naming `selfAuthenticating` failed the build. The
+   guard was right; know that it scans prose too.
+Also: one of my own teeth checks was wrong (removed `deleteAllForTransfer` in
+`cancel()` instead of `attemptReassembly`), making a good test look weak. **A
+teeth check can lie too — confirm you disabled the line you meant to.**
+
+## New rows filed (bodies in docs/OPEN_BACKLOG.md)
+
+- **O208** — **CI stopped reporting on `main`.** Runs 202–205 (tip included) are
+  `cancelled` at the job level, not test-red: green runs finish in ~8–9 min,
+  these died at 10–15, and 202 is a docs-only commit. So the O198 liveness
+  default-flip shipped with no verdict. Fix order: `timeout-minutes` so a kill
+  reports honestly; **split the real-wire LAN tier out of the push job** (those
+  tests are 12–52 s EACH and now dominate); re-run the tip. Bundle with O163.
+- **O209** — no single v1 release-gate checklist; deliverable
+  `docs/RELEASE_GATES.md`, pointers only.
+- **O210** — Rooms SHIP (above).
+- **O211** — toolchain: **Kotlin 2.x BEFORE JDK 21**, and only
+  `:core`/`:simulator`/`:node` move (`:node` leads — decades-horizon per
+  O55/O104, no Android or F-Droid exposure). Gated behind O208. Corrects an
+  earlier claim that this would invalidate the F-Droid recipe — that touches
+  `:app` only.
+- **O212** — closed same session as G54.
+
+## Where the next instance starts
+
+**O187 — RoomRepository + Create/Invite/Action wire transport.** The remaining
+hard blocker for O210. O89's `RoomAuthorityProvider` is correct but **nothing
+can implement it yet**: there is no `RoomRepository`, so no component can answer
+`requiresPostingCert` / `isModerator` from storage, and `RoomCreate` /
+`RoomInvite` / `RoomAction` never travel the wire. Net effect today: rooms
+enforce correctly and **cannot be created**. Pure `:core` + repo impls,
+JVM-testable, no device. Then **O185** (two blocking `runBlocking` SQLite reads
+per inbound ROOM_MESSAGE).
+
+Not started and NOT to be started without the user: nothing — O210 settled the
+only open product decision. O203 still needs defaults.
+
+## Build in THIS environment (hard-won; none of it is in the repo)
+
+The 2026-08-03 handoff's command does not work here. What does:
+- **No JDK 17 and no Android SDK installed.** Fetched Temurin 17 to the session
+  scratchpad; `:app` simply cannot be built in this container.
+- **`gradle.properties` sets `file.encoding` but NOT `sun.jnu.encoding`**, and
+  `RbsrBandwidthScenarioTest` has an **em-dash in a test method name** → its
+  class file path is unwritable under a POSIX locale, and the whole
+  `:simulator` test compile fails with `InvalidPathException`. Needs
+  `LANG=C.utf8` (that exact spelling) **plus**
+  `-Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8"`.
+  Worth fixing in-repo: a non-ASCII test name is latent fragility.
+- Maven Central intermittently **429s** this container's shared proxy IP while
+  `curl` to the same URL returns 200; worked around by curl-prefetching into
+  `~/.m2` behind a scoped `--init-script` adding `mavenLocal()` to
+  `dependencyResolutionManagement` (the project sets
+  `FAIL_ON_PROJECT_REPOS`, so a project-level `repositories {}` is rejected).
+- Also needed `-Dkotlin.compiler.execution.strategy=in-process`.
+
+---
+
 # Handoff — routing-robustness sim + liveness prototype + hardening pins (2026-08-03, away)
 
 Away mode ON (user turned it on mid-session for autonomous device testing + foundational
