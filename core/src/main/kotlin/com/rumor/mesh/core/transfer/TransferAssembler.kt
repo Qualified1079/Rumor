@@ -44,8 +44,10 @@ class TransferAssembler(
     private val gossipEngine: GossipEngine,
     private val transferRepo: TransferRepository,
     private val chunkRepo: ChunkRepository,
+    // O159: injected so a test owns the lifetime instead of inheriting a
+    // process-lived IO scope. Default keeps every production call site unchanged.
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val watchdogs = ConcurrentMap<String, Job>()
 
     /**
@@ -75,6 +77,13 @@ class TransferAssembler(
 
     private val _assembledTransfers = MutableSharedFlow<AssembledTransfer>(extraBufferCapacity = 32)
     val assembledTransfers: SharedFlow<AssembledTransfer> = _assembledTransfers
+
+    /**
+     * O159: lets a test assert the O108 evidence-gate (metadata alone must arm
+     * nothing; the first real chunk arms the NACK watchdog) without waiting out
+     * the 60 s initial NACK delay.
+     */
+    internal fun isWatchdogArmed(transferId: String): Boolean = watchdogs[transferId] != null
 
     fun pause(transferId: String) { paused.add(transferId) }
     fun resume(transferId: String) { paused.remove(transferId) }
@@ -127,7 +136,7 @@ class TransferAssembler(
         }
     }
 
-    private suspend fun handleMetadata(meta: TransferMetadata, senderUserId: String) {
+    internal suspend fun handleMetadata(meta: TransferMetadata, senderUserId: String) {
         if (transferRepo.getById(meta.transferId) != null) return
         // O108: reject inconsistent or absurd claims before committing any state.
         // A signed-but-lying metadata (totalChunks = Int.MAX_VALUE) previously
@@ -173,7 +182,7 @@ class TransferAssembler(
         // the first real chunk (handleChunk).
     }
 
-    private suspend fun handleChunk(chunk: Chunk) {
+    internal suspend fun handleChunk(chunk: Chunk) {
         val transfer = transferRepo.getById(chunk.transferId) ?: return
         if (transfer.status != TransferStatus.IN_PROGRESS) return
         // O108: bound each chunk by the transfer's own accepted metadata —
