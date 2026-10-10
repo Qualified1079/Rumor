@@ -212,6 +212,39 @@ returns. Batch order is fixed; cross-batch is O149's causality problem. **Do not
 "fix" O213 by re-offering dropped ids** - that reopens the section-2 dedup
 interaction.
 
+### Security review caught two real bugs in O187 (commit `87633ed`)
+
+An automated review of `8206494` found three things. Two were genuine and are
+fixed; one is folded into O213.
+
+1. **[HIGH] roomId was asserted, not derived.** `RoomCreate` carried any
+   roomId, collisions resolved first-writer-wins — and a roomId is PUBLIC (the
+   routing tag is a keyless hash of it), so whoever announced one first owned
+   the room *on that node*. Per-node winners differ, so the mesh disagreed about
+   who governs what. Now `roomId = RoomId.derive(creatorId, nonce)`, nonce bound
+   into `rumor-room-create-v3:`, receivers recompute and reject. **The tell:
+   this was against the codebase's own grain** — userId = SHA-256(pubkey),
+   trafficClass derived from type, routing tag derived from roomId. When a new
+   identifier is *asserted* in this project, that is the smell.
+2. **[MEDIUM] banned and non-member users could post.** `isAuthorizedToPost`
+   checked certs and nothing else. Worse, it returned early for every
+   non-MOD_APPROVED room **with a KDoc of mine claiming membership enforced it
+   — and nothing did**, so MEMBER_ONLY rooms had zero write enforcement. That is
+   the O89 gap reproduced one layer up, in a comment describing a check that was
+   never written. Ban is now checked FIRST (a banned user may hold a cert issued
+   before the ban); membership is enforced for every room with a roster.
+3. **[MEDIUM, open → O213] roster replay/ordering.** `RoomInvite` has no issue
+   time and nothing tracks per-target last-applied state, so an unexpired invite
+   issued before a KICK re-adds the kicked user, and nodes applying in different
+   orders diverge. Ban case closed, kick case not. Remedy recorded in O213
+   (`issuedAtMs` + per-target last-applied + idempotent applied-ids) to land with
+   O149. **Not improvised** — a partial order over signed roster ops is the
+   state-resolution trap the Matrix guardrail warns about.
+
+**Process note:** don't skip these reviews. Both real findings were in code that
+had already passed a full green suite and my own teeth checks, because my tests
+only probed the gates I had thought of.
+
 ### Two more vacuity traps (five this session in total)
 
 4. **TrafficClassInvariantTest** demands explicit coverage for every new
