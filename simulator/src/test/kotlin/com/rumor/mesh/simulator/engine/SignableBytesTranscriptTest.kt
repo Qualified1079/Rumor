@@ -55,8 +55,8 @@ class SignableBytesTranscriptTest {
         val m = msg(content = "hello")
         assertArrayEquals(store.signableBytes(m), store.signableBytes(m.copy()))
         assertTrue(
-            "transcript must be prefixed with the v2 domain tag",
-            String(store.signableBytes(m)).startsWith("rumor-msg-v2:"),
+            "transcript must be prefixed with the v3 domain tag",
+            String(store.signableBytes(m)).startsWith("rumor-msg-v3:"),
         )
     }
 

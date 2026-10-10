@@ -9,6 +9,7 @@ import com.rumor.mesh.core.model.Contact
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.mode.ModeState
+import com.rumor.mesh.core.wire.roomPostingCertJson
 import com.rumor.mesh.core.wire.roomRoutingTag
 import kotlinx.coroutines.flow.Flow
 import com.rumor.mesh.core.platform.AtomicCounter
@@ -346,10 +347,14 @@ class MessageStore(
      * prefix fixes every boundary, so no two distinct field-sequences can
      * produce the same transcript and the splice is structurally impossible.
      *
-     * Prefixed with the `rumor-msg-v2:` domain tag so a sig produced here can
-     * never be replayed as a sig in another protocol context, and so a v1 sig
-     * can never be accepted as a v2 sig (the framing change is a hard cutover —
+     * Prefixed with the `rumor-msg-v3:` domain tag so a sig produced here can
+     * never be replayed as a sig in another protocol context, and so an older
+     * sig can never be accepted as a v3 sig (each bump is a hard cutover —
      * see `docs/RENAMED_FIELDS_NEVER_REUSE.md`; v1 is retired, no shipped users).
+     * v3 (O212 + O89) added the remaining `MessagePayload` metadata
+     * (contentType / filename / mimeType / sizeBytes) and, for room messages,
+     * the posting certificate — v2 signed only `payload.content`, so a relay
+     * could retype a message or strip a cert without breaking the signature.
      * Bump the tag only when the canonical-byte layout itself changes, never for
      * additive fields. The `'|'`-delimited newer helpers (roomPostingCert,
      * multiRecipientEnvelope, prekeyPublish, …) were assessed splice-safe — every
@@ -358,7 +363,7 @@ class MessageStore(
      * zero security gain).
      */
     fun signableBytes(msg: RumorMessage): ByteArray = buildString {
-        append("rumor-msg-v2:")
+        append("rumor-msg-v3:")
         framed(msg.id)
         framed(msg.senderId)
         framed(msg.senderPublicKey)
@@ -377,5 +382,22 @@ class MessageStore(
         // type.name is itself framed above, so a non-room message can't be
         // reinterpreted as a room message to skip this field.
         if (msg.type == MessageType.ROOM_MESSAGE) framed(msg.roomRoutingTag ?: "")
+        // O212 (v3): the rest of MessagePayload. v2 framed only `content`, so a
+        // relay could retype a signed message (TEXT->IMAGE) or change the
+        // filename/mimeType a receiver is told it is about to open, without
+        // breaking the signature. The sender authenticated the bytes but not
+        // what they claimed to be. Framed unconditionally — every message type
+        // has a payload shape worth binding.
+        framed(msg.payload?.contentType?.name ?: "")
+        framed(msg.payload?.filename ?: "")
+        framed(msg.payload?.mimeType ?: "")
+        framed(msg.payload?.sizeBytes ?: 0L)
+        // O89 (v3): bind the room posting certificate. The cert is already
+        // moderator-signed, so its contents cannot be altered — but `_ext` is
+        // otherwise unsigned, so a relay could STRIP it and every honest
+        // downstream node would reject a legitimate post for want of a cert.
+        // That turns one malicious relay into amplified censorship. Bound here,
+        // a stripped cert breaks the signature and is dropped as forged.
+        if (msg.type == MessageType.ROOM_MESSAGE) framed(msg.roomPostingCertJson ?: "")
     }.toByteArray(Charsets.UTF_8)
 }

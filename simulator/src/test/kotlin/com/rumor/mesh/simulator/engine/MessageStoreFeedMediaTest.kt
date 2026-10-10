@@ -97,28 +97,27 @@ class MessageStoreFeedMediaTest {
     }
 
     /**
-     * O212 regression — the feed drop must NOT burn the message id.
+     * O212 CLOSED — `contentType` is now inside the signed transcript
+     * (`rumor-msg-v3:`), so retyping a feed post is no longer free: it breaks
+     * the signature and the message is dropped as forged rather than merely
+     * unauthorized. This assertion is the inverse of what it was before the
+     * v3 bump, which is the point of keeping it.
      *
-     * `contentType` is NOT in the signed transcript (`signableBytes` covers
-     * `payload.content` but not contentType/filename/mimeType/sizeBytes), so a
-     * relay can retype a legitimate TEXT post to IMAGE and the signature still
-     * verifies. This test pins that reality rather than the comfortable
-     * assumption — and then pins the consequence that matters: if the media
-     * drop recorded the id as seen, that costless flip would blackhole the
-     * genuine post for every downstream node (the §2 censorship primitive).
-     *
-     * When O212 signs contentType, the first assertion flips and the drop can
-     * move below the record-as-seen commit.
+     * The second half still matters and is kept deliberately: the media drop
+     * stays BEFORE the record-as-seen commit. Signing contentType removes the
+     * cheap retype, but a genuinely non-TEXT post from an honest-but-wrong
+     * client should still not burn an id it shares with nothing else, and the
+     * ordering costs only a re-offer.
      */
     @Test
-    fun `a retyped feed post is dropped without blackholing the genuine one`() = runBlocking {
+    fun `a retyped feed post breaks its signature and does not blackhole the genuine one`() = runBlocking {
         val store = store()
         val genuine = store.signedRoom("d".repeat(32), payload = MessagePayload(ContentType.TEXT, "hello feed"))
         val retyped = genuine.copy(payload = MessagePayload(ContentType.IMAGE, "hello feed"))
 
-        // Today contentType is unsigned, so the forgery carries a valid signature.
-        assertTrue(
-            "contentType is outside signableBytes — retyping keeps the sig valid (O212)",
+        // O212: contentType is now signed, so the retype invalidates the sig.
+        assertFalse(
+            "retyping TEXT->IMAGE must break the signature (O212, rumor-msg-v3)",
             CryptoManager.verify(
                 store.signableBytes(retyped),
                 retyped.signature.fromBase64(),

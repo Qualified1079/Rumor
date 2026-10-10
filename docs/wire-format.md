@@ -314,7 +314,11 @@ The unit that gets signed, stored, and relayed across hops.
 ### 3.2 Signature (canonical bytes)
 
 ```
-"rumor-msg-v2:" || framed(id) || framed(senderId) || framed(senderPublicKey) || framed(sequenceNumber) || framed(sentAtMs) || framed(type.name) || framed(payload?.content ?: "") || framed(encryptedPayload ?: "") || framed(recipientId ?: "")
+"rumor-msg-v3:" || framed(id) || framed(senderId) || framed(senderPublicKey) || framed(sequenceNumber) || framed(sentAtMs) || framed(type.name) || framed(payload?.content ?: "") || framed(encryptedPayload ?: "") || framed(recipientId ?: "")
+    || [ if type == ROOM_MESSAGE ] framed(_ext.rt ?: "")                       // O157 routing tag
+    || framed(payload?.contentType?.name ?: "") || framed(payload?.filename ?: "")
+    || framed(payload?.mimeType ?: "")          || framed(payload?.sizeBytes ?: 0)   // O212
+    || [ if type == ROOM_MESSAGE ] framed(_ext.pc ?: "")                       // O89 posting cert
 
 framed(v) = decimal(v.length) || ":" || v      // v.length = UTF-16 code-unit count (Kotlin String.length)
 ```
@@ -599,7 +603,7 @@ This table is the union of every tag emitted by `:core` commonMain code. Drift g
 
 | Tag | Signs what | Site |
 |---|---|---|
-| `"rumor-msg-v2:"` | Outer `RumorMessage` signature — O144 length-prefixed framing (v1 retired) | `MessageStore.signableBytes` |
+| `"rumor-msg-v3:"` | Outer `RumorMessage` signature — O144 length-prefixed framing plus O212 payload metadata and O89 posting cert (v1, v2 retired) | `MessageStore.signableBytes` |
 | `"rumor-hello-v1:"` | HELLO v1 challenge: nonce + version bits + sorted features | `helloChallengeBytes` |
 | `"rumor-hello-v2:"` | HELLO v2 challenge: v1 fields + `recentlyExchangedWith` (route-adv-v1) | `helloChallengeBytesV2` |
 | `"rumor-blocklist-v1:"` | Full blocklist snapshot | `blocklistSignableBytes` |
@@ -635,6 +639,7 @@ This table is the union of every tag emitted by `:core` commonMain code. Drift g
 | Tag | Retired in | Notes |
 |---|---|---|
 | `"rumor-identity-rotation-v1:"` | pre-v0.1 (no wire-format release) | Originally O41 continuity signature on identity rotation. Removed entirely (see G9) because the auto-rebind UX turned key-compromise into permanent impersonation. Name reserved forever — never re-use for any purpose. The deletion-announcement use case lives at O69 (`IDENTITY_RETIRED`, no successor key, no laundering). |
+| `"rumor-msg-v2:"` | 2026-10-10 (O212 + O89, pre-release hard cutover) | Outer `RumorMessage` signature transcript. Retired because it framed only `payload.content`: the rest of `MessagePayload` was relay-mutable (retype / filename swap), and `_ext.pc` was strippable. |
 | `"rumor-msg-v1:"` | 2026-07-23 (O144, pre-release hard cutover) | Outer `RumorMessage` signature transcript. Retired because delimiter-free concatenation let a relay re-partition the trailing free strings (content/encryptedPayload/recipientId) and truncate a signed broadcast while keeping a valid signature. Replaced by `"rumor-msg-v2:"` (length-prefixed, self-delimiting). Reserved forever. |
 
 **Bumping a tag is the canonical marker that a real wire-format change occurred.** Bumps require:

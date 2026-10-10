@@ -48,7 +48,9 @@ import com.rumor.mesh.core.wire.withHlc
 import com.rumor.mesh.core.wire.withCompressionMetadata
 import com.rumor.mesh.core.wire.withMentions
 import com.rumor.mesh.core.wire.withReplyTo
+import com.rumor.mesh.core.wire.roomPostingCert
 import com.rumor.mesh.core.wire.roomRoutingTag
+import com.rumor.mesh.core.wire.withRoomPostingCert
 import com.rumor.mesh.core.wire.withRoomRoutingTag
 import com.rumor.mesh.core.wire.withSealedSenderTag
 
@@ -158,6 +160,11 @@ class GossipEngine(
      */
     private val roomSubscriptionProvider: RoomSubscriptionProvider? = null,
     /**
+     * O89 — write-authority resolver for inbound room messages. Null disables
+     * enforcement (the ungoverned feed, and engines without rooms).
+     */
+    private val roomAuthorityProvider: RoomAuthorityProvider? = null,
+    /**
      * O98 (MeshView substrate) — optional tracker fed by inbound SELF_PRESENCE
      * beacons. When non-null, every verified SELF_PRESENCE records the sender's
      * mode + advertised neighbours (with recency decay); the O98 persistence
@@ -210,6 +217,31 @@ class GossipEngine(
     }
 
     /** O79 receive-side subscription snapshot consumed by ROOM_MESSAGE dispatch. */
+    /**
+     * O89 — resolves a room's write-authority state for the receive path.
+     *
+     * Kept separate from [RoomSubscriptionProvider] (which answers "am I in
+     * this room?") because this answers "may this sender post to it?", and the
+     * real implementation needs a `RoomRepository` read that does not exist yet
+     * (O187). A null provider means no enforcement, which is correct for the
+     * ungoverned feed (O154/O186) and for engines with no rooms at all.
+     */
+    interface RoomAuthorityProvider {
+        /**
+         * Whether [roomId] requires a moderator-issued posting certificate.
+         * False for the ungoverned feed; true for governed rooms (O155).
+         */
+        fun requiresPostingCert(roomId: String): Boolean
+
+        /**
+         * Whether [moderatorId] is *currently* authorized to issue posting
+         * certs for [roomId]. Checked per message rather than trusted from the
+         * cert, so a demoted moderator's outstanding certs stop being honoured
+         * without waiting for them to expire.
+         */
+        fun isModerator(roomId: String, moderatorId: String): Boolean
+    }
+
     interface RoomSubscriptionProvider {
         /** OPEN-mode roomIds the local user is subscribed to. */
         fun openRoomIds(): List<String>
@@ -813,6 +845,11 @@ class GossipEngine(
         recipients: List<MultiRecipientEnvelopeCodec.Recipient> = emptyList(),
         replyTo: String? = null,
         mentions: List<String> = emptyList(),
+        // O89: the moderator-issued cert proving we may post here. Required by
+        // governed rooms; omitted for the ungoverned feed. Stamped BEFORE
+        // signing (buildMessage) so it is covered by the rumor-msg-v3
+        // transcript and cannot be stripped en route.
+        postingCert: com.rumor.mesh.core.model.RoomPostingCert? = null,
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
         // O132: room messages are gossip-tier and unchunked — same cap as broadcasts.
@@ -830,6 +867,7 @@ class GossipEngine(
                 hopsToLive = DEFAULT_BROADCAST_HOPS,
                 payload = MessagePayload(ContentType.TEXT, plaintext),
                 roomRoutingTag = tagBase64,
+                roomPostingCert = postingCert,
             )
         } else {
             // ENCRYPTED room — multi-recipient envelope.
@@ -847,6 +885,7 @@ class GossipEngine(
                 hopsToLive = DEFAULT_BROADCAST_HOPS,
                 encryptedPayload = WireJson.encodeToString(envelope),
                 roomRoutingTag = tagBase64,
+                roomPostingCert = postingCert,
             )
         }
 
@@ -1281,6 +1320,66 @@ class GossipEngine(
      *  - No match: drop (the message was addressed to a room we're not
      *    in; relay still happens elsewhere).
      */
+    /**
+     * O89 — may [msg]'s sender post to [roomId]?
+     *
+     * Fails CLOSED for a governed room: a missing, malformed, expired,
+     * mis-scoped or mod-less cert is a drop, because the alternative ("allow
+     * when unsure") is what made the governed label meaningless. Fails OPEN
+     * only where there is genuinely nothing to enforce — no authority provider
+     * wired (engines without rooms), or a room that declares it needs no cert
+     * (the ungoverned feed, O154/O186).
+     *
+     * Checks, in order of cost:
+     *  1. the room requires a cert at all;
+     *  2. a cert is present and well-formed;
+     *  3. the cert is scoped to THIS room (a cert for room B must not authorize
+     *     a post to room A — the cert's roomId is signed, so this is a real
+     *     binding, not a hint);
+     *  4. the cert names THIS sender (otherwise anyone could replay someone
+     *     else's valid cert);
+     *  5. the moderator's own signature over the cert verifies, and the
+     *     moderatorId binds to its pubkey ([RoomPostingCertVerifier]);
+     *  6. the issuing moderator is authorized RIGHT NOW, not merely at issue
+     *     time, so demotion takes effect without waiting for expiry;
+     *  7. the validity window contains the current time.
+     *
+     * The cert itself cannot be altered (moderator-signed) nor stripped (bound
+     * into the `rumor-msg-v3:` transcript, O89 note in signableBytes).
+     */
+    private fun isAuthorizedToPost(msg: RumorMessage, roomId: String): Boolean {
+        val authority = roomAuthorityProvider ?: return true
+        if (!authority.requiresPostingCert(roomId)) return true
+
+        val cert = msg.roomPostingCert ?: run {
+            RumorLog.w(TAG, "Room ${roomId.take(8)}…: dropping post from ${msg.senderId.take(8)}… — no posting cert")
+            return false
+        }
+        if (cert.roomId != roomId) {
+            RumorLog.w(TAG, "Room ${roomId.take(8)}…: cert is scoped to a different room")
+            return false
+        }
+        if (cert.userId != msg.senderId) {
+            RumorLog.w(TAG, "Room ${roomId.take(8)}…: cert names ${cert.userId.take(8)}…, not the sender")
+            return false
+        }
+        val verdict = RoomPostingCertVerifier.verify(cert)
+        if (verdict is RoomPostingCertVerifier.Result.Rejected) {
+            RumorLog.w(TAG, "Room ${roomId.take(8)}…: cert rejected — ${verdict.reason}")
+            return false
+        }
+        if (!authority.isModerator(roomId, cert.moderatorId)) {
+            RumorLog.w(TAG, "Room ${roomId.take(8)}…: cert issuer ${cert.moderatorId.take(8)}… is not a moderator")
+            return false
+        }
+        val now = clock.now()
+        if (now < cert.validFromMs || now >= cert.validToMs) {
+            RumorLog.w(TAG, "Room ${roomId.take(8)}…: cert outside its validity window")
+            return false
+        }
+        return true
+    }
+
     private suspend fun handleRoomMessage(msg: RumorMessage) {
         val provider = roomSubscriptionProvider ?: return
         val tagB64 = msg.roomRoutingTag ?: return
@@ -1292,6 +1391,13 @@ class GossipEngine(
             openSubscriptions = provider.openRoomIds(),
             encryptedSubscriptions = provider.encryptedRoomSubscriptions(),
         ) ?: return  // not subscribed; drop receive-side (relay still happened)
+
+        // O89: write-authority enforcement. Until this existed, any client that
+        // knew a room's routing tag could post to it — the tag is public and
+        // keyless by construction, so "governed room" was a UI label with
+        // nothing behind it. RoomPostingCertVerifier existed but had zero
+        // production callers.
+        if (!isAuthorizedToPost(msg, match.roomId)) return
 
         when (match) {
             is RoomTagMatcher.MatchResult.OpenMatch -> {
@@ -1557,6 +1663,7 @@ class GossipEngine(
         encryptedPayload: String? = null,
         recipientId: String? = null,
         roomRoutingTag: String? = null,
+        roomPostingCert: com.rumor.mesh.core.model.RoomPostingCert? = null,
     ): RumorMessage {
         val base = RumorMessage(
             id = Uuid.randomHex32(),
@@ -1575,7 +1682,10 @@ class GossipEngine(
         // signableBytes covers it (it rides _ext.rt, which is otherwise
         // stamped post-sign and thus forgeable). Everything else in _ext
         // (HLC, thread/mention) stays unsigned and is applied after.
-        val unsigned = if (roomRoutingTag != null) base.withRoomRoutingTag(roomRoutingTag) else base
+        // O89 rides here for the same reason as O157's tag: both are covered by
+        // the rumor-msg-v3 transcript, so both must be present before signing.
+        val tagged = if (roomRoutingTag != null) base.withRoomRoutingTag(roomRoutingTag) else base
+        val unsigned = if (roomPostingCert != null) tagged.withRoomPostingCert(roomPostingCert) else tagged
         val sig = CryptoManager.sign(messageStore.signableBytes(unsigned), identity.privateKeyBytes).toBase64()
         // O95: HLC stamp rides _ext (unsigned, like every _ext field) so it can
         // be applied after signing without invalidating the sig.

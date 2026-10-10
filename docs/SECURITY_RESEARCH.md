@@ -47,7 +47,7 @@ Ordered by (severity of what they'd catch) × (cheapness to run):
 
    | Transcript | Free-text / attacker-var field | Disposition |
    |---|---|---|
-   | `MessageStore.signableBytes` | content / encryptedPayload / recipientId | **framed** (O144, `rumor-msg-v2:`) |
+   | `MessageStore.signableBytes` | content / encryptedPayload / recipientId / payload metadata / room posting cert | **framed** (O144 `rumor-msg-v2:`; O212+O89 `rumor-msg-v3:`) |
    | `keywordFilterListSignableBytes` | `name`, entry `pattern` | **framed** (`-v2:`) |
    | `messageDeleteSignableBytes` | sender-chosen `messageId` | **framed** (`-v2:`) |
    | `bridgeVouchedSignableBytes` | `originNetwork`/`originSenderId`/`payload` | **framed** (`-v2:`) |

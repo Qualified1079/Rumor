@@ -3,6 +3,13 @@ package com.rumor.mesh.core.protocol
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.fail
+import com.rumor.mesh.core.data.memory.InMemoryContactRepository
+import com.rumor.mesh.core.data.memory.InMemoryMessageRepository
+import com.rumor.mesh.core.model.ContentType
+import com.rumor.mesh.core.model.MessagePayload
+import com.rumor.mesh.core.model.MessageType
+import com.rumor.mesh.core.model.RumorMessage
+import org.junit.Assert.assertTrue
 
 /**
  * Source-level drift guards for the wire-format domain tags. Same
@@ -142,15 +149,50 @@ class DomainTagInvariantTest {
     // here means a careless rename surfaces as a test failure rather than a
     // silent break of every existing signature.
 
+    /**
+     * Behavioural companion to the source scan below.
+     *
+     * [assertContainsTag] greps the FILE, so a stale KDoc mentioning the old
+     * tag satisfies it even after the emitted tag changed — which is exactly
+     * what happened during the v2->v3 bump (O89/O212): the code emitted v3, a
+     * leftover comment still said v2, and the guard stayed green. Assert the
+     * bytes the signer actually produces, not the text of the file.
+     */
     @Test
-    fun `RumorMessage signable-bytes domain tag is rumor-msg-v2`() {
+    fun `RumorMessage transcript actually emits the v3 tag`() {
+        val store = MessageStore(
+            InMemoryMessageRepository(),
+            InMemoryContactRepository(),
+            DuplicateFilter(),
+        )
+        val msg = RumorMessage(
+            id = "a".repeat(32),
+            senderId = "b".repeat(64),
+            senderPublicKey = "pk",
+            sequenceNumber = 1,
+            sentAtMs = 1_000L,
+            type = MessageType.BROADCAST,
+            hopsToLive = 7,
+            payload = MessagePayload(ContentType.TEXT, "hi"),
+            signature = "",
+        )
+        assertTrue(
+            "the emitted transcript must carry the v3 tag — a comment is not evidence",
+            String(store.signableBytes(msg)).startsWith("rumor-msg-v3:"),
+        )
+    }
+
+    @Test
+    fun `RumorMessage signable-bytes domain tag is rumor-msg-v3`() {
         assertContainsTag(
             file = "core/src/main/kotlin/com/rumor/mesh/core/protocol/MessageStore.kt",
-            tag = "rumor-msg-v2:",
+            tag = "rumor-msg-v3:",
             purpose = "Outer Ed25519 signature scope on every RumorMessage. " +
-                "O144: v2 length-prefixes each field (self-delimiting) to close " +
-                "the v1 splice/truncation attack. Bumping breaks every signature " +
-                "across the network — v1 is retired, never reuse (hard cutover).",
+                "O144 v2 length-prefixed each field (self-delimiting) to close " +
+                "the v1 splice/truncation attack; O212/O89 v3 added the rest of " +
+                "MessagePayload plus the room posting cert. Bumping breaks every " +
+                "signature across the network — v1 and v2 are retired, never " +
+                "reuse (hard cutover).",
         )
     }
 

@@ -47,6 +47,9 @@ class SentAtMsLintTest {
         "core/src/main/kotlin/com/rumor/mesh/core/protocol/GossipEngine.kt",
         // Ed25519 signable bytes — value is signed so receivers detect tampering
         "core/src/main/kotlin/com/rumor/mesh/core/protocol/MessageStore.kt",
+        // Test fixture constructing a RumorMessage to assert the emitted
+        // signature domain tag — a named ctor arg, not a display-time read.
+        "core/src/test/kotlin/com/rumor/mesh/core/protocol/DomainTagInvariantTest.kt",
         // Room <-> model conversion (mirror of wire field)
         "app/src/main/java/com/rumor/mesh/data/adapter/MessageRepositoryAdapter.kt",
         // Bridge plugins stamping foreign-network timestamps onto bridged traffic
