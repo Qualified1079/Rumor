@@ -65,7 +65,7 @@ ungoverned feed would ship the failure mode. An earlier session (mine) had
 recommended CUTTING on wire-format risk; that weighed the wire risk correctly
 and the product risk not at all. **Superseded; do not re-litigate.**
 Consequence: **O89 and O187 are hard release blockers.** O89 is now done.
-**O187 is the next one and is NOT started** (see "Where to start").
+**O187 is now half done - see its own section below.**
 
 ## What shipped, newest first
 
@@ -141,7 +141,7 @@ Consequence: **O89 and O187 are hard release blockers.** O89 is now done.
   (`LanLivenessValidationTest`, `LanMeshHarnessTest`); **both pass in
   isolation** → load flake per the known-flaky list, not a regression.
 
-## Guard weaknesses found — THREE green-but-vacuous traps, two fixed
+## Guard weaknesses found — FIVE green-but-vacuous traps (see also the O187 section)
 
 The user pushed on "make sure 0 failures is 0 failures because it's successful,
 not because the test is misconfigured." It paid for itself three times:
@@ -177,16 +177,67 @@ teeth check can lie too — confirm you disabled the line you meant to.**
   `:app` only.
 - **O212** — closed same session as G54.
 
+## O187 - half shipped, same session (commit `8206494`)
+
+The other hard O210 blocker. **Shipped + verified** (`:core` 488/0,
+`:simulator` 136/0): three new MessageTypes (`room_create`/`room_invite`/
+`room_action` - additive enum values, so the v3 transcript is UNCHANGED since
+`type.name` was already framed; serial names reserved), `RoomRepository` +
+`RoomRecord` + `InMemoryRoomRepository`, `RoomAuthorityResolver` (**the first
+real implementation of O89's provider - before it, governed rooms could not
+exist**), `composeRoomCreate/Invite/Action`, and receive-side
+`handleRoomLifecycle`.
+
+**Invariant not to break:** the carrying message's sender must BE the author of
+the inner decision. Relay preserves `senderId`/`senderPublicKey` and ingest
+proved `senderId == SHA-256(pubkey)`, so that one rule gives every hop the right
+key for the inner signature with no contact lookup, and blocks re-wrapping
+someone else's room decision.
+
+Three decisions pinned by tests: **CREATE is first-writer-wins** (else anyone
+re-announcing a roomId resets its policies and installs itself as creator-mod);
+**a ban outranks a later invite** (else a mod silently undoes a ban by
+re-inviting); **the creator's mod status is not removable** (else an emptied mod
+list leaves the room ungovernable).
+
+**O187 stays `[PART]`. Remaining:** (a) Android Room DAO/entity +
+`RumorDatabase` bump + exported schema JSON + `AppModule` wiring -
+**deliberately not done blind**, no Android SDK here and an unverifiable schema
+bump is what O116 exists to prevent; (b) Rooms UI; (c) membership-policy
+enforcement at JOIN (O89 covers posting only); (d) O185's blocking reads -
+`RoomAuthorityResolver` adds the same `runBlocking` shape and its KDoc says so,
+fix both with one cached snapshot; (e) **O213** (new) - a lifecycle op arriving
+in an earlier exchange than its CREATE is dropped AND dedup-marked, so it never
+returns. Batch order is fixed; cross-batch is O149's causality problem. **Do not
+"fix" O213 by re-offering dropped ids** - that reopens the section-2 dedup
+interaction.
+
+### Two more vacuity traps (five this session in total)
+
+4. **TrafficClassInvariantTest** demands explicit coverage for every new
+   MessageType - it failed until the three room types were covered. Working as
+   designed; add the test, do not widen the allowlist.
+5. **One of my own tests was VACUOUS and a teeth check caught it.** "an invite
+   from a non-moderator is refused" passed with the receive-side moderator check
+   DISABLED, because it used `composeRoomInvite` and was really testing the
+   *compose-side* precondition - which is only UX, since a hostile client never
+   calls our compose path. Rewritten to inject a hand-built, validly self-signed
+   invite via `composeOutbound`. **Lesson for this codebase: when the security
+   boundary is on receive, the test must bypass compose.**
+
 ## Where the next instance starts
 
-**O187 — RoomRepository + Create/Invite/Action wire transport.** The remaining
-hard blocker for O210. O89's `RoomAuthorityProvider` is correct but **nothing
-can implement it yet**: there is no `RoomRepository`, so no component can answer
-`requiresPostingCert` / `isModerator` from storage, and `RoomCreate` /
-`RoomInvite` / `RoomAction` never travel the wire. Net effect today: rooms
-enforce correctly and **cannot be created**. Pure `:core` + repo impls,
-JVM-testable, no device. Then **O185** (two blocking `runBlocking` SQLite reads
-per inbound ROOM_MESSAGE).
+**O187's Android half**, which needs a machine: the Room DAO/entity for
+`RoomRepository`, the `RumorDatabase` version bump + exported schema JSON, and
+the `AppModule` wiring (`single { }` for the repo + `RoomAuthorityResolver`
+passed into `GossipEngine`). Until that lands, rooms work in
+`:core`/`:simulator` and the phone app still has no room storage. **Bundle O185
+with it** - both are the same blocking-read fix.
+
+If no machine is available, the best no-device items are **O213** (bounded
+hold-queue for early lifecycle ops - read O149 first, and do not re-offer
+dropped ids), **membership-policy enforcement at join** (pure `:core`, mirrors
+O89's shape), and **O209** (`docs/RELEASE_GATES.md`).
 
 Not started and NOT to be started without the user: nothing — O210 settled the
 only open product decision. O203 still needs defaults.
