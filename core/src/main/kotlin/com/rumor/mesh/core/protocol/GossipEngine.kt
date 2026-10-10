@@ -18,6 +18,13 @@ import com.rumor.mesh.core.model.MessagePayload
 import com.rumor.mesh.core.model.MessageType
 import com.rumor.mesh.core.model.MAX_ROUTED_HOPS
 import com.rumor.mesh.core.model.MultiRecipientEnvelope
+import com.rumor.mesh.core.model.RoomAction
+import com.rumor.mesh.core.model.RoomActionKind
+import com.rumor.mesh.core.model.RoomCreate
+import com.rumor.mesh.core.model.RoomInvite
+import com.rumor.mesh.core.model.roomActionSignableBytes
+import com.rumor.mesh.core.model.roomCreateSignableBytes
+import com.rumor.mesh.core.model.roomInviteSignableBytes
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.model.TrustLevel
 import com.rumor.mesh.core.platform.Base64Codec
@@ -164,6 +171,12 @@ class GossipEngine(
      * enforcement (the ungoverned feed, and engines without rooms).
      */
     private val roomAuthorityProvider: RoomAuthorityProvider? = null,
+    /**
+     * O187 — room metadata/roster store. Null means this engine does not track
+     * rooms (the simulator's feed-only nodes, `:node`), in which case inbound
+     * lifecycle messages are still relayed but change no local state.
+     */
+    private val roomRepo: com.rumor.mesh.core.data.RoomRepository? = null,
     /**
      * O98 (MeshView substrate) — optional tracker fed by inbound SELF_PRESENCE
      * beacons. When non-null, every verified SELF_PRESENCE records the sender's
@@ -839,6 +852,114 @@ class GossipEngine(
      * Returns null if identity is locked. Otherwise returns the
      * outgoing [RumorMessage] (already enqueued for transport).
      */
+    /**
+     * O187 — announce a new room. Signs the inner [RoomCreate] with the local
+     * identity, which is therefore the creator (and so a moderator by
+     * construction, per `RoomRecord`). Applies the record locally too: the
+     * creator must not have to wait for its own broadcast to come back before
+     * it can moderate.
+     */
+    suspend fun composeRoomCreate(
+        roomId: String,
+        name: String,
+        membershipPolicy: com.rumor.mesh.core.model.RoomMembershipPolicy,
+        postingPolicy: com.rumor.mesh.core.model.RoomPostingPolicy,
+        allowMedia: Boolean,
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        val createdAtMs = clock.now()
+        val signed = roomCreateSignableBytes(
+            roomId, name, identity.userId, createdAtMs, membershipPolicy, postingPolicy, allowMedia,
+        )
+        val create = RoomCreate(
+            roomId = roomId,
+            name = name,
+            createdBy = identity.userId,
+            createdAtMs = createdAtMs,
+            membershipPolicy = membershipPolicy,
+            postingPolicy = postingPolicy,
+            allowMedia = allowMedia,
+            signature = CryptoManager.sign(signed, identity.privateKeyBytes).toBase64(),
+        )
+        roomRepo?.upsert(
+            com.rumor.mesh.core.data.RoomRecord(
+                roomId, name, identity.userId, createdAtMs, membershipPolicy, postingPolicy, allowMedia,
+            )
+        )
+        return composeOutbound(
+            type = MessageType.ROOM_CREATE,
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(create)),
+        )
+    }
+
+    /**
+     * O187 — invite [invitedUserId] to [roomId]. The caller supplies
+     * [encryptedRoomKey] already wrapped to the invitee (this engine does not
+     * hold room keys). Fails if the local identity is not a moderator, rather
+     * than emitting an invite every receiver will reject.
+     */
+    suspend fun composeRoomInvite(
+        roomId: String,
+        invitedUserId: String,
+        encryptedRoomKey: String,
+        expiresAtMs: Long,
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        if (roomRepo?.isModerator(roomId, identity.userId) == false) {
+            RumorLog.w(TAG, "Refusing to compose ROOM_INVITE: not a moderator of ${roomId.take(8)}…")
+            return null
+        }
+        val signed = roomInviteSignableBytes(roomId, invitedUserId, encryptedRoomKey, expiresAtMs, identity.userId)
+        val invite = RoomInvite(
+            roomId = roomId,
+            invitedUserId = invitedUserId,
+            encryptedRoomKey = encryptedRoomKey,
+            expiresAtMs = expiresAtMs,
+            moderatorId = identity.userId,
+            moderatorSignature = CryptoManager.sign(signed, identity.privateKeyBytes).toBase64(),
+        )
+        roomRepo?.addMember(roomId, invitedUserId)
+        return composeOutbound(
+            type = MessageType.ROOM_INVITE,
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(invite)),
+        )
+    }
+
+    /** O187 — take a moderation action. Same moderator precondition as invite. */
+    suspend fun composeRoomAction(
+        roomId: String,
+        kind: RoomActionKind,
+        target: String,
+        reason: String? = null,
+    ): RumorMessage? {
+        val identity = identityProvider.identity.value ?: return null
+        if (roomRepo?.isModerator(roomId, identity.userId) == false) {
+            RumorLog.w(TAG, "Refusing to compose ROOM_ACTION: not a moderator of ${roomId.take(8)}…")
+            return null
+        }
+        val takenAtMs = clock.now()
+        val signed = roomActionSignableBytes(roomId, kind, target, reason, identity.userId, takenAtMs)
+        val action = RoomAction(
+            roomId = roomId,
+            kind = kind,
+            target = target,
+            reason = reason,
+            moderatorId = identity.userId,
+            takenAtMs = takenAtMs,
+            moderatorSignature = CryptoManager.sign(signed, identity.privateKeyBytes).toBase64(),
+        )
+        when (kind) {
+            RoomActionKind.KICK_USER -> roomRepo?.removeMember(roomId, target)
+            RoomActionKind.BAN_USER -> roomRepo?.addBan(roomId, target)
+            RoomActionKind.UNBAN_USER -> roomRepo?.removeBan(roomId, target)
+            RoomActionKind.REMOVE_MESSAGE -> Unit
+        }
+        return composeOutbound(
+            type = MessageType.ROOM_ACTION,
+            payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(action)),
+        )
+    }
+
     fun composeRoomMessage(
         routingTag: ByteArray,
         plaintext: String,
@@ -1291,6 +1412,18 @@ class GossipEngine(
         if (msg.type == MessageType.ROOM_MESSAGE) {
             scope.launch { handleRoomMessage(msg) }
         }
+        if (msg.type == MessageType.ROOM_CREATE ||
+            msg.type == MessageType.ROOM_INVITE ||
+            msg.type == MessageType.ROOM_ACTION
+        ) {
+            // O187: handled INLINE, not via scope.launch, because order within a
+            // batch is load-bearing. Launching per message raced CREATE against
+            // the INVITE that depends on it: the invite ran first, found no room
+            // to check moderator authority against, and was dropped — and dedup
+            // had already marked it seen, so it was never retried. An exchange
+            // commonly carries a room's whole history at once.
+            handleRoomLifecycle(msg)
+        }
 
         // O79: ROOM_MESSAGE inbox emission is handled by handleRoomMessage above
         // ONLY on subscription match. Skip the unconditional emit here so that
@@ -1347,6 +1480,110 @@ class GossipEngine(
      * The cert itself cannot be altered (moderator-signed) nor stripped (bound
      * into the `rumor-msg-v3:` transcript, O89 note in signableBytes).
      */
+    /**
+     * O187 — apply a verified room-lifecycle decision to [roomRepo].
+     *
+     * **Load-bearing invariant: the carrying message's sender must BE the
+     * author of the inner decision.** Relay preserves `senderId` and
+     * `senderPublicKey` (only hop counters change), and `ingest` has already
+     * proven `senderId == SHA-256(senderPublicKey)`, so that one rule gives
+     * every hop the right key to check the inner signature against without a
+     * contact lookup — and stops a third party wrapping someone else's room
+     * decision in a fresh envelope of their own.
+     *
+     * The inner signature is what receivers act on: the outer sig proves who
+     * handed you the bytes, the inner proves who authored the decision.
+     */
+    private suspend fun handleRoomLifecycle(msg: RumorMessage) {
+        val repo = roomRepo ?: return
+        val json = msg.payload?.content ?: return
+        val pubKey = runCatching { msg.senderPublicKey.fromBase64() }.getOrNull() ?: return
+
+        when (msg.type) {
+            MessageType.ROOM_CREATE -> {
+                val c = runCatching { WireJson.decodeFromString<RoomCreate>(json) }.getOrNull() ?: return
+                if (c.createdBy != msg.senderId) {
+                    RumorLog.w(TAG, "ROOM_CREATE: createdBy is not the sender — dropped")
+                    return
+                }
+                val signed = roomCreateSignableBytes(
+                    c.roomId, c.name, c.createdBy, c.createdAtMs,
+                    c.membershipPolicy, c.postingPolicy, c.allowMedia,
+                )
+                val sig = runCatching { c.signature.fromBase64() }.getOrNull() ?: return
+                if (!CryptoManager.verify(signed, sig, pubKey)) {
+                    RumorLog.w(TAG, "ROOM_CREATE: inner signature invalid — dropped")
+                    return
+                }
+                // First-writer-wins: a room's identity is its creator's. Letting a
+                // later CREATE for the same roomId overwrite the record would let
+                // anyone reset another room's policies by re-announcing it.
+                if (repo.get(c.roomId) != null) return
+                repo.upsert(
+                    com.rumor.mesh.core.data.RoomRecord(
+                        roomId = c.roomId,
+                        name = c.name,
+                        creatorId = c.createdBy,
+                        createdAtMs = c.createdAtMs,
+                        membershipPolicy = c.membershipPolicy,
+                        postingPolicy = c.postingPolicy,
+                        allowMedia = c.allowMedia,
+                    )
+                )
+                RumorLog.i(TAG, "Room ${c.roomId.take(8)}… created by ${c.createdBy.take(8)}…")
+            }
+
+            MessageType.ROOM_INVITE -> {
+                val inv = runCatching { WireJson.decodeFromString<RoomInvite>(json) }.getOrNull() ?: return
+                if (inv.moderatorId != msg.senderId) return
+                val signed = roomInviteSignableBytes(
+                    inv.roomId, inv.invitedUserId, inv.encryptedRoomKey, inv.expiresAtMs, inv.moderatorId,
+                )
+                val sig = runCatching { inv.moderatorSignature.fromBase64() }.getOrNull() ?: return
+                if (!CryptoManager.verify(signed, sig, pubKey)) return
+                if (!repo.isModerator(inv.roomId, inv.moderatorId)) {
+                    RumorLog.w(TAG, "ROOM_INVITE for ${inv.roomId.take(8)}… from a non-moderator — dropped")
+                    return
+                }
+                if (clock.now() >= inv.expiresAtMs) return
+                // A ban outranks an invite: otherwise any moderator could undo a
+                // ban implicitly by re-inviting, bypassing the explicit UNBAN that
+                // O152 makes the auditable path.
+                if (repo.isBanned(inv.roomId, inv.invitedUserId)) {
+                    RumorLog.w(TAG, "ROOM_INVITE for a banned user — dropped")
+                    return
+                }
+                repo.addMember(inv.roomId, inv.invitedUserId)
+            }
+
+            MessageType.ROOM_ACTION -> {
+                val a = runCatching { WireJson.decodeFromString<RoomAction>(json) }.getOrNull() ?: return
+                if (a.moderatorId != msg.senderId) return
+                val signed = roomActionSignableBytes(
+                    a.roomId, a.kind, a.target, a.reason, a.moderatorId, a.takenAtMs,
+                )
+                val sig = runCatching { a.moderatorSignature.fromBase64() }.getOrNull() ?: return
+                if (!CryptoManager.verify(signed, sig, pubKey)) return
+                if (!repo.isModerator(a.roomId, a.moderatorId)) {
+                    RumorLog.w(TAG, "ROOM_ACTION on ${a.roomId.take(8)}… from a non-moderator — dropped")
+                    return
+                }
+                when (a.kind) {
+                    RoomActionKind.KICK_USER -> repo.removeMember(a.roomId, a.target)
+                    RoomActionKind.BAN_USER -> repo.addBan(a.roomId, a.target)
+                    RoomActionKind.UNBAN_USER -> repo.removeBan(a.roomId, a.target)
+                    // Message removal is a display-layer concern with its own
+                    // signed type (MESSAGE_DELETE); a roster repo has nothing to
+                    // apply here. Verified and relayed, deliberately not acted on.
+                    RoomActionKind.REMOVE_MESSAGE -> Unit
+                }
+                RumorLog.i(TAG, "Room ${a.roomId.take(8)}…: ${a.kind} applied to ${a.target.take(8)}…")
+            }
+
+            else -> Unit
+        }
+    }
+
     private fun isAuthorizedToPost(msg: RumorMessage, roomId: String): Boolean {
         val authority = roomAuthorityProvider ?: return true
         if (!authority.requiresPostingCert(roomId)) return true
@@ -1533,6 +1770,12 @@ class GossipEngine(
         when (msg.type) {
             MessageType.BROADCAST,
             MessageType.BRIDGE_VOUCHED,
+            // O187: room lifecycle relays broadcast-style. A roster change has
+            // to reach members who were offline when it happened, or a kick/ban
+            // silently fails to propagate and nodes disagree about who may post.
+            MessageType.ROOM_CREATE,
+            MessageType.ROOM_INVITE,
+            MessageType.ROOM_ACTION,
             MessageType.ROOM_MESSAGE -> {
                 // Room messages relay like broadcasts: every honest relay
                 // forwards regardless of subscription state. Routing is via
@@ -1632,6 +1875,9 @@ class GossipEngine(
             MessageType.MESSAGE_DELETE,
             MessageType.PREKEY_PUBLISH,
             MessageType.BRIDGE_VOUCHED,
+            MessageType.ROOM_CREATE,
+            MessageType.ROOM_INVITE,
+            MessageType.ROOM_ACTION,
             MessageType.ROOM_MESSAGE -> MAX_BROADCAST_HOPS
             MessageType.DIRECT, MessageType.DIRECT_ACK,
             MessageType.TRANSFER_METADATA,

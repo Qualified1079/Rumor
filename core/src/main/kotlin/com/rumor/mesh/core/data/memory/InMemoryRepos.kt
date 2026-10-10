@@ -260,6 +260,50 @@ class InMemoryFilterSubscriptionRepository : com.rumor.mesh.core.data.FilterSubs
     override suspend fun delete(publisherId: String) { subs.remove(publisherId) }
 }
 
+class InMemoryRoomRepository : com.rumor.mesh.core.data.RoomRepository {
+    private val rooms = ConcurrentHashMap<String, com.rumor.mesh.core.data.RoomRecord>()
+    private val mods = ConcurrentHashMap<String, MutableSet<String>>()
+    private val members = ConcurrentHashMap<String, MutableSet<String>>()
+    private val bans = ConcurrentHashMap<String, MutableSet<String>>()
+
+    private fun setFor(m: ConcurrentHashMap<String, MutableSet<String>>, roomId: String) =
+        m.computeIfAbsent(roomId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
+
+    override suspend fun upsert(room: com.rumor.mesh.core.data.RoomRecord) {
+        rooms[room.roomId] = room
+        // The creator moderates by construction (see RoomRecord KDoc).
+        setFor(mods, room.roomId).add(room.creatorId)
+    }
+    override suspend fun get(roomId: String) = rooms[roomId]
+    override suspend fun getAll() = rooms.values.toList()
+    override suspend fun delete(roomId: String) {
+        rooms.remove(roomId); mods.remove(roomId); members.remove(roomId); bans.remove(roomId)
+    }
+
+    override suspend fun addModerator(roomId: String, userId: String) { setFor(mods, roomId).add(userId) }
+    override suspend fun removeModerator(roomId: String, userId: String) {
+        // The creator's own moderator status is not removable — otherwise an
+        // emptied mod list leaves the room permanently ungovernable.
+        if (rooms[roomId]?.creatorId == userId) return
+        mods[roomId]?.remove(userId)
+    }
+    override suspend fun isModerator(roomId: String, userId: String) = mods[roomId]?.contains(userId) == true
+    override suspend fun moderatorsOf(roomId: String) = mods[roomId]?.toSet() ?: emptySet()
+
+    override suspend fun addMember(roomId: String, userId: String) { setFor(members, roomId).add(userId) }
+    override suspend fun removeMember(roomId: String, userId: String) { members[roomId]?.remove(userId) }
+    override suspend fun isMember(roomId: String, userId: String) = members[roomId]?.contains(userId) == true
+    override suspend fun membersOf(roomId: String) = members[roomId]?.toSet() ?: emptySet()
+
+    override suspend fun addBan(roomId: String, userId: String) {
+        setFor(bans, roomId).add(userId)
+        members[roomId]?.remove(userId)
+    }
+    override suspend fun removeBan(roomId: String, userId: String) { bans[roomId]?.remove(userId) }
+    override suspend fun isBanned(roomId: String, userId: String) = bans[roomId]?.contains(userId) == true
+    override suspend fun bansOf(roomId: String) = bans[roomId]?.toSet() ?: emptySet()
+}
+
 class InMemoryRoomSubscriptionRepository : com.rumor.mesh.core.data.RoomSubscriptionRepository {
     private val subs = ConcurrentHashMap<String, com.rumor.mesh.core.data.RoomSubscription>()
     override suspend fun upsert(subscription: com.rumor.mesh.core.data.RoomSubscription) {

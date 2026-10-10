@@ -266,6 +266,24 @@ enum class MessageType {
      */
     @SerialName("room_message") ROOM_MESSAGE,
     /**
+     * O187 room lifecycle. Each carries its payload as a WireJson string in
+     * `payload.content` with ContentType.CONTROL, and each is **self-
+     * authenticating against its own inner signature** — `RoomCreate` by the
+     * creator, `RoomInvite`/`RoomAction` by the issuing moderator — on top of
+     * the ordinary outer Ed25519 on the carrying RumorMessage. The outer sig
+     * proves who relayed it to you; the inner proves who authored the room
+     * decision, which is what receivers act on.
+     *
+     * INFRASTRUCTURE class: small, time-sensitive control traffic that must
+     * pre-empt bulk. Relayed like other broadcasts so a room's roster reaches
+     * members who were offline when it changed.
+     *
+     * Serial names are RESERVED FOREVER (docs/RENAMED_FIELDS_NEVER_REUSE.md).
+     */
+    @SerialName("room_create") ROOM_CREATE,
+    @SerialName("room_invite") ROOM_INVITE,
+    @SerialName("room_action") ROOM_ACTION,
+    /**
      * On-receipt delivery acknowledgement for a DIRECT message (O202 delivery
      * hardening; the O58 Tier-1 DM-ACK return path). The final recipient of a
      * DIRECT DM emits one of these back to the original sender the moment the
@@ -408,6 +426,10 @@ val RumorMessage.trafficClass: TrafficClass
             MessageType.BLOCKLIST_PUBLISH,
             MessageType.KEYWORD_FILTER_PUBLISH,
             MessageType.PREKEY_PUBLISH -> TrafficClass.TRANSFER_SETUP
+            // O187: room lifecycle is small signed control traffic.
+            MessageType.ROOM_CREATE,
+            MessageType.ROOM_INVITE,
+            MessageType.ROOM_ACTION -> TrafficClass.INFRASTRUCTURE
             MessageType.CHUNK             -> TrafficClass.BULK
             MessageType.BROADCAST,
             MessageType.DIRECT,

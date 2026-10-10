@@ -67,6 +67,31 @@ class TrafficClassInvariantTest {
     @Test fun `SELF_PRESENCE is INFRASTRUCTURE`() =
         assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.SELF_PRESENCE).trafficClass)
 
+    // O187 room lifecycle: small signed control traffic that must pre-empt bulk,
+    // so a kick/ban reaches members while a transfer is saturating the link.
+    @Test fun `ROOM_CREATE is INFRASTRUCTURE`() =
+        assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.ROOM_CREATE).trafficClass)
+
+    @Test fun `ROOM_INVITE is INFRASTRUCTURE`() =
+        assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.ROOM_INVITE).trafficClass)
+
+    @Test fun `ROOM_ACTION is INFRASTRUCTURE`() =
+        assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.ROOM_ACTION).trafficClass)
+
+    /**
+     * The class is derived from the TYPE, not from the payload's contentType —
+     * so a room decision cannot be demoted to BULK (and starved behind a
+     * transfer) by a sender claiming a media content type.
+     */
+    @Test fun `room lifecycle stays INFRASTRUCTURE regardless of claimed contentType`() {
+        for (t in listOf(MessageType.ROOM_CREATE, MessageType.ROOM_INVITE, MessageType.ROOM_ACTION)) {
+            assertEquals(
+                TrafficClass.INFRASTRUCTURE,
+                msg(t, ContentType.IMAGE).trafficClass,
+            )
+        }
+    }
+
     @Test fun `MESSAGE_DELETE is INFRASTRUCTURE`() =
         assertEquals(TrafficClass.INFRASTRUCTURE, msg(MessageType.MESSAGE_DELETE).trafficClass)
 
@@ -177,6 +202,9 @@ class TrafficClassInvariantTest {
             MessageType.PRIORITY_LINK_REQUEST,
             MessageType.PRIORITY_LINK_ACCEPT,
             MessageType.SELF_PRESENCE,
+            MessageType.ROOM_CREATE,
+            MessageType.ROOM_INVITE,
+            MessageType.ROOM_ACTION,
             MessageType.MESSAGE_DELETE,
             MessageType.TRANSFER_METADATA,
             MessageType.BLOCKLIST_PUBLISH,
