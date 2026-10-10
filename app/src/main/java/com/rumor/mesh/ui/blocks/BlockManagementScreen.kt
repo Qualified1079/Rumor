@@ -24,11 +24,14 @@ import org.koin.androidx.compose.koinViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.rumor.mesh.ui.SecureScreen
 
 @Composable
 fun BlockManagementScreen(
     viewModel: BlockManagementViewModel = koinViewModel(),
 ) {
+    SecureScreen()  // O165: keep secrets out of screenshots + the Recents card
+
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
 

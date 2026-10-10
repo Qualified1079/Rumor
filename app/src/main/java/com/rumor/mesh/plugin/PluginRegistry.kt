@@ -6,6 +6,7 @@ import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.core.protocol.GossipEngine
 import com.rumor.mesh.data.ContactDao
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,10 +58,27 @@ class PluginRegistry(
      * Register a plugin and call its [RumorPlugin.onAttach].
      * If a plugin with the same [RumorPlugin.pluginId] is already registered,
      * it is replaced after detaching the old one.
+     *
+     * O168: returns false when the attach was rolled back. O25 made this
+     * swallow an `onAttach` throw rather than propagate it, which left callers
+     * (PluginCatalog) unable to tell a successful enable from a failed one —
+     * Settings showed a bridge ON that had never attached. Crash isolation and
+     * an honest result are both required; the return value is how.
      */
-    fun register(plugin: RumorPlugin) {
+    fun register(plugin: RumorPlugin): Boolean {
         unregister(plugin.pluginId)
-        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        // O169: both bridges launch their inbound/outbound collectors straight
+        // into this scope, bypassing the try/catch at the dispatch site that O25
+        // hardened. A SupervisorJob stops a sibling from cancelling the others
+        // but does NOT absorb the throw — without a handler it reaches the
+        // thread's default uncaught handler and takes the whole process down,
+        // which is strictly worse than O25's "a crashing plugin gets disabled".
+        // Route it to the disable path instead: the plugin dies, the host lives.
+        val handler = CoroutineExceptionHandler { _, e ->
+            RumorLog.w(TAG, "Plugin ${plugin.pluginId} crashed in its own coroutine — disabling", e)
+            unregister(plugin.pluginId)
+        }
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + handler)
         pluginScopes[plugin.pluginId] = scope
         val ctx = PluginContextImpl(
             pluginId = plugin.pluginId,
@@ -84,10 +102,11 @@ class PluginRegistry(
             RumorLog.w(TAG, "Plugin ${plugin.pluginId} threw in onAttach — rolled back, not registered", e)
             pluginScopes.remove(plugin.pluginId)?.cancel()
             pluginContexts.remove(plugin.pluginId)?.unregisterAllEnvelopes()
-            return
+            return false
         }
         plugins.add(PluginHolder(plugin))
         RumorLog.i(TAG, "Registered plugin: ${plugin.pluginId} (${plugin.displayName} v${plugin.version})")
+        return true
     }
 
     /**

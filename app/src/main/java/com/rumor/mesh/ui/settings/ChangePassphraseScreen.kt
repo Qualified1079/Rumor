@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
+import com.rumor.mesh.ui.SecureScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -16,6 +17,8 @@ fun ChangePassphraseScreen(
     onBack: () -> Unit = {},
     viewModel: ChangePassphraseViewModel = koinViewModel(),
 ) {
+    SecureScreen()  // O165: keep secrets out of screenshots + the Recents card
+
     val state by viewModel.state.collectAsState()
 
     var current by remember { mutableStateOf("") }

@@ -37,6 +37,11 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsState()
 
+    // O179: the ViewModel is retained, so init{} alone would check the
+    // exemption once per process. Re-check on entry so the card reflects a
+    // change the user just made in system settings.
+    LaunchedEffect(Unit) { viewModel.refreshBatteryOptimisationState() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -96,24 +101,13 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(4.dp))
 
-        // ── Duty cycle ────────────────────────────────────────────────────
-        SectionHeader("Radio duty cycle")
-        Text(
-            "Scan interval: ${state.scanIntervalSec}s on / ${state.sleepIntervalSec}s sleep",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-        )
-        Slider(
-            value = state.scanIntervalSec.toFloat(),
-            onValueChange = { viewModel.setScanInterval(it.toInt()) },
-            valueRange = 3f..30f,
-            // One step per integer second so every whole-second value (including
-            // the 5s default) is a valid snap position — steps=8 previously only
-            // allowed multiples of 3, silently rounding 5 to 6 on any drag.
-            steps = 26,
-        )
-
-        Spacer(Modifier.height(4.dp))
+        // O178: the "Radio duty cycle" slider was removed, not wired. It drove
+        // only its own StateFlow field — nothing read scanIntervalSec, so the
+        // control did nothing. It cannot simply be connected either: scan
+        // interval is per-mode state (`ModeProfile.Rule.scanIntervalMs`), and a
+        // free-floating global override is precisely the scattered mode
+        // branching O62 exists to prevent. It returns as part of the mode-profile
+        // UI (O80), owned by the profile rather than by this screen.
 
         // ── Node mode (O57/O80) ───────────────────────────────────────────
         SectionHeader("Node mode")

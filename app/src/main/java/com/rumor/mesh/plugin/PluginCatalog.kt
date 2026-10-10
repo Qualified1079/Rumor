@@ -74,11 +74,19 @@ class PluginCatalog(
             return
         }
         if (pluginId in _enabled.value) return
-        runCatching { pluginRegistry.register(descriptor.factory()) }
-            .onFailure {
+        // O168: register() rolls an onAttach failure back and reports false
+        // rather than throwing (O25 crash isolation), so the result must be
+        // checked — otherwise a bridge that never attached is persisted as
+        // enabled and Settings shows it ON.
+        val attached = runCatching { pluginRegistry.register(descriptor.factory()) }
+            .getOrElse {
                 RumorLog.w(TAG, "Failed to enable $pluginId", it)
-                return
+                false
             }
+        if (!attached) {
+            RumorLog.w(TAG, "Not enabling $pluginId — attach did not take")
+            return
+        }
         _enabled.value = _enabled.value + pluginId
         prefs.edit { putBoolean(pluginId, true) }
     }

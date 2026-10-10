@@ -2,6 +2,7 @@ package com.rumor.mesh.ui.settings
 
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.identity.IdentityManager
@@ -18,8 +19,6 @@ import kotlinx.coroutines.launch
 data class SettingsState(
     val userId: String? = null,
     val deviceId: String? = null,
-    val scanIntervalSec: Int = 5,
-    val sleepIntervalSec: Int = 30,
     val debugLogging: Boolean = false,
     val modeAuto: Boolean = false,
     val currentMode: UserMode = UserMode.MOBILE,
@@ -36,6 +35,7 @@ class SettingsViewModel(
     val state: StateFlow<SettingsState> = _state.asStateFlow()
 
     init {
+        refreshBatteryOptimisationState()
         viewModelScope.launch {
             identityManager.identity.collect { identity ->
                 _state.update { it.copy(
@@ -70,10 +70,6 @@ class SettingsViewModel(
         modeStateManager.setMode(mode)
     }
 
-    fun setScanInterval(seconds: Int) {
-        _state.update { it.copy(scanIntervalSec = seconds) }
-    }
-
     fun setDebugLogging(enabled: Boolean) {
         RumorLog.debugMode = enabled
         _state.update { it.copy(debugLogging = enabled) }
@@ -81,6 +77,24 @@ class SettingsViewModel(
 
     fun onViewLogsTapped() {
         // Navigation handled by MainActivity
+    }
+
+    /**
+     * O179: the warning card was unreachable — `showBatteryOptimisationWarning`
+     * defaulted false and nothing ever set it true, so the "Fix this" path
+     * existed but never appeared. This is not cosmetic: the field record (G24)
+     * is that the Moto G Play needs Battery -> Unrestricted or Doze kills
+     * background BLE outright, which reads as "the mesh randomly stops". O33
+     * tracks the first-run request flow; this is the always-available check.
+     *
+     * Querying the state needs no permission (only *requesting* the exemption
+     * does), so it is safe to refresh on every return to Settings.
+     */
+    fun refreshBatteryOptimisationState() {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        val exempt = runCatching { pm.isIgnoringBatteryOptimizations(context.packageName) }
+            .getOrDefault(true)  // unknown -> don't nag
+        _state.update { it.copy(showBatteryOptimisationWarning = !exempt) }
     }
 
     fun onOpenBatterySettings() {

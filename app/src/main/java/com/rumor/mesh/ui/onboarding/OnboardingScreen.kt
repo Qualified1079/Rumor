@@ -15,6 +15,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.rumor.mesh.ui.SecureScreen
 
 /**
  * First-launch onboarding: set a passphrase, generate identity.
@@ -26,6 +27,8 @@ fun OnboardingScreen(
     onPassphraseConfirmed: (passphrase: String) -> Unit,
     errorMessage: String? = null,
 ) {
+    SecureScreen()  // O165: keep secrets out of screenshots + the Recents card
+
     var passphrase by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
     var showPassphrase by remember { mutableStateOf(false) }

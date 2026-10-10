@@ -118,10 +118,13 @@ class ThreadViewModel(
         _peerId.update { peerId }
     }
 
-    fun send(text: String) {
-        val peer = _peerId.value ?: return
-        if (text.isBlank()) return
+    /** O164: false when the service isn't bound — caller keeps the user's text. */
+    fun send(text: String): Boolean {
+        val peer = _peerId.value ?: return false
+        if (text.isBlank()) return false
+        if (!controllerHolder.isBound()) return false
         controllerHolder.controller().sendDirect(peer, text.trim())
+        return true
     }
 
     fun markAllRead() {

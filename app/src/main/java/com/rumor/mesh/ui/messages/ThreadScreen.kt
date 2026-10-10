@@ -24,7 +24,9 @@ import com.rumor.mesh.ui.formatElapsed
 import com.rumor.mesh.ui.theme.AwayGrey
 import com.rumor.mesh.ui.theme.OnlineGreen
 import com.rumor.mesh.ui.theme.RecentlyAmber
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
+import com.rumor.mesh.ui.SecureScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,6 +35,8 @@ fun ThreadScreen(
     onBack: () -> Unit,
     viewModel: ThreadViewModel = koinViewModel(),
 ) {
+    SecureScreen()  // O165: keep secrets out of screenshots + the Recents card
+
     LaunchedEffect(peerId) {
         viewModel.bind(peerId)
     }
@@ -41,6 +45,8 @@ fun ThreadScreen(
     val header by viewModel.header.collectAsState()
     val listState = rememberLazyListState()
     var composeText by remember { mutableStateOf("") }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -88,13 +94,16 @@ fun ThreadScreen(
             }
         }
 
+        SnackbarHost(snackbarHostState)
         HorizontalDivider()
         ComposeBar(
             text = composeText,
             onTextChange = { composeText = it },
             onSend = {
-                viewModel.send(composeText)
-                composeText = ""
+                // O164: an unbound service silently ate the DM; keep the text.
+                if (viewModel.send(composeText)) composeText = "" else scope.launch {
+                    snackbarHostState.showSnackbar("Mesh service still starting — not sent. Try again.")
+                }
             },
         )
     }

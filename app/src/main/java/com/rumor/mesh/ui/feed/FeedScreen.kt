@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import com.rumor.mesh.core.model.RumorMessage
 import com.rumor.mesh.ui.capForDisplay
@@ -30,12 +31,22 @@ fun FeedScreen(
     val senderNames by viewModel.senderNames.collectAsState()
     var composeText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // O164: the mesh service rebinds asynchronously after every
+    // background->foreground cycle. A send in that window goes nowhere, so say
+    // so and keep the text rather than clearing the field as if it had sent.
+    fun notBound() = scope.launch {
+        snackbarHostState.showSnackbar("Mesh service still starting — not sent. Try again.")
+    }
 
     LaunchedEffect(broadcasts.size) {
         if (broadcasts.isNotEmpty()) listState.animateScrollToItem(0)
     }
 
     Column(Modifier.fillMaxSize()) {
+        SnackbarHost(snackbarHostState)
         LazyColumn(
             modifier = Modifier.weight(1f),
             state = listState,
@@ -48,7 +59,7 @@ fun FeedScreen(
                     message = msg,
                     senderName = senderNames[msg.senderId],
                     isOwnMessage = viewModel.isOwnMessage(msg.senderId),
-                    onRelay = { viewModel.relay(msg) },
+                    onRelay = { if (!viewModel.relay(msg)) notBound() },
                 )
             }
         }
@@ -58,8 +69,7 @@ fun FeedScreen(
             text = composeText,
             onTextChange = { composeText = it },
             onSend = {
-                viewModel.sendBroadcast(composeText)
-                composeText = ""
+                if (viewModel.sendBroadcast(composeText)) composeText = "" else notBound()
             },
         )
     }
