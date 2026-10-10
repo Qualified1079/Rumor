@@ -218,6 +218,24 @@ class MessageStore(
             return false
         }
 
+        // O186/O36: the ungoverned global feed is text-only, enforced as a drop
+        // before enqueue. A ROOM_MESSAGE carrying a plaintext `payload` is
+        // feed-class by construction — every *governed* room is ENCRYPTED (O155),
+        // so it arrives as `encryptedPayload` and is untouched here; its own media
+        // policy is its creator's to set (`RoomCreate.allowMedia`). contentType is
+        // inside signableBytes, so a relay cannot flip it to smuggle media past
+        // this gate, and every honest node derives the same verdict. Recorded as
+        // seen above, so a re-offer fast-drops instead of looping.
+        if (msg.type == com.rumor.mesh.core.model.MessageType.ROOM_MESSAGE &&
+            msg.encryptedPayload == null &&
+            msg.payload != null &&
+            msg.payload.contentType != com.rumor.mesh.core.model.ContentType.TEXT
+        ) {
+            RumorLog.w(TAG, "Dropping non-text feed ROOM_MESSAGE ${msg.id.take(8)}… " +
+                "(contentType=${msg.payload.contentType})")
+            return false
+        }
+
         if (!persist) return true
         ensureContact(msg.senderId, msg.senderPublicKey)
         messageRepo.insert(msg)
