@@ -72,9 +72,17 @@ class RoomPostingAuthorityTest {
     private val senderId = CryptoManager.publicKeyToUserId(senderKp.publicKeyBytes)
 
     /** Receiver subscribes to the room and requires certs; `modId` is its mod. */
+    /** Mutable so a test can ban or un-member the sender mid-scenario. */
+    private val banned = mutableSetOf<String>()
+    private val members = mutableSetOf(senderId)
+    private var membershipRequired = false
+
     private val authority = object : GossipEngine.RoomAuthorityProvider {
         override fun requiresPostingCert(roomId: String) = true
         override fun isModerator(roomId: String, moderatorId: String) = moderatorId == modId
+        override fun requiresMembershipToPost(roomId: String) = membershipRequired
+        override fun isMember(roomId: String, userId: String) = userId in members
+        override fun isBanned(roomId: String, userId: String) = userId in banned
     }
 
     private val subscription = object : GossipEngine.RoomSubscriptionProvider {
@@ -219,6 +227,37 @@ class RoomPostingAuthorityTest {
             "a cert whose window starts in the future must not authorize",
             postAndReceive(cert(validFromMs = Long.MAX_VALUE / 4, validToMs = Long.MAX_VALUE / 2)),
         )
+    }
+
+    @Test
+    fun `a banned sender is refused even holding a valid cert`() {
+        // A ban must outrank a cert issued before it — otherwise banning someone
+        // does nothing until their cert happens to expire.
+        banned.add(senderId)
+        try {
+            assertFalse("a banned sender must be refused despite a valid cert", postAndReceive(cert()))
+        } finally {
+            banned.remove(senderId)
+        }
+        // Control: the same cert works once the ban is lifted.
+        assertTrue("un-banning must restore posting", postAndReceive(cert()))
+    }
+
+    @Test
+    fun `a non-member is refused when the room requires membership`() {
+        // The gap this closes: the first cut returned early for every room that
+        // did not require a cert, with a comment claiming membership enforced
+        // it — and nothing did, so MEMBER_ONLY rooms had no write enforcement.
+        membershipRequired = true
+        members.remove(senderId)
+        try {
+            assertFalse("a non-member must be refused", postAndReceive(cert()))
+            members.add(senderId)
+            assertTrue("a member with a valid cert must be accepted", postAndReceive(cert()))
+        } finally {
+            membershipRequired = false
+            members.add(senderId)
+        }
     }
 
     /**

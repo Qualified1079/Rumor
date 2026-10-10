@@ -253,6 +253,22 @@ class GossipEngine(
          * without waiting for them to expire.
          */
         fun isModerator(roomId: String, moderatorId: String): Boolean
+
+        /**
+         * Whether [roomId] admits posts only from members. True for every
+         * bounded-membership room; false for the ungoverned feed, which by
+         * definition has no roster.
+         */
+        fun requiresMembershipToPost(roomId: String): Boolean
+
+        fun isMember(roomId: String, userId: String): Boolean
+
+        /**
+         * Checked unconditionally, ahead of every other gate — a ban must hold
+         * regardless of the room's posting policy and regardless of any cert
+         * the banned user still holds from before the ban.
+         */
+        fun isBanned(roomId: String, userId: String): Boolean
     }
 
     interface RoomSubscriptionProvider {
@@ -860,7 +876,7 @@ class GossipEngine(
      * it can moderate.
      */
     suspend fun composeRoomCreate(
-        roomId: String,
+        nonce: String,
         name: String,
         membershipPolicy: com.rumor.mesh.core.model.RoomMembershipPolicy,
         postingPolicy: com.rumor.mesh.core.model.RoomPostingPolicy,
@@ -868,8 +884,10 @@ class GossipEngine(
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
         val createdAtMs = clock.now()
+        // Derived, not supplied — the caller picks a nonce, not an id.
+        val roomId = RoomId.derive(identity.userId, nonce)
         val signed = roomCreateSignableBytes(
-            roomId, name, identity.userId, createdAtMs, membershipPolicy, postingPolicy, allowMedia,
+            roomId, name, identity.userId, createdAtMs, membershipPolicy, postingPolicy, allowMedia, nonce,
         )
         val create = RoomCreate(
             roomId = roomId,
@@ -879,6 +897,7 @@ class GossipEngine(
             membershipPolicy = membershipPolicy,
             postingPolicy = postingPolicy,
             allowMedia = allowMedia,
+            nonce = nonce,
             signature = CryptoManager.sign(signed, identity.privateKeyBytes).toBase64(),
         )
         roomRepo?.upsert(
@@ -1506,9 +1525,18 @@ class GossipEngine(
                     RumorLog.w(TAG, "ROOM_CREATE: createdBy is not the sender — dropped")
                     return
                 }
+                // The roomId must DERIVE from its creator. Without this the id
+                // is a free-for-all string and first-writer-wins becomes a
+                // squatting race whose winner differs per node, so the mesh
+                // disagrees about who governs the room. Derivation removes the
+                // race instead of arbitrating it (see RoomId).
+                if (!RoomId.matches(c.roomId, c.createdBy, c.nonce)) {
+                    RumorLog.w(TAG, "ROOM_CREATE: roomId does not derive from createdBy — dropped")
+                    return
+                }
                 val signed = roomCreateSignableBytes(
                     c.roomId, c.name, c.createdBy, c.createdAtMs,
-                    c.membershipPolicy, c.postingPolicy, c.allowMedia,
+                    c.membershipPolicy, c.postingPolicy, c.allowMedia, c.nonce,
                 )
                 val sig = runCatching { c.signature.fromBase64() }.getOrNull() ?: return
                 if (!CryptoManager.verify(signed, sig, pubKey)) {
@@ -1586,6 +1614,26 @@ class GossipEngine(
 
     private fun isAuthorizedToPost(msg: RumorMessage, roomId: String): Boolean {
         val authority = roomAuthorityProvider ?: return true
+
+        // A ban is unconditional and is checked FIRST — before the cert branch,
+        // because a banned user may still hold an unexpired cert issued before
+        // the ban, and because a ban must bite in every room shape, not only in
+        // the ones that happen to require certs.
+        if (authority.isBanned(roomId, msg.senderId)) {
+            RumorLog.w(TAG, "Room ${roomId.take(8)}…: dropping post from banned ${msg.senderId.take(8)}…")
+            return false
+        }
+        // Membership. The first cut returned early for every non-MOD_APPROVED
+        // room with a comment claiming membership enforced it — and nothing
+        // did, so MEMBER_ONLY rooms had NO write enforcement at all and anyone
+        // who could compute the public routing tag could post. For ENCRYPTED
+        // rooms a non-member also has no key wrap, but that is a property of
+        // the envelope, not an access check, and OPEN-carried rooms have no
+        // such backstop.
+        if (authority.requiresMembershipToPost(roomId) && !authority.isMember(roomId, msg.senderId)) {
+            RumorLog.w(TAG, "Room ${roomId.take(8)}…: dropping post from non-member ${msg.senderId.take(8)}…")
+            return false
+        }
         if (!authority.requiresPostingCert(roomId)) return true
 
         val cert = msg.roomPostingCert ?: run {

@@ -61,7 +61,9 @@ class RoomLifecycleTest {
     }
 
     private val scope = CoroutineScope(SupervisorJob())
-    private val roomId = "room-alpha"
+    private val nonce = "n1"
+    /** Derived, not chosen — see RoomId. Computed from the creator's identity. */
+    private val roomId by lazy { com.rumor.mesh.core.protocol.RoomId.derive(modIdentity.userId, nonce) }
 
     private fun identityOf(kp: CryptoManager.Ed25519KeyPair) =
         LocalIdentity(CryptoManager.publicKeyToUserId(kp.publicKeyBytes), "dev", kp.publicKeyBytes, kp.privateKeyBytes)
@@ -123,7 +125,7 @@ class RoomLifecycleTest {
         val peer = node(null)
 
         val create = creator.engine.composeRoomCreate(
-            roomId, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, allowMedia = false,
+            nonce, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, allowMedia = false,
         )
         assertNotNull("compose must succeed", create)
         deliver(peer, create!!)
@@ -143,7 +145,7 @@ class RoomLifecycleTest {
         val creator = node(modIdentity)
         val peer = node(null)
         val create = creator.engine.composeRoomCreate(
-            roomId, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
+            nonce, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
         )!!
         val invite = creator.engine.composeRoomInvite(roomId, alice, "wrapped-key", Long.MAX_VALUE / 2)
         assertNotNull("a moderator must be able to compose an invite", invite)
@@ -167,7 +169,7 @@ class RoomLifecycleTest {
         val outsider = node(outsiderIdentity)
         val peer = node(null)
         val create = creator.engine.composeRoomCreate(
-            roomId, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
+            nonce, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
         )!!
 
         // Hand-built, validly self-signed invite: the outsider signs it with its
@@ -209,7 +211,7 @@ class RoomLifecycleTest {
         val creator = node(modIdentity)
         val peer = node(null)
         val create = creator.engine.composeRoomCreate(
-            roomId, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
+            nonce, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
         )!!
         val invite = creator.engine.composeRoomInvite(roomId, alice, "k", Long.MAX_VALUE / 2)!!
         deliver(peer, create, invite)
@@ -232,7 +234,7 @@ class RoomLifecycleTest {
         val creator = node(modIdentity)
         val peer = node(null)
         val create = creator.engine.composeRoomCreate(
-            roomId, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
+            nonce, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
         )!!
         deliver(peer, create, creator.engine.composeRoomAction(roomId, RoomActionKind.BAN_USER, alice, null)!!)
         deliver(peer, creator.engine.composeRoomAction(roomId, RoomActionKind.UNBAN_USER, alice, null)!!)
@@ -248,19 +250,71 @@ class RoomLifecycleTest {
         val outsider = node(outsiderIdentity)
         val peer = node(null)
         deliver(peer, creator.engine.composeRoomCreate(
-            roomId, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, allowMedia = false,
+            nonce, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, allowMedia = false,
         )!!)
-        // Anyone can re-announce a roomId; first-writer-wins stops that resetting
-        // another room's policies or installing a new "creator" moderator.
-        deliver(peer, outsider.engine.composeRoomCreate(
-            roomId, "Hijacked", RoomMembershipPolicy.OPEN, RoomPostingPolicy.MEMBER_ONLY, allowMedia = true,
-        )!!)
+        // Same nonce, different identity -> a DIFFERENT derived roomId, because
+        // the creator's own id is inside the derivation. The outsider cannot
+        // address this room at all, so there is no squatting race to win.
+        val hijack = outsider.engine.composeRoomCreate(
+            nonce, "Hijacked", RoomMembershipPolicy.OPEN, RoomPostingPolicy.MEMBER_ONLY, allowMedia = true,
+        )!!
+        deliver(peer, hijack)
 
         val room = peer.rooms.get(roomId)!!
         assertEquals("the original name must survive", "Alpha", room.name)
         assertEquals("the original creator must survive", modIdentity.userId, room.creatorId)
         assertFalse("the hijacker must not have become a moderator",
             peer.rooms.isModerator(roomId, outsiderIdentity.userId))
+    }
+
+    /**
+     * The derivation guard itself, exercised by bypassing compose (which can
+     * only ever produce a correctly derived id). A hostile client WILL assert
+     * someone else's roomId directly.
+     */
+    @Test
+    fun `a CREATE whose roomId does not derive from its creator is dropped`() = runBlocking {
+        val outsider = node(outsiderIdentity)
+        val peer = node(null)
+
+        // Claim the victim's roomId while signing as ourselves — everything
+        // verifies except the id<-creator binding.
+        val createdAtMs = 1_000L
+        val signed = com.rumor.mesh.core.model.roomCreateSignableBytes(
+            roomId, "Squatted", outsiderIdentity.userId, createdAtMs,
+            RoomMembershipPolicy.OPEN, RoomPostingPolicy.MEMBER_ONLY, true, nonce,
+        )
+        val forged = com.rumor.mesh.core.model.RoomCreate(
+            roomId = roomId,
+            name = "Squatted",
+            createdBy = outsiderIdentity.userId,
+            createdAtMs = createdAtMs,
+            membershipPolicy = RoomMembershipPolicy.OPEN,
+            postingPolicy = RoomPostingPolicy.MEMBER_ONLY,
+            allowMedia = true,
+            nonce = nonce,
+            signature = CryptoManager.sign(signed, outsiderKp.privateKeyBytes).toBase64(),
+        )
+        val carried = outsider.engine.composeOutbound(
+            type = com.rumor.mesh.core.model.MessageType.ROOM_CREATE,
+            payload = com.rumor.mesh.core.model.MessagePayload(
+                com.rumor.mesh.core.model.ContentType.CONTROL,
+                com.rumor.mesh.core.wire.WireJson.encodeToString(forged),
+            ),
+        )!!
+        deliver(peer, carried)
+        assertNull(
+            "a CREATE asserting an id that does not derive from its creator must be dropped",
+            peer.rooms.get(roomId),
+        )
+
+        // Control: the genuine creator's CREATE for the same id IS accepted, so
+        // the drop above is the derivation check and not a decode failure.
+        val creator = node(modIdentity)
+        deliver(peer, creator.engine.composeRoomCreate(
+            nonce, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
+        )!!)
+        assertEquals("Alpha", peer.rooms.get(roomId)?.name)
     }
 
     /**
@@ -272,7 +326,7 @@ class RoomLifecycleTest {
     fun `an engine with no room repo applies nothing and does not crash`() = runBlocking {
         val creator = node(modIdentity)
         val create = creator.engine.composeRoomCreate(
-            roomId, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
+            nonce, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
         )!!
         val repoless = node(null).let { it } // node() always wires a repo; build a bare one:
         val contactRepo = InMemoryContactRepository()

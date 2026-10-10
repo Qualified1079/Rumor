@@ -78,6 +78,13 @@ data class RoomCreate(
     val postingPolicy: RoomPostingPolicy,
     /** Whether the Room creator allows media attachments. False = text-only. */
     val allowMedia: Boolean,
+    /**
+     * Creator-chosen nonce that, with [createdBy], derives [roomId] via
+     * [com.rumor.mesh.core.protocol.RoomId]. Receivers recompute and reject a
+     * mismatch, which is what makes roomId squatting impossible rather than
+     * merely arbitrated (see RoomId's KDoc).
+     */
+    val nonce: String,
     /** Base64-encoded Ed25519 sig over [roomCreateSignableBytes]. */
     val signature: String,
     @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
@@ -149,9 +156,12 @@ fun roomCreateSignableBytes(
     membershipPolicy: RoomMembershipPolicy,
     postingPolicy: RoomPostingPolicy,
     allowMedia: Boolean,
+    nonce: String,
 ): ByteArray = buildString {
     // O156/O157 — length-prefixed framing (free-text [name] between bare delimiters).
-    append("rumor-room-create-v2:")
+    // v3 binds [nonce], so the roomId<-creator derivation is itself signed and a
+    // relay cannot re-point a signed CREATE at a different id (RoomId KDoc).
+    append("rumor-room-create-v3:")
     framed(roomId)
     framed(name)
     framed(createdBy)
@@ -159,6 +169,7 @@ fun roomCreateSignableBytes(
     framed(membershipPolicy.name)
     framed(postingPolicy.name)
     framed(allowMedia)
+    framed(nonce)
 }.encodeToByteArray()
 
 /** Domain-tagged signable bytes for a [RoomInvite]. */
