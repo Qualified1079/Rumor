@@ -97,23 +97,38 @@ class MessageStoreFeedMediaTest {
     }
 
     /**
-     * The structural half: `contentType` lives inside `signableBytes`, so a
-     * relay cannot flip a signed TEXT feed post into an IMAGE to smuggle media
-     * past the gate. Without this the drop would only bind honest senders.
+     * O212 regression — the feed drop must NOT burn the message id.
+     *
+     * `contentType` is NOT in the signed transcript (`signableBytes` covers
+     * `payload.content` but not contentType/filename/mimeType/sizeBytes), so a
+     * relay can retype a legitimate TEXT post to IMAGE and the signature still
+     * verifies. This test pins that reality rather than the comfortable
+     * assumption — and then pins the consequence that matters: if the media
+     * drop recorded the id as seen, that costless flip would blackhole the
+     * genuine post for every downstream node (the §2 censorship primitive).
+     *
+     * When O212 signs contentType, the first assertion flips and the drop can
+     * move below the record-as-seen commit.
      */
     @Test
-    fun `contentType is signed - a relay cannot retype a text feed post as media`() = runBlocking {
+    fun `a retyped feed post is dropped without blackholing the genuine one`() = runBlocking {
         val store = store()
-        val text = store.signedRoom("d".repeat(32), payload = MessagePayload(ContentType.TEXT, "hello feed"))
-        val retyped = text.copy(payload = MessagePayload(ContentType.IMAGE, "hello feed"))
-        assertFalse(
-            "retyping TEXT->IMAGE must break the signature, not merely hit the drop",
+        val genuine = store.signedRoom("d".repeat(32), payload = MessagePayload(ContentType.TEXT, "hello feed"))
+        val retyped = genuine.copy(payload = MessagePayload(ContentType.IMAGE, "hello feed"))
+
+        // Today contentType is unsigned, so the forgery carries a valid signature.
+        assertTrue(
+            "contentType is outside signableBytes — retyping keeps the sig valid (O212)",
             CryptoManager.verify(
                 store.signableBytes(retyped),
                 retyped.signature.fromBase64(),
                 kp.publicKeyBytes,
             ),
         )
-        assertFalse("and it must not ingest", store.ingest(retyped))
+        assertFalse("the retyped (media) post must be dropped", store.ingest(retyped))
+        assertTrue(
+            "the genuine TEXT post must STILL ingest — the drop must not burn the id",
+            store.ingest(genuine),
+        )
     }
 }

@@ -201,6 +201,32 @@ class MessageStore(
             return false
         }
 
+        // O186/O36: the ungoverned global feed is text-only, enforced as a drop
+        // before enqueue. A ROOM_MESSAGE carrying a plaintext `payload` is
+        // feed-class by construction — every *governed* room is ENCRYPTED (O155),
+        // so it arrives as `encryptedPayload` and is untouched here; its media
+        // policy is its creator's to set (`RoomCreate.allowMedia`).
+        //
+        // Deliberately placed BEFORE the record-as-seen commit, unlike O132's
+        // size drop, and the difference is load-bearing: `contentType` is NOT in
+        // the signed transcript (signableBytes covers payload.content but not
+        // contentType / filename / mimeType / sizeBytes — see O212). So a relay
+        // can flip a legitimate TEXT post to IMAGE without breaking its
+        // signature. If this drop burned the id, that flip would blackhole the
+        // genuine post for every downstream node — the §2 censorship primitive,
+        // rebuilt. Leaving the id unrecorded costs a re-offer (self-limiting,
+        // per the O92/O108 re-request philosophy) and costs nothing else.
+        // Once O212 signs contentType this can move below the commit.
+        if (msg.type == com.rumor.mesh.core.model.MessageType.ROOM_MESSAGE &&
+            msg.encryptedPayload == null &&
+            msg.payload != null &&
+            msg.payload.contentType != com.rumor.mesh.core.model.ContentType.TEXT
+        ) {
+            RumorLog.w(TAG, "Dropping non-text feed ROOM_MESSAGE ${msg.id.take(8)}… " +
+                "(contentType=${msg.payload.contentType})")
+            return false
+        }
+
         // 5. Commit: only now is it safe to mark the id permanently seen and store.
         duplicateFilter.recordAndCheck(msg.id)
 
@@ -215,24 +241,6 @@ class MessageStore(
         ) {
             RumorLog.w(TAG, "Dropping oversized ${msg.type} ${msg.id.take(8)}… " +
                 "(${msg.payload?.content?.length}B > ${com.rumor.mesh.core.model.MAX_BROADCAST_CONTENT_BYTES}B)")
-            return false
-        }
-
-        // O186/O36: the ungoverned global feed is text-only, enforced as a drop
-        // before enqueue. A ROOM_MESSAGE carrying a plaintext `payload` is
-        // feed-class by construction — every *governed* room is ENCRYPTED (O155),
-        // so it arrives as `encryptedPayload` and is untouched here; its own media
-        // policy is its creator's to set (`RoomCreate.allowMedia`). contentType is
-        // inside signableBytes, so a relay cannot flip it to smuggle media past
-        // this gate, and every honest node derives the same verdict. Recorded as
-        // seen above, so a re-offer fast-drops instead of looping.
-        if (msg.type == com.rumor.mesh.core.model.MessageType.ROOM_MESSAGE &&
-            msg.encryptedPayload == null &&
-            msg.payload != null &&
-            msg.payload.contentType != com.rumor.mesh.core.model.ContentType.TEXT
-        ) {
-            RumorLog.w(TAG, "Dropping non-text feed ROOM_MESSAGE ${msg.id.take(8)}… " +
-                "(contentType=${msg.payload.contentType})")
             return false
         }
 
