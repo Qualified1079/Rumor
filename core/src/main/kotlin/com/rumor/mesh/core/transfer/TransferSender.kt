@@ -37,8 +37,10 @@ class TransferSender(
     private val identityProvider: IdentityProvider,
     private val transferRepo: TransferRepository,
     private val chunkRepo: ChunkRepository,
+    // O159: injected so a test owns the lifetime instead of inheriting a
+    // process-lived IO scope. Default keeps every production call site unchanged.
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /**
      * O18: transferIds the receiver explicitly cancelled. Inbound chunk-
@@ -58,11 +60,6 @@ class TransferSender(
                         val req = runCatching {
                             WireJson.decodeFromString<ChunkRequest>(msg.payload?.content ?: return@collect)
                         }.getOrNull() ?: return@collect
-                        if (req.transferId in cancelledByReceiver) {
-                            // Receiver cancelled — silently drop; sender is the one
-                            // already-cancelled side from its own UI's perspective.
-                            return@collect
-                        }
                         handleChunkRequest(req, requesterId = msg.senderId)
                     }
                     MessageType.TRANSFER_CANCEL -> {
@@ -71,13 +68,21 @@ class TransferSender(
                                 msg.payload?.content ?: return@collect
                             )
                         }.getOrNull() ?: return@collect
-                        cancelledByReceiver.add(cancel.transferId)
-                        markAbandoned(cancel.transferId)
+                        onTransferCancel(cancel.transferId)
                     }
                     else -> {}
                 }
             }
         }
+    }
+
+    /**
+     * O18 receiver-initiated cancel. Extracted from the inbound collector so
+     * the behaviour is reachable (and testable, O159) without driving a flow.
+     */
+    internal suspend fun onTransferCancel(transferId: String) {
+        cancelledByReceiver.add(transferId)
+        markAbandoned(transferId)
     }
 
     private suspend fun markAbandoned(transferId: String) {
@@ -147,7 +152,13 @@ class TransferSender(
         return metadata.transferId
     }
 
-    private suspend fun handleChunkRequest(req: ChunkRequest, requesterId: String) {
+    internal suspend fun handleChunkRequest(req: ChunkRequest, requesterId: String) {
+        // O18: the receiver-cancelled guard lives here rather than at the one
+        // call site that used to hold it, so any future path into this handler
+        // inherits it instead of relying on each caller to remember. (Keeping a
+        // security-relevant check at its call site is how an invariant ends up
+        // safe only by accident — see SourceInvariantTest's O5a guards.)
+        if (req.transferId in cancelledByReceiver) return
         val transfer = transferRepo.getById(req.transferId) ?: return
         if (transfer.direction != TransferDirection.SENDING) return
         if (transfer.status == TransferStatus.COMPLETE || transfer.status == TransferStatus.ABANDONED) return
