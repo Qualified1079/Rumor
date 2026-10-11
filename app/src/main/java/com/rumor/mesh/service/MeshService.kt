@@ -97,6 +97,8 @@ class MeshService : Service(), MeshController {
      * O93 LAN path. Built at [startMesh] like the coordinator (needs the
      * unlocked identity); null until the mesh is running.
      */
+    /** Snapshot for the transport's synchronous trusted-SSID checks. */
+    @Volatile private var recentPeerIds: List<String> = emptyList()
     @Volatile private var lanTransportManager: com.rumor.mesh.core.transport.lan.LanTransportManager? = null
     private var lanCollectJob: kotlinx.coroutines.Job? = null
 
@@ -229,7 +231,15 @@ class MeshService : Service(), MeshController {
             // its presence). Sessions still run bloom below the adaptive
             // size gate (RBSR_MIN_SET_SIZE) or against pre-O42 peers.
             rbsrItemsProvider   = gossipEngine::rbsrSnapshot,
+            knownPeerUserIds    = { recentPeerIds },
         )
+        // Contacts only exist for identities that authenticated (HELLO or a
+        // verified signature), so their derived SSIDs are the trusted set.
+        scope.launch {
+            contactRepo.observeAll().collect { contacts ->
+                recentPeerIds = contacts.sortedByDescending { it.lastSeenMs }.take(32).map { it.userId }
+            }
+        }
 
         // ── Wire transport output → gossip engine ────────────────────────────
         // O98: a completed P2P exchange is a realizable backbone edge — the

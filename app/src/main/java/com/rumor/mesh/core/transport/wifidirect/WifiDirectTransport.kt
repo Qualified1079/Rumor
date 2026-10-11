@@ -117,6 +117,12 @@ class WifiDirectTransport(
          * iff this is non-null, so capability and ability can't diverge.
          */
         val rbsrItemsProvider: (suspend () -> List<com.rumor.mesh.core.sync.RbsrItem>)? = null,
+        /**
+         * Identities we have authenticated before, most recently seen first.
+         * A backbone SSID derived from one of these is "trusted": we may defer
+         * or yield to it, and try joining it before hosting our own group.
+         */
+        val knownPeerUserIds: () -> List<String> = { emptyList() },
     )
 
     private var config: TransportConfig? = null
@@ -289,6 +295,104 @@ class WifiDirectTransport(
             requestPeers()
         }
     }
+    /**
+     * Backbone SSID ⇄ host binding. A backbone SSID is just a name: anyone can
+     * host "DIRECT-000000000000" and, because joins/defers/yields all favour the
+     * lowest name, capture every new or idle node. So a name is only a CLAIM
+     * until the GO behind it completes HELLO as the userId that derives it.
+     * A mismatch, or a group where no HELLO ever completes (squatter, or an
+     * orphaned group a killed app left on the air), cools the SSID for
+     * [UNVERIFIED_GROUP_COOLDOWN_MS]. Only TRUSTED names — derived from an
+     * identity we have authenticated — can make us defer or yield.
+     */
+    private val provenHostSsids = ConcurrentHashMap.newKeySet<String>()
+    @Volatile private var currentClientSsid: String? = null
+    @Volatile private var currentClientSsidVerified = false
+    private val UNVERIFIED_GROUP_COOLDOWN_MS = 30 * 60_000L
+    private val noHelloStrikes = ConcurrentHashMap<String, Int>()
+    /** Known-peer blind joins tried before hosting; see [nextKnownPeerSsid]. */
+    private val knownPeerJoinAttemptAt = ConcurrentHashMap<String, Long>()
+    private val KNOWN_PEER_JOIN_CANDIDATES = 2
+    private val KNOWN_PEER_JOIN_RETRY_MS = 120_000L
+
+    private fun trustedSsids(): Set<String> {
+        val known = config?.knownPeerUserIds?.invoke().orEmpty()
+            .mapTo(HashSet()) { GroupCredentials.forHost(it).networkName }
+        return known + provenHostSsids
+    }
+
+    /**
+     * Before hosting: a recently-seen peer's group may be up but invisible to
+     * us (a GO on the S10e completes no scans, field 2026-10-11 — it sat in a
+     * lone group for the full 120s hold). Its SSID derives from its userId, so
+     * try it directly. Bounded to the [KNOWN_PEER_JOIN_CANDIDATES] most recent
+     * SENIOR peers so a node with a long contact list still hosts promptly
+     * when alone.
+     *
+     * Senior-only is the tie-break: when peers start together, each trying the
+     * other's not-yet-existing group delays both, then both host and split
+     * (field 2026-10-11). The most senior known node has no candidates and
+     * hosts at once; everyone else heads for it.
+     */
+    private fun nextKnownPeerSsid(now: Long): String? {
+        val cfg = config ?: return null
+        val own = GroupCredentials.forHost(cfg.localUserId).networkName
+        return cfg.knownPeerUserIds().asSequence()
+            .filter { it != cfg.localUserId }
+            .map { GroupCredentials.forHost(it).networkName }
+            .filter { it < own }
+            .take(KNOWN_PEER_JOIN_CANDIDATES)
+            .firstOrNull { ssid ->
+                (ssidCooldownUntil[ssid] ?: 0L) <= now &&
+                    now - (knownPeerJoinAttemptAt[ssid] ?: 0L) > KNOWN_PEER_JOIN_RETRY_MS
+            }
+    }
+
+    /**
+     * Client side, after a completed outbound session to our GO: does the GO's
+     * proven userId derive the SSID we joined? Legacy negotiated groups (random
+     * SSIDs) carry no claim and are not checked.
+     */
+    private fun verifyGroupHost(peerUserId: String) {
+        val ssid = currentClientSsid ?: return
+        if (!GroupCredentials.BACKBONE_SSID_REGEX.matches(ssid) || currentClientSsidVerified) return
+        if (GroupCredentials.forHost(peerUserId).networkName == ssid) {
+            currentClientSsidVerified = true
+            provenHostSsids.add(ssid)
+            noHelloStrikes.remove(ssid)
+            return
+        }
+        RumorLog.w(TAG, "O98 group $ssid is not hosted by the identity it names " +
+            "(GO is ${peerUserId.take(8)}…) — leaving and cooling it ${UNVERIFIED_GROUP_COOLDOWN_MS / 60_000}min")
+        coolUnverified(ssid)
+        removeGroup()
+    }
+
+    /** The group we're leaving never proved its name — keep it from re-capturing us. */
+    private fun coolUnverifiedIfUnproven() {
+        val ssid = currentClientSsid ?: return
+        if (GroupCredentials.BACKBONE_SSID_REGEX.matches(ssid) && !currentClientSsidVerified) {
+            // A known peer's group that merely flaked gets the ordinary
+            // cooldown. An unknown name escalates 3→6→12→24→30 min per repeat:
+            // a stranger whose phone died mid-first-contact costs 3 min, a
+            // squatter that keeps re-capturing us quickly hits the cap.
+            val ms = if (ssid in trustedSsids()) {
+                SSID_COOLDOWN_MS
+            } else {
+                val strikes = noHelloStrikes.merge(ssid, 1, Int::plus) ?: 1
+                (SSID_COOLDOWN_MS shl (strikes - 1).coerceAtMost(4)).coerceAtMost(UNVERIFIED_GROUP_COOLDOWN_MS)
+            }
+            RumorLog.w(TAG, "O98 group $ssid completed no HELLO — cooling it ${ms / 60_000}min")
+            coolUnverified(ssid, ms)
+        }
+    }
+
+    private fun coolUnverified(ssid: String, ms: Long = UNVERIFIED_GROUP_COOLDOWN_MS) {
+        ssidCooldownUntil[ssid] = System.currentTimeMillis() + ms
+        provenHostSsids.remove(ssid)
+    }
+
+    @Volatile private var lastBootstrapLogAtMs = 0L
     @Volatile private var lastScanTriggeredRecheckAtMs = 0L
     private val SCAN_RECHECK_MIN_INTERVAL_MS = 5_000L
 
@@ -568,6 +672,16 @@ class WifiDirectTransport(
             // group isn't up yet the attempt fails without cooling the SSID
             // and the role-retry structure paces the next one. The scan nudge
             // stays only to keep seniority/deferral ground truth fresh.
+            // A host that has been off the air past the memory window is likely
+            // dead: retrying it every recompute tick kept the P2P framework BUSY
+            // and starved the bootstrap path that would join a live group
+            // (field 2026-10-11: OnePlus stuck ~6 min on a dead Moto). Same
+            // retry budget as known-peer joins until the plan's view decays.
+            val now = System.currentTimeMillis()
+            if (now - backboneSeenAtMs > BACKBONE_MEMORY_MS &&
+                now - (knownPeerJoinAttemptAt[name] ?: 0L) < KNOWN_PEER_JOIN_RETRY_MS
+            ) return
+            knownPeerJoinAttemptAt[name] = now
             RumorLog.d(TAG, "O98 backbone group $name not in scan results — joining blind")
             runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
             joinBySsid(name, blind = true)
@@ -619,14 +733,36 @@ class WifiDirectTransport(
         }
     }
 
-    /** A visible backbone SSID sorting before [ownNetworkName], if any. */
-    private fun seniorBackboneSsid(ownNetworkName: String): String? = runCatching {
-        @Suppress("DEPRECATION")
+    /**
+     * A visible backbone SSID sorting before [ownNetworkName], if any. With
+     * [trustedOnly], an unknown name never wins seniority: a squatter's
+     * "DIRECT-000000000000" would otherwise make a planned host defer to it.
+     * Only an IDLE GO passes false — it has no clients to lose, and two
+     * strangers' groups could never merge otherwise; a squatter then costs it
+     * one HELLO-less join before [coolUnverifiedIfUnproven] locks the name out.
+     */
+    private fun seniorBackboneSsid(ownNetworkName: String, trustedOnly: Boolean = true): String? = runCatching {
+        val trusted = trustedSsids()
+        val now = System.currentTimeMillis()
         freshScanResults()
             .mapNotNull { it.SSID }
-            .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) && it < ownNetworkName }
+            .filter {
+                GroupCredentials.BACKBONE_SSID_REGEX.matches(it) && it < ownNetworkName &&
+                    (!trustedOnly || it in trusted) && (ssidCooldownUntil[it] ?: 0L) <= now
+            }
             .minOrNull()
     }.getOrNull()
+
+    /**
+     * Should an idle GO give up its group? Yes if a senior group is visible, or
+     * if a senior KNOWN peer's group is still untried — a GO often cannot scan
+     * at all (S10e), so visibility alone left it holding a lone group for 120s.
+     * The retry window on known-peer attempts bounds the churn for a node that
+     * is genuinely alone.
+     */
+    private fun seniorReachable(own: String): Boolean =
+        seniorBackboneSsid(own, trustedOnly = false) != null ||
+            nextKnownPeerSsid(System.currentTimeMillis()) != null
 
     /** Rumor-scheme SSIDs currently on the air, excluding our own and cooled-down ones. */
     private fun visibleBackboneSsids(): List<String> {
@@ -638,9 +774,12 @@ class WifiDirectTransport(
                 .mapNotNull { it.SSID }
                 .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) }
             if (all.isNotEmpty()) backboneSeenAtMs = now
+            // Trusted names first; an unknown name is still joinable (a brand-new
+            // node has no known peers) and verifyGroupHost checks it on HELLO.
+            val trusted = trustedSsids()
             all.filter { it != own && (ssidCooldownUntil[it] ?: 0L) <= now }
                 .distinct()
-                .sorted()
+                .sortedWith(compareBy({ it !in trusted }, { it }))
         }.getOrDefault(emptyList())
     }
 
@@ -661,9 +800,10 @@ class WifiDirectTransport(
     }
 
     /**
-     * Scan results young enough to act on. The cache keeps entries for minutes:
-     * field 2026-10-11 a phone "joined" a group 15s before its host had even
-     * started, off an entry left from the previous run.
+     * Scan results young enough to act on — the cache keeps entries for
+     * minutes, long after a group may have gone. Ages are since-boot on both
+     * sides, so a skewed wall clock (the OnePlus runs months behind) can't
+     * distort them.
      */
     @Suppress("DEPRECATION")
     private fun freshScanResults(): List<android.net.wifi.ScanResult> {
@@ -704,8 +844,9 @@ class WifiDirectTransport(
         // clients-to-be and will collapse toward it.
         run {
             val own = GroupCredentials.forHost(cfg.localUserId).networkName
+            val trusted = trustedSsids()
             val ssid = visibleBackboneSsids().firstOrNull {
-                backboneRole !is BackboneRealizer.Role.Host || it < own
+                backboneRole !is BackboneRealizer.Role.Host || (it < own && it in trusted)
             }
             if (ssid != null) {
                 joinBySsid(ssid)
@@ -730,7 +871,12 @@ class WifiDirectTransport(
                 runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
                 return
             }
-            RumorLog.i(TAG, "O98 client role but no backbone on air ${BACKBONE_MEMORY_MS / 1000}s — bootstrapping")
+            // Reached once per visible peer per PEERS_CHANGED — log it sparingly.
+            val now = System.currentTimeMillis()
+            if (now - lastBootstrapLogAtMs > 30_000L) {
+                lastBootstrapLogAtMs = now
+                RumorLog.i(TAG, "O98 client role but no backbone on air ${BACKBONE_MEMORY_MS / 1000}s — bootstrapping")
+            }
         }
 
         // Backbone memory: a backbone SSID seen on air moments ago means the
@@ -758,6 +904,14 @@ class WifiDirectTransport(
                 // "No backbone on air" must come from a scan taken for this
                 // decision; the receiver re-enters here when it lands.
                 if (!freshScanReady(now)) return
+                // Scans can miss a live group entirely; a recent peer's group is
+                // derivable, so try it before splitting the mesh with our own.
+                nextKnownPeerSsid(now)?.let { ssid ->
+                    knownPeerJoinAttemptAt[ssid] = now
+                    RumorLog.i(TAG, "O98 bootstrap: trying known peer's group $ssid before hosting")
+                    joinBySsid(ssid, blind = true)
+                    return
+                }
                 bootstrapScanRequestedAtMs = 0L
                 backboneAttemptAtMs = now
                 RumorLog.i(TAG, "O98 bootstrap: peer visible, no backbone on air — hosting")
@@ -899,6 +1053,7 @@ class WifiDirectTransport(
             }
             if (!linked) {
                 RumorLog.w(TAG, "All client connect attempts exhausted")
+                coolUnverifiedIfUnproven()
                 removeGroup()
                 // Field 2026-07-18: a dead group must not leave the client
                 // passive — clear the attempt grace and kick discovery so the
@@ -926,6 +1081,7 @@ class WifiDirectTransport(
                 failures = if (runRound(groupOwnerAddress)) 0 else failures + 1
             }
             RumorLog.d(TAG, "Persistent link ended (failures=$failures) — removing group")
+            if (failures >= MAX_ROUND_FAILURES) coolUnverifiedIfUnproven()
             removeGroup()
         }
     }
@@ -977,6 +1133,8 @@ class WifiDirectTransport(
         }
 
         priorityReconnectPending.remove(result.peerUserId)
+        // Outbound from a client only ever reaches the GO — the peer that must own the SSID.
+        if (!isInbound && !_isGroupOwner.value) verifyGroupHost(result.peerUserId)
 
         // Map from transport-internal SessionResult to the protocol-layer boundary type
         _exchangeResults.emit(
@@ -1025,7 +1183,7 @@ class WifiDirectTransport(
             // attract clients — they all join the sorted-first SSID. Yield now
             // and join the senior instead of splitting the mesh for 120s.
             val own = config?.let { GroupCredentials.forHost(it.localUserId).networkName }
-            var seniorOnAir = own != null && seniorBackboneSsid(own) != null
+            var seniorOnAir = own != null && seniorReachable(own)
             RumorLog.d(TAG, "GO idle check: seniorOnAir=$seniorOnAir, scan age=" +
                 "${(System.currentTimeMillis() - lastScanResultsAtMs) / 1000}s")
             // O98 3b: a backbone host's group exists BECAUSE the plan says so,
@@ -1047,7 +1205,7 @@ class WifiDirectTransport(
                 runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
                 delay(SCAN_WAIT_MS)
                 // Re-ask: a senior that came up during the hold is the common case.
-                seniorOnAir = own != null && seniorBackboneSsid(own) != null
+                seniorOnAir = own != null && seniorReachable(own)
                 if (backboneRole is BackboneRealizer.Role.Host && backboneGroupCreated && !seniorOnAir) {
                     RumorLog.d(TAG, "GO idle but backbone host — holding group")
                     return@launch
@@ -1140,8 +1298,12 @@ class WifiDirectTransport(
                 // (removeGroup→createGroup handoff), so cancel here too.
                 clientLoopJob?.cancel()
                 clientLoopJob = null
+                currentClientSsid = null
                 startServerSocket()
             } else {
+                // Record the name we joined so the first HELLO can check it.
+                currentClientSsidVerified = false
+                wifiP2pManager?.requestGroupInfo(channel) { group -> currentClientSsid = group?.networkName }
                 // Quirk: Samsung/MediaTek may ignore our GO intent and become GO anyway.
                 // Run both a server socket and a client connect attempt; whichever
                 // TCP connection succeeds first wins.
@@ -1168,6 +1330,8 @@ class WifiDirectTransport(
         // would dial whatever GO comes next, including ourselves.
         clientLoopJob?.cancel()
         clientLoopJob = null
+        currentClientSsid = null
+        currentClientSsidVerified = false
         serverJob?.cancel()
         runCatching { serverSocket?.close() }
         serverSocket = null
