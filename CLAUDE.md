@@ -223,7 +223,7 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O176 | **`[TODO/CODE]`** `BreadcrumbCache.snapshot` unbounded in-memory map (audit #14; O120 half-closed) |
 | O177 | **`[TODO/CODE]`** `MeshViewTracker.pruneStale()` dead code — 4th orphaned-prune instance (audit #23) |
 | O185 | **`[TODO/CODE]`** Every inbound `ROOM_MESSAGE` triggers two blocking SQLite reads via `runBlocking` (audit #32) |
-| O186 | **`[TODO/CODE]`** O36 "global feed is text-only — drop media before enqueue" rule has zero implementation (audit #33) |
+| O186 | **`[PART 2026-10-11]`** O36 text-only feed now ENFORCED — non-TEXT `ROOM_MESSAGE` dropped before dedup/store/relay/inbox (`FeedTextOnlyEnforcementTest`, teeth-verified). Remaining: per-room `allowMedia` policy (gated on O187) and the feed's identity (O154) |
 | O187 | **`[TODO/CODE]`** Room lifecycle (Create/Invite/Action) has no wire transport / no `RoomRepository` — umbrella "Rooms unbuilt" row (audit #34) |
 | O192 | **`[TODO/CODE]`** Key-retirement / compromise beacon — signed "stop trusting this key" broadcast; wires to O189 explode (privacy workshop) |
 | O193 | **`[TODO/CODE+SIM]`** Relay-ephemeral DM caching — combinable eviction triggers (on-ACK / on-relay / after-X-time), default off; sim-model the message-loss first (privacy workshop) |

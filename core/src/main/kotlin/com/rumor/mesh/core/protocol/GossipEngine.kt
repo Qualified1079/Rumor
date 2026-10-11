@@ -1141,6 +1141,39 @@ class GossipEngine(
          */
         fromPeerId: String? = null,
     ) {
+        // O36/O186: the ungoverned global feed is TEXT-ONLY, and the rule is "the
+        // relay drops media destined for it BEFORE enqueue" — a drop, not a display
+        // filter, because the failure mode it exists for (media-borne illegal content
+        // in an unmoderated global stream at a scale no creator-mod can police) is not
+        // fixed by any client declining to render it.
+        //
+        // Enforced on the OPEN/plaintext form, which is the feed's transport (O36 as
+        // revised 2026-07-24: the feed reuses the OPEN-room wire mechanism). An
+        // ENCRYPTED room message carries `encryptedPayload` and no readable
+        // contentType, so the rule cannot apply there and does not need to — bounded
+        // membership is governed (O155).
+        //
+        // Scope today: no honest client can produce a non-TEXT ROOM_MESSAGE at all —
+        // `composeRoomMessage` takes a String and hardcodes ContentType.TEXT, and the
+        // per-room `RoomCreate.allowMedia` policy is unplumbed (O187: Rooms is
+        // unbuilt). So any arriving non-TEXT room payload is necessarily forged, and
+        // dropping it costs nothing. When media rooms are actually built this check is
+        // the right place for the policy decision — it must become "drop unless this
+        // room's allowMedia permits, and ALWAYS for the feed" rather than being
+        // deleted. Until then it keeps the O36 rule from being, as the audit put it,
+        // non-exploitable only by omission.
+        if (rawMsg.type == MessageType.ROOM_MESSAGE) {
+            val contentType = rawMsg.payload?.contentType
+            if (contentType != null && contentType != ContentType.TEXT) {
+                RumorLog.w(
+                    TAG,
+                    "Dropping non-TEXT room message ${rawMsg.id.take(8)}… " +
+                        "(contentType=$contentType) — O36 feed is text-only",
+                )
+                return
+            }
+        }
+
         // A message we authored, handed back to us by a peer, is always an echo —
         // never news. Drop it before the handlers below so we don't re-relay it
         // or (for SELF_PRESENCE) record our own presence as if it were a peer's.

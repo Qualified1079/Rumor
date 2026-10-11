@@ -64,10 +64,15 @@ class SelfEchoTest {
         // Control 2 — the echo is actually attempted. B relays the beacon, so its
         // offer back to A contains A's own message; that is the input the guard
         // has to drop. (Pre-2026-10-11 this test never got this far.)
-        assertTrue(
-            "B must offer A's own beacon back to A — otherwise there is no echo to test",
-            b.gossipEngine.messagesForExchange(a.userId).any { it.id == beacon.id },
-        )
+        //
+        // POLLED, not asserted once: B's relay copy reaches its outbound queue
+        // through the async relay batcher, and messagesForExchange drains
+        // destructively — a single call can land before the copy is queued. That
+        // raced under full-suite load. Polling is safe because whatever a poll
+        // takes is in the list it returns.
+        awaitUntil(what = "B to offer A's own beacon back to A (the echo under test)") {
+            b.gossipEngine.messagesForExchange(a.userId).any { it.id == beacon.id }
+        }
 
         // B → A: handleSelfPresence would record A into A's own MeshView if the
         // self-echo guard didn't drop it first. A never beacons about itself, so a
