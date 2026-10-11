@@ -262,6 +262,36 @@ class WifiDirectTransport(
     private val CREDENTIALED_GO_IDLE_TIMEOUT_MS = 120_000L
     private val BACKBONE_MEMORY_MS = 90_000L
 
+    /**
+     * Every O98 decision reads cached scan results, which can be minutes old —
+     * field 2026-10-11: a phone hosted its own group with the senior group
+     * right there on the air, and never yielded. Hosting and yielding now wait
+     * for a scan requested for the purpose (or give up waiting once a throttled
+     * startScan clearly isn't coming back).
+     */
+    @Volatile private var lastScanResultsAtMs = 0L
+    @Volatile private var bootstrapScanRequestedAtMs = 0L
+    private val SCAN_WAIT_MS = 8_000L
+    private val SCAN_REQUEST_STALE_MS = 60_000L
+    private val scanResultsReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: Context?, intent: android.content.Intent?) {
+            // A throttled startScan() re-broadcasts the CACHED results at once
+            // with RESULTS_UPDATED=false; treating that as news re-entered the
+            // decision path, which calls startScan() again — a ~40ms spin
+            // (field 2026-10-11, Moto). Only a real scan counts, and the
+            // re-check is rate-limited on top of that.
+            if (intent?.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false) != true) return
+            val now = System.currentTimeMillis()
+            lastScanResultsAtMs = now
+            if (now - lastScanTriggeredRecheckAtMs < SCAN_RECHECK_MIN_INTERVAL_MS) return
+            lastScanTriggeredRecheckAtMs = now
+            // Re-run the join/host decision against what just became visible.
+            requestPeers()
+        }
+    }
+    @Volatile private var lastScanTriggeredRecheckAtMs = 0L
+    private val SCAN_RECHECK_MIN_INTERVAL_MS = 5_000L
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     fun start(cfg: TransportConfig) {
@@ -294,6 +324,14 @@ class WifiDirectTransport(
             addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION)
         }
         context.registerReceiver(broadcastReceiver, filter)
+        context.registerReceiver(scanResultsReceiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION))
+
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            RumorLog.w(TAG, "ACCESS_FINE_LOCATION not granted — Wi-Fi scan results are empty, so " +
+                "backbone groups on the air are invisible and this node will host its own (mesh splits)")
+        }
 
         runCatching { wifiLock?.acquire() }
 
@@ -306,6 +344,7 @@ class WifiDirectTransport(
         serverJob?.cancel()
         runCatching { serverSocket?.close() }
         runCatching { context.unregisterReceiver(broadcastReceiver) }
+        runCatching { context.unregisterReceiver(scanResultsReceiver) }
         removeGroup()
         runCatching { if (wifiLock?.isHeld == true) wifiLock.release() }
         config = null
@@ -419,7 +458,7 @@ class WifiDirectTransport(
      */
     private fun ssidVisible(networkName: String): Boolean = runCatching {
         @Suppress("DEPRECATION")
-        val visible = wifiManager?.scanResults?.any { it.SSID == networkName } == true
+        val visible = freshScanResults().any { it.SSID == networkName }
         if (visible) backboneSeenAtMs = System.currentTimeMillis()
         visible
     }.getOrDefault(false)
@@ -455,11 +494,22 @@ class WifiDirectTransport(
             .setPassphrase(creds.passphrase)
             .setGroupOperatingFrequency(freq)
             .build()
-        enqueueCommand {
-            wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() = createBackboneGroup(p2pCfg, creds.networkName, freq)
-                override fun onFailure(r: Int) = createBackboneGroup(p2pCfg, creds.networkName, freq)
-            })
+        // Already the GO of exactly this SSID (bootstrap hosted it before the
+        // planner assigned the role): recreating it only kicks every client off
+        // for a 6–11s rejoin (field 2026-10-11).
+        wifiP2pManager?.requestGroupInfo(channel) { group ->
+            if (group != null && group.isGroupOwner && group.networkName == creds.networkName) {
+                backboneGroupCreated = true
+                backboneRetriesLeft = MAX_BACKBONE_RETRIES
+                RumorLog.d(TAG, "O98 already hosting ${creds.networkName} — keeping group")
+                return@requestGroupInfo
+            }
+            enqueueCommand {
+                wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() = createBackboneGroup(p2pCfg, creds.networkName, freq)
+                    override fun onFailure(r: Int) = createBackboneGroup(p2pCfg, creds.networkName, freq)
+                })
+            }
         }
     }
 
@@ -572,7 +622,7 @@ class WifiDirectTransport(
     /** A visible backbone SSID sorting before [ownNetworkName], if any. */
     private fun seniorBackboneSsid(ownNetworkName: String): String? = runCatching {
         @Suppress("DEPRECATION")
-        (wifiManager?.scanResults ?: emptyList())
+        freshScanResults()
             .mapNotNull { it.SSID }
             .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) && it < ownNetworkName }
             .minOrNull()
@@ -584,7 +634,7 @@ class WifiDirectTransport(
         val now = System.currentTimeMillis()
         return runCatching {
             @Suppress("DEPRECATION")
-            val all = (wifiManager?.scanResults ?: emptyList())
+            val all = freshScanResults()
                 .mapNotNull { it.SSID }
                 .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) }
             if (all.isNotEmpty()) backboneSeenAtMs = now
@@ -593,6 +643,35 @@ class WifiDirectTransport(
                 .sorted()
         }.getOrDefault(emptyList())
     }
+
+    /**
+     * True once scan results newer than our own request exist, or once the
+     * request is [SCAN_WAIT_MS] old with nothing back (startScan is throttled to
+     * 4 per 2 min — waiting forever would strand a node that must host).
+     * The first call issues the request and returns false.
+     */
+    private fun freshScanReady(now: Long): Boolean {
+        val requested = bootstrapScanRequestedAtMs
+        if (requested == 0L || now - requested > SCAN_REQUEST_STALE_MS) {
+            bootstrapScanRequestedAtMs = now
+            runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+            return false
+        }
+        return lastScanResultsAtMs > requested || now - requested > SCAN_WAIT_MS
+    }
+
+    /**
+     * Scan results young enough to act on. The cache keeps entries for minutes:
+     * field 2026-10-11 a phone "joined" a group 15s before its host had even
+     * started, off an entry left from the previous run.
+     */
+    @Suppress("DEPRECATION")
+    private fun freshScanResults(): List<android.net.wifi.ScanResult> {
+        val nowMicros = android.os.SystemClock.elapsedRealtime() * 1_000
+        return (wifiManager?.scanResults ?: emptyList())
+            .filter { nowMicros - it.timestamp < SCAN_RESULT_MAX_AGE_MS * 1_000 }
+    }
+    private val SCAN_RESULT_MAX_AGE_MS = 45_000L
 
     /** Least-congested non-DFS 5 GHz candidate from the latest AP scan. */
     private fun quietFrequencyMhz(): Int {
@@ -676,6 +755,10 @@ class WifiDirectTransport(
             if (!backboneGroupCreated && !connectAttemptInFlight &&
                 now - backboneAttemptAtMs > LEGACY_GO_CONVERT_DELAY_MS
             ) {
+                // "No backbone on air" must come from a scan taken for this
+                // decision; the receiver re-enters here when it lands.
+                if (!freshScanReady(now)) return
+                bootstrapScanRequestedAtMs = 0L
                 backboneAttemptAtMs = now
                 RumorLog.i(TAG, "O98 bootstrap: peer visible, no backbone on air — hosting")
                 hostBackboneGroup()
@@ -787,6 +870,18 @@ class WifiDirectTransport(
 
     private var clientLoopJob: Job? = null
 
+    /** Conflated: any number of kicks during a round collapse into one early round. */
+    private val roundKick = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+
+    /**
+     * Run the next persistent-link round now instead of at the 10s tick — a
+     * fresh TCP connect over the already-formed group, no radio work. Only the
+     * client can act on it: the GO has no outbound path to its clients.
+     */
+    fun requestRoundNow() {
+        if (clientLoopJob?.isActive == true) roundKick.trySend(Unit)
+    }
+
     private fun connectAsClient(groupOwnerAddress: String = DeviceQuirks.WIFI_DIRECT_GO_IP) {
         // Same membership-change re-broadcast as on the GO side: don't stack a
         // second round loop on top of a live one.
@@ -818,8 +913,12 @@ class WifiDirectTransport(
             // fresh TCP connect every round — no discovery / GO negotiation / DHCP.
             var failures = 0
             while (isActive && groupConnected && failures < MAX_ROUND_FAILURES) {
-                delay(LINK_ROUND_INTERVAL_MS)
-                if (config?.isPeerNearby?.invoke() == false) {
+                withTimeoutOrNull(LINK_ROUND_INTERVAL_MS) { roundKick.receive() }
+                // BLE presence is a weaker signal than a round that just
+                // completed — honoring it on a healthy link tore down a working
+                // group every minute or so (field 2026-10-11, S10e). A peer that
+                // really left fails rounds; MAX_ROUND_FAILURES catches that.
+                if (failures > 0 && config?.isPeerNearby?.invoke() == false) {
                     RumorLog.d(TAG, "Peer no longer nearby — releasing persistent link")
                     break
                 }
@@ -917,13 +1016,18 @@ class WifiDirectTransport(
     private fun armGoIdleWatchdog() {
         goIdleWatchdog?.cancel()
         goIdleWatchdog = scope.launch {
-            delay(GO_IDLE_TIMEOUT_MS)
+            // Refresh the scan just before the seniority check below reads it.
+            delay(GO_IDLE_TIMEOUT_MS - SCAN_WAIT_MS)
+            runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+            delay(SCAN_WAIT_MS)
             // Junior yield: an idle (≈ clientless) credentialed group whose
             // SSID is outranked by another backbone group on the air will never
             // attract clients — they all join the sorted-first SSID. Yield now
             // and join the senior instead of splitting the mesh for 120s.
             val own = config?.let { GroupCredentials.forHost(it.localUserId).networkName }
-            val seniorOnAir = own != null && seniorBackboneSsid(own) != null
+            var seniorOnAir = own != null && seniorBackboneSsid(own) != null
+            RumorLog.d(TAG, "GO idle check: seniorOnAir=$seniorOnAir, scan age=" +
+                "${(System.currentTimeMillis() - lastScanResultsAtMs) / 1000}s")
             // O98 3b: a backbone host's group exists BECAUSE the plan says so,
             // not because a client is currently chatty — hold it; the plan's
             // decay is what tears it down. Checked at EXPIRY, not arm time:
@@ -939,8 +1043,12 @@ class WifiDirectTransport(
             // a forever-held empty group pins this radio as GO and would
             // deadlock two view-blind converts against each other.
             if (backboneGroupCreated && !seniorOnAir) {
-                delay(CREDENTIALED_GO_IDLE_TIMEOUT_MS - GO_IDLE_TIMEOUT_MS)
-                if (backboneRole is BackboneRealizer.Role.Host && backboneGroupCreated) {
+                delay(CREDENTIALED_GO_IDLE_TIMEOUT_MS - GO_IDLE_TIMEOUT_MS - SCAN_WAIT_MS)
+                runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+                delay(SCAN_WAIT_MS)
+                // Re-ask: a senior that came up during the hold is the common case.
+                seniorOnAir = own != null && seniorBackboneSsid(own) != null
+                if (backboneRole is BackboneRealizer.Role.Host && backboneGroupCreated && !seniorOnAir) {
                     RumorLog.d(TAG, "GO idle but backbone host — holding group")
                     return@launch
                 }
@@ -962,8 +1070,16 @@ class WifiDirectTransport(
      * with their roles). A true dual-role double-connect can't currently occur
      * (nothing ever dials into a non-GO), so plain duplicate-rejection is enough.
      */
-    private fun claimSession(localUserId: String, peerUserId: String, isInbound: Boolean): Boolean =
-        activePeerSessions.putIfAbsent(peerUserId, isInbound) == null
+    private fun claimSession(localUserId: String, peerUserId: String, isInbound: Boolean): Boolean {
+        // Every group's GO sits at 192.168.49.1, so a stale client loop from a
+        // previous group dials US once we host (field 2026-10-11: three self-
+        // sessions counted as link failures and tore down a fresh backbone group).
+        if (peerUserId == localUserId) {
+            RumorLog.w(TAG, "Session with our own userId — dropping self-connection")
+            return false
+        }
+        return activePeerSessions.putIfAbsent(peerUserId, isInbound) == null
+    }
 
     // ── Wi-Fi Direct event handlers ───────────────────────────────────────────
 
@@ -1020,6 +1136,10 @@ class WifiDirectTransport(
             val goAddress = info?.groupOwnerAddress?.hostAddress ?: DeviceQuirks.WIFI_DIRECT_GO_IP
             RumorLog.i(TAG, "Connected — Group Owner: $isGo, GO address: $goAddress")
             if (isGo) {
+                // Disconnect broadcasts can arrive after the new group's connect
+                // (removeGroup→createGroup handoff), so cancel here too.
+                clientLoopJob?.cancel()
+                clientLoopJob = null
                 startServerSocket()
             } else {
                 // Quirk: Samsung/MediaTek may ignore our GO intent and become GO anyway.
@@ -1044,6 +1164,10 @@ class WifiDirectTransport(
         legacyGoConversionJob?.cancel()
         if (backboneRole !is BackboneRealizer.Role.None) backboneRetriesLeft = MAX_BACKBONE_RETRIES
         goIdleWatchdog?.cancel()
+        // The round loop belongs to the group that just ended — left running it
+        // would dial whatever GO comes next, including ourselves.
+        clientLoopJob?.cancel()
+        clientLoopJob = null
         serverJob?.cancel()
         runCatching { serverSocket?.close() }
         serverSocket = null

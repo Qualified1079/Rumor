@@ -17,6 +17,7 @@ class RoomTest {
             membershipPolicy = RoomMembershipPolicy.OPEN,
             postingPolicy = RoomPostingPolicy.ANYONE_WITH_MOD_REMOVAL,
             allowMedia = true,
+            nonce = "n0",
             signature = "sig-placeholder",
         )
         val json = WireJson.encodeToString(original)
@@ -53,21 +54,21 @@ class RoomTest {
 
     @Test fun `signable bytes are stable and unique to roomCreate`() {
         val a = roomCreateSignableBytes("r1", "n", "alice", 0L,
-            RoomMembershipPolicy.OPEN, RoomPostingPolicy.MEMBER_ONLY, allowMedia = false)
+            RoomMembershipPolicy.OPEN, RoomPostingPolicy.MEMBER_ONLY, allowMedia = false, nonce = "x")
         val b = roomCreateSignableBytes("r1", "n", "alice", 0L,
-            RoomMembershipPolicy.OPEN, RoomPostingPolicy.MEMBER_ONLY, allowMedia = true)
+            RoomMembershipPolicy.OPEN, RoomPostingPolicy.MEMBER_ONLY, allowMedia = true, nonce = "x")
         // Single-field diff (allowMedia) produces different bytes.
         assertFalse(a.contentEquals(b))
     }
 
     @Test fun `signable bytes domain tags are distinct across the three types`() {
         val createBytes = roomCreateSignableBytes("r", "n", "u", 0L,
-            RoomMembershipPolicy.OPEN, RoomPostingPolicy.MEMBER_ONLY, false).decodeToString()
+            RoomMembershipPolicy.OPEN, RoomPostingPolicy.MEMBER_ONLY, false, "x").decodeToString()
         val inviteBytes = roomInviteSignableBytes("r", "u", "ct", 0L, "m").decodeToString()
         val actionBytes = roomActionSignableBytes("r", RoomActionKind.KICK_USER,
             "u", null, "m", 0L).decodeToString()
         // Domain-tag separation — sig over one struct cannot be lifted to another.
-        assertEquals(true, createBytes.startsWith("rumor-room-create-v2:"))
+        assertEquals(true, createBytes.startsWith("rumor-room-create-v3:"))
         assertEquals(true, inviteBytes.startsWith("rumor-room-invite-v1:"))
         assertEquals(true, actionBytes.startsWith("rumor-room-action-v2:"))
     }

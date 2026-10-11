@@ -104,7 +104,7 @@ class SentAtMsLintTest {
             root.walkTopDown()
                 .filter { it.isFile && it.extension == "kt" }
                 .forEach { file ->
-                    val relative = file.relativeTo(repoRoot).path
+                    val relative = file.relativeTo(repoRoot).invariantSeparatorsPath
                     if (ALLOWED.any { relative.contains(it) }) return@forEach
 
                     file.readLines().forEachIndexed { i, raw ->

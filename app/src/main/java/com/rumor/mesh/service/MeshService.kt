@@ -241,6 +241,12 @@ class MeshService : Service(), MeshController {
             }
         }
 
+        // A user send rides the next round now rather than waiting up to the
+        // 10s link-round tick — TCP over the already-formed group, no radio work.
+        scope.launch {
+            gossipEngine.userSendQueued.collect { wifiDirectTransport.requestRoundNow() }
+        }
+
         // ── Peer count / static mode → notification ──────────────────────────
         scope.launch {
             wifiDirectTransport.peerCount.collect { updateNotification(statusText(it)) }

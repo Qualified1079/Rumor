@@ -181,14 +181,16 @@ class MainActivity : ComponentActivity() {
                 add(Manifest.permission.BLUETOOTH_SCAN)
                 add(Manifest.permission.BLUETOOTH_ADVERTISE)
                 add(Manifest.permission.BLUETOOTH_CONNECT)
-            } else {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
             }
+            // Needed on EVERY API level: NEARBY_WIFI_DEVICES covers P2P but not
+            // WifiManager.getScanResults(), which O98 reads to see backbone
+            // groups on the air. Without it a fresh API 33+ install sees no
+            // group, hosts its own forever, and fragments the mesh (field
+            // 2026-10-11, OnePlus). Location is never read or stored.
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
                 add(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
             }
         }
         permissionLauncher.launch(needed.toTypedArray())

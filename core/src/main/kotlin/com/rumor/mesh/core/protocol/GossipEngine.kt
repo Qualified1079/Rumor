@@ -324,6 +324,19 @@ class GossipEngine(
     private val _deliveryReceipts = MutableSharedFlow<String>(extraBufferCapacity = 256)
     val deliveryReceipts: SharedFlow<String> = _deliveryReceipts
 
+    /**
+     * Fires when the user queues something (post, DM, manual relay, room post) so
+     * a transport holding a live link can run its next round now rather than at
+     * the round tick. Machine traffic (ACKs, presence, chunk control) does not
+     * fire it — an auto-reply kicking a round that produces an auto-reply loops.
+     * Relayed traffic does not either: the [relayBatcher] delay is deliberate.
+     */
+    private val _userSendQueued = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+    val userSendQueued: SharedFlow<Unit> = _userSendQueued
+
     /** Emits outbound DMs composed with a registered [DmEnvelopeRegistry] envelope. */
     private val _outboundBridgedDm = MutableSharedFlow<BridgedDmOutbound>(extraBufferCapacity = 64)
     val outboundBridgedDm: SharedFlow<BridgedDmOutbound> = _outboundBridgedDm
@@ -524,6 +537,7 @@ class GossipEngine(
         )
         val msg = base.applyThreadAndMentionExt(replyTo, mentions)
         enqueueImmediate(msg)
+        _userSendQueued.tryEmit(Unit)
         scope.launch { messageStore.ingestOwn(msg) }
         return msg
     }
@@ -640,6 +654,7 @@ class GossipEngine(
             }
         } else {
             enqueueImmediate(msg)
+            _userSendQueued.tryEmit(Unit)
             scope.launch { messageStore.ingestOwn(msg) }
         }
         return msg
@@ -653,6 +668,7 @@ class GossipEngine(
         // guard is meaningful even after a reload.
         if (msg.trustLevel == TrustLevel.BRIDGED) return
         enqueueImmediate(messageStore.boostHopsForManualRelay(msg))
+        _userSendQueued.tryEmit(Unit)
         scope.launch { messageStore.markRelayed(msg.id) }
     }
 
@@ -1034,6 +1050,7 @@ class GossipEngine(
         val routedMsg = baseMsg.applyThreadAndMentionExt(replyTo, mentions)
 
         enqueueImmediate(routedMsg)
+        _userSendQueued.tryEmit(Unit)
         return routedMsg
     }
 

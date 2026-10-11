@@ -68,10 +68,10 @@ class SignableFramingInjectivityTest {
     @Test
     fun `room create resists roomId-into-name splice`() {
         val a = roomCreateSignableBytes(
-            "r", "a|b", "creator", 1, RoomMembershipPolicy.INVITE, RoomPostingPolicy.MEMBER_ONLY, false,
+            "r", "a|b", "creator", 1, RoomMembershipPolicy.INVITE, RoomPostingPolicy.MEMBER_ONLY, false, "x",
         )
         val b = roomCreateSignableBytes(
-            "r|a", "b", "creator", 1, RoomMembershipPolicy.INVITE, RoomPostingPolicy.MEMBER_ONLY, false,
+            "r|a", "b", "creator", 1, RoomMembershipPolicy.INVITE, RoomPostingPolicy.MEMBER_ONLY, false, "x",
         )
         assertFalse(eq(a, b))
     }
