@@ -28,7 +28,17 @@ class IdentityManager(
     override val isUnlocked: Boolean get() = _identity.value != null
     val hasIdentity: Boolean get() = prefs.getBoolean("identity_exists", false)
 
-    fun createIdentity(passphrase: String) {
+    /**
+     * Returns false (and changes nothing) if an identity already exists — an
+     * overwrite would destroy the old private key unrecoverably. Field-found:
+     * queued taps on the onboarding button each minted a fresh identity.
+     */
+    @Synchronized
+    fun createIdentity(passphrase: String): Boolean {
+        if (hasIdentity) {
+            RumorLog.w(TAG, "createIdentity refused — an identity already exists")
+            return false
+        }
         val keypair = CryptoManager.generateEd25519KeyPair()
         val userId = CryptoManager.publicKeyToUserId(keypair.publicKeyBytes)
         val deviceId = generateDeviceId()
@@ -49,8 +59,10 @@ class IdentityManager(
 
         _identity.value = LocalIdentity(userId, deviceId, keypair.publicKeyBytes, keypair.privateKeyBytes)
         RumorLog.i(TAG, "Identity created: userId=${userId.take(16)}…")
+        return true
     }
 
+    @Synchronized
     fun unlock(passphrase: String): Boolean {
         val userId = prefs.getString("user_id", null) ?: return false
         val deviceId = prefs.getString("device_id", null) ?: return false

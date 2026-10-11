@@ -50,7 +50,9 @@ import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import com.rumor.mesh.ui.theme.RumorTheme
 import org.koin.android.ext.android.inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The only Activity in the app. Owns the Compose nav host and the binding to
@@ -239,33 +241,52 @@ private fun RumorApp(identityManager: IdentityManager) {
         ) {
             composable(Screen.Onboarding.route) {
                 var error by remember { mutableStateOf<String?>(null) }
+                var busy by remember { mutableStateOf(false) }
+                val scope = rememberCoroutineScope()
                 OnboardingScreen(
                     isFirstLaunch = true,
+                    // PBKDF2 at 600k iterations takes ~4s on an S10e — on the main
+                    // thread that ANR'd, and every queued tap minted a new identity.
                     onPassphraseConfirmed = { passphrase ->
-                        identityManager.createIdentity(passphrase)
-                        navController.navigate(Screen.Feed.route) {
-                            popUpTo(Screen.Onboarding.route) { inclusive = true }
+                        if (!busy) {
+                            busy = true
+                            scope.launch {
+                                withContext(Dispatchers.Default) { identityManager.createIdentity(passphrase) }
+                                navController.navigate(Screen.Feed.route) {
+                                    popUpTo(Screen.Onboarding.route) { inclusive = true }
+                                }
+                            }
                         }
                     },
                     errorMessage = error,
+                    busy = busy,
                 )
             }
 
             composable(Screen.Unlock.route) {
                 var error by remember { mutableStateOf<String?>(null) }
+                var busy by remember { mutableStateOf(false) }
+                val scope = rememberCoroutineScope()
                 OnboardingScreen(
                     isFirstLaunch = false,
                     onPassphraseConfirmed = { passphrase ->
-                        val ok = identityManager.unlock(passphrase)
-                        if (ok) {
-                            navController.navigate(Screen.Feed.route) {
-                                popUpTo(Screen.Unlock.route) { inclusive = true }
+                        if (!busy) {
+                            busy = true
+                            scope.launch {
+                                val ok = withContext(Dispatchers.Default) { identityManager.unlock(passphrase) }
+                                busy = false
+                                if (ok) {
+                                    navController.navigate(Screen.Feed.route) {
+                                        popUpTo(Screen.Unlock.route) { inclusive = true }
+                                    }
+                                } else {
+                                    error = "Wrong passphrase"
+                                }
                             }
-                        } else {
-                            error = "Wrong passphrase"
                         }
                     },
                     errorMessage = error,
+                    busy = busy,
                 )
             }
 

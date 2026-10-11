@@ -89,10 +89,10 @@ fun ChangePassphraseScreen(
 
             Button(
                 onClick = { viewModel.changePassphrase(current, new, confirm) },
-                enabled = current.isNotBlank() && new.length >= 8 && new == confirm,
+                enabled = !state.busy && current.isNotBlank() && new.length >= 8 && new == confirm,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Change passphrase")
+                Text(if (state.busy) "Changing…" else "Change passphrase")
             }
 
             Text(

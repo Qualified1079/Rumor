@@ -1,14 +1,19 @@
 package com.rumor.mesh.ui.settings
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.rumor.mesh.core.identity.IdentityManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class ChangePassphraseState(
     val error: String? = null,
     val success: Boolean = false,
+    val busy: Boolean = false,
 )
 
 class ChangePassphraseViewModel(
@@ -20,6 +25,7 @@ class ChangePassphraseViewModel(
 
     /** Re-verifies [current] against the stored key before rotating to [new]. */
     fun changePassphrase(current: String, new: String, confirm: String) {
+        if (_state.value.busy) return
         _state.value = ChangePassphraseState()
 
         if (new.length < 8) {
@@ -30,15 +36,18 @@ class ChangePassphraseViewModel(
             _state.value = ChangePassphraseState(error = "New passphrases don't match")
             return
         }
-        if (!identityManager.unlock(current)) {
-            _state.value = ChangePassphraseState(error = "Current passphrase is incorrect")
-            return
-        }
-        val ok = identityManager.changePassphrase(new)
-        _state.value = if (ok) {
-            ChangePassphraseState(success = true)
-        } else {
-            ChangePassphraseState(error = "Failed to change passphrase")
+        _state.value = ChangePassphraseState(busy = true)
+        // Two 600k-iteration PBKDF2 runs (verify + rewrap): ~8s on an S10e, an ANR on the main thread.
+        viewModelScope.launch {
+            _state.value = withContext(Dispatchers.Default) {
+                if (!identityManager.unlock(current)) {
+                    ChangePassphraseState(error = "Current passphrase is incorrect")
+                } else if (identityManager.changePassphrase(new)) {
+                    ChangePassphraseState(success = true)
+                } else {
+                    ChangePassphraseState(error = "Failed to change passphrase")
+                }
+            }
         }
     }
 

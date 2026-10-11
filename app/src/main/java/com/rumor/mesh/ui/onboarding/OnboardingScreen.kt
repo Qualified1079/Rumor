@@ -26,6 +26,7 @@ fun OnboardingScreen(
     isFirstLaunch: Boolean,
     onPassphraseConfirmed: (passphrase: String) -> Unit,
     errorMessage: String? = null,
+    busy: Boolean = false,
 ) {
     SecureScreen()  // O165: keep secrets out of screenshots + the Recents card
 
@@ -126,10 +127,17 @@ fun OnboardingScreen(
 
         Button(
             onClick = { onPassphraseConfirmed(passphrase) },
-            enabled = isValid,
+            enabled = isValid && !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (isFirstLaunch) "Create identity" else "Unlock")
+            Text(
+                when {
+                    busy && isFirstLaunch -> "Creating identity…"
+                    busy -> "Unlocking…"
+                    isFirstLaunch -> "Create identity"
+                    else -> "Unlock"
+                }
+            )
         }
 
         if (isFirstLaunch) {
