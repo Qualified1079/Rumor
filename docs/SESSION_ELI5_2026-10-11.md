@@ -60,7 +60,9 @@ session start, which cost ~20 minutes of retries before dependencies resolved.
 6. **⚠️ Measured a serious sybil weakness** (O173) — **8 fake identities can
    capture the entire "backbone" of a 20-phone mesh.** Measured, not fixed: the
    fix needs a decision from you. **Read this one.**
-7. **Finished the transfer-layer tests** (O159 closed) — the "ask again for
+7. **Made the two slow radio tests stop lying about load** — their patience is
+   now measured from the machine instead of guessed. ✅ shipped + verified.
+8. **Finished the transfer-layer tests** (O159 closed) — the "ask again for
    missing pieces" timer and the whole sending side now have tests, after a small
    refactor to make a 60-second timer testable in 40 milliseconds. ✅ shipped.
 
@@ -414,4 +416,43 @@ the sender test used a 40-byte file. Files are chunked at 60 KB, so that's **one
 chunk — and my test asked for pieces 1 and 3, which correctly don't exist, so the
 code correctly did nothing and my test proved nothing. The loud-timeout change
 from #3 is what caught it. Now uses a 200 KB file (4 real chunks).
+
+
+---
+
+### 8 — The two real-radio tests now measure the machine instead of guessing
+
+**Context.** Two tests spin up six real network stacks and talk over real TCP.
+They failed about half the time in this container, and that mattered because one
+of them is the evidence for shipping liveness routing default-on. #5 established
+the cause isn't your code: instrumented over two minutes, a stuck run had
+**nothing at all** crossing the bypass route, while healthy runs delivered in
+~30 seconds — including with the liveness timer forced fully stale as a control.
+
+#5 added a gate for the "network never formed" case. This is the other half:
+**formed, but slow.** A fixed deadline can't serve both. These tests share a JVM
+with up to 14 other heavyweight test classes, so the real cost of a four-hop
+delivery swings by an order of magnitude from run to run — meaning any constant
+is either too tight (flaky) or absurdly generous on a fast machine.
+
+**The fix.** The readiness probe already measures exactly that cost, on this
+machine, seconds earlier. So the delivery budget is now derived from it: 6× the
+measured carry, floored at 120 s so a suspiciously fast probe can't starve the
+test, capped at 600 s so a genuine failure still reports in bounded time. The
+probe keeps its own fixed 240 s ceiling — past that the harness is broken, not
+slow.
+
+**To be explicit: this is patience, not a weakened check.** What's asserted is
+byte-for-byte identical; only how long it's willing to wait changed. The budget
+is printed each run (`LAN-CALIBRATION`) so you can see what the machine was
+doing when a result came in.
+
+**Verified:** `BUILD SUCCESSFUL in 3m 13s`, measuring `probeCarry=20510ms →
+dmBudget=123060ms` on an idle box.
+
+**Honest status:** this is the one item I committed *before* its confirming run
+finished (you woke me mid-change, and I'd rather commit it labelled than leave it
+loose in the working tree). The run has since passed, so it stands — but it had
+one verification run, not the repeated-runs treatment the rest of the night's work
+got. If the two radio tests flake again, that's the first thing to re-examine.
 
