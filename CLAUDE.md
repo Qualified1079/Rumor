@@ -219,7 +219,7 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O164 | **`[TODO/CODE]`** `MeshControllerHolder.NoOp` silently drops sends/relays during the bind race; UI reports success (audit #8) |
 | O167 | **`[TODO/CODE]`** `LanTransportManager` `NetworkCallback` not pinned to its started `Network` (audit #20) |
 | O171 | **`[TODO/CODE]`** `PersistenceCoordinator.recent` is an unsynchronized `LinkedHashSet` across coroutines (audit #13) |
-| O173 | **`[TODO/CODE+SIM]`** `PersistencePlanner`/`MeshViewTracker` no sybil resistance on self-declared FREE capacity (audit #16; O127 family) |
+| O173 | **`[MEASURED 2026-10-11 — DECISION NEEDED]`** Sybil FREE-capacity bias quantified: 8 fake identities capture the ENTIRE backbone of a 20-phone mesh (0 honest-honest links; all isolated if they defect); adjacency claims need no reciprocity. Fix is blocked on a policy call — first-hand evidence would break the planner's coordinator-free agreement; options (a) reciprocity (b) local no-history clamp (c) earned capacity in `docs/OPEN_BACKLOG.md` |
 | O176 | **`[TODO/CODE]`** `BreadcrumbCache.snapshot` unbounded in-memory map (audit #14; O120 half-closed) |
 | O177 | **`[TODO/CODE]`** `MeshViewTracker.pruneStale()` dead code — 4th orphaned-prune instance (audit #23) |
 | O185 | **`[TODO/CODE]`** Every inbound `ROOM_MESSAGE` triggers two blocking SQLite reads via `runBlocking` (audit #32) |

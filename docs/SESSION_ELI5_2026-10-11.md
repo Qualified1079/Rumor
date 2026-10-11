@@ -57,6 +57,9 @@ session start, which cost ~20 minutes of retries before dependencies resolved.
    I verified each test actually catches the thing it claims. ✅ shipped.
 5. **Three more tests that couldn't tell success from nothing-happened** (O210) —
    including one that made a working feature look broken. ✅ shipped.
+6. **⚠️ Measured a serious sybil weakness** (O173) — **8 fake identities can
+   capture the entire "backbone" of a 20-phone mesh.** Measured, not fixed: the
+   fix needs a decision from you. **Read this one.**
 
 ---
 
@@ -271,4 +274,91 @@ I also raised the real-radio patience from 120 s to 240 s. To be clear, that's
 patience, not a weakened check: a four-hop delivery at a 10-second radio cadence
 can't physically finish in much under 40 s, the old ceiling was only ~2.4× that,
 and a wait that succeeds costs only as long as the delivery actually takes.
+
+
+---
+
+### 6 — ⚠️ 8 fake identities can capture a 20-phone mesh's backbone (O173)
+
+**I measured this; I did not fix it.** The fix needs a decision only you can
+make, and the measurement tells you what's at stake. This was already a known
+unknown in your backlog ("no sybil resistance on self-declared FREE capacity") —
+what's new is the size of it.
+
+**The plain version.** Phones can only hold a few "persistent links" at once (a
+pocket phone: 2). So the mesh picks a *backbone* — a small set of long-lived
+links that keeps everyone connected through a few well-placed relays. To decide
+who the relays should be, every phone runs the same calculation on the same
+shared picture of the network, so they all independently agree without needing a
+coordinator. That design is sound and clever.
+
+The input to that calculation includes **each node's own claim about how capable
+it is.** A node that says "I'm plugged in and dedicated" (FREE) is treated as
+worth 8 links and gets sorted to the *front* of the queue — so it gets picked as
+a hub first, on every phone at once. Nothing checks the claim.
+
+**What I measured** (20 phones in a ring, the standard shape):
+
+| Fake identities claiming "I'm a dedicated relay" | Honest↔honest links left | Honest links spent on the fakes | If the fakes switch off |
+|---|---|---|---|
+| 0 | 20 | 0 | mesh stays whole |
+| 1 | 16 | 8 | breaks into 4 pieces |
+| 3 | 8 | 24 | breaks into 12 pieces |
+| **8** | **0** | **40** | **all 20 phones isolated** |
+
+Eight fake identities — eight keypairs and a beacon each, no hardware — and
+*every single* honest persistent link points at an attacker. Switch them off and
+the backbone is gone.
+
+**The control that makes this real, not a modelling artifact:** the same 8
+identities, same claimed connections, claiming to be ordinary phones instead of
+dedicated relays, take **2** link slots and leave the mesh whole. So it's
+specifically the unchecked self-declared capability that does it.
+
+**It gets cheaper.** The attacker doesn't even need to be *near* anyone. A node
+declares who it's adjacent to, and nobody checks whether those nodes agree. All
+20 of a fake node's "I'm next to you" claims are accepted from a node that has
+never been in radio range of anybody — and real phones then spend real capacity
+trying to connect to it. (The code's own comment says it keeps only links "both
+endpoints could realize" and that "a one-sided edge can't converge." It doesn't
+do that.)
+
+**Two caveats, because I don't want you over-reading this:**
+- This hits the **backbone layer, not message delivery.** Opportunistic
+  phone-meets-phone gossip still works. It's a denial of the persistence layer,
+  not of the mesh. Bad, not fatal.
+- The 20-phones-in-a-ring shape overstates the *population*: pocket phones only
+  announce themselves when their mode changes, not continuously, so a real
+  network's picture is mostly the handful of always-on anchors. I measured that
+  realistic case too — one honest anchor plus one fake one, and they don't
+  compete; they both fill up, and the honest phones' budget is what gets eaten.
+
+**I also tested a guess and it was wrong**, which I'm recording so nobody chases
+it: I expected an attacker would mine a keypair whose ID sorts early to win
+tie-breaks against honest anchors. Measured — it buys exactly nothing, because
+there's enough spare honest capacity that ties never bind. Claim removed.
+
+**Why I didn't just fix it.** The natural fix is "rank relays by what you've
+actually *seen* them do, not what they claim." That **breaks the thing that makes
+this design work**: every phone must compute the *same* answer from the *same*
+shared picture, or two phones disagree about who holds a link and the backbone
+fragments — which is the exact failure (self-election) this planner was built to
+eliminate. Your own evidence is, by definition, yours alone.
+
+So the real options, for you to pick:
+
+- **(a) Require both sides to agree a link exists.** Kills the "never met anyone"
+  variant outright, keeps everyone computing the same answer, cheap. Doesn't stop
+  an attacker who really *is* nearby. Costs a brand-new honest anchor one beacon
+  round before it can be recruited.
+- **(b) Cap how much of its own budget a phone spends on strangers** — at most
+  half, on nodes it has no first-hand history with. Must be applied *after* the
+  shared calculation as a local trim, never inside it, or it fragments the plan.
+- **(c) Make capability something you earn**, from signed evidence of relaying.
+  Biggest change, and it penalises exactly the fresh, honest, plugged-in node you
+  most want to recruit (your O54/O104 infrastructure story).
+
+My read: **(a) and (b) together** — (a) is nearly free and (b) can't fragment
+anything. (c) is a real bootstrap-trust decision and belongs with your O135/O136
+thinking. But it's your call, which is why I stopped at the numbers.
 
