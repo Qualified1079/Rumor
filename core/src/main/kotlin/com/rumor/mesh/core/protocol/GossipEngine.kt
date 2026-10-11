@@ -1474,8 +1474,19 @@ class GossipEngine(
                 // O29 per-peer routing decision. If breadcrumbs name candidate
                 // peers for the recipient, take the ROUTED path; otherwise flood.
                 val recipientId = msg.recipientId
+                // `+ recipientId`: the RECIPIENT is always a legal next hop, crumb or
+                // not. Without it a DM whose recipient is a direct peer that no crumb
+                // happens to name is withheld from the one node it is FOR, reaching
+                // them only on a later store-backfill re-offer (whose re-derivation
+                // DOES allow the recipient — which is why this looked like mere
+                // delay and stayed invisible). Under O55 duty-cycling a "later round"
+                // can be hours away or never: a brief contact window is the whole
+                // delivery opportunity. Found via a PerPeerRoutingTest flake whose
+                // outcome depended on whether the marked copy was still queued when
+                // the recipient happened to be offered to.
                 val candidates = if (breadcrumbs != null && recipientId != null) {
                     breadcrumbs.candidatePeersSync(recipientId).toSet().takeIf { it.isNotEmpty() }
+                        ?.plus(recipientId)
                 } else null
 
                 val withSplit = if (candidates != null) {

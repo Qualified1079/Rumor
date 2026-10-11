@@ -236,6 +236,8 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O203 | **`[DECISION-NEEDED]`** Delivery-ACK follow-ups — "delivered ✓✓" UI + delivery-state Room column (schema bump); sender offer-suppression; relay on-ack eviction defaults |
 | O204 | **`[DECISION, sim-DONE 2026-08-03]`** `hopsToLive` doesn't bound DM/broadcast reach (store-backfill re-offers as-received copies); routing's win is targeting not reach |
 | O205 | **`[DONE 2026-10-11]`** Mode-aware liveness routing window — `ModeEnvelope.livenessWindowMs` = 3 × max(gossip, discovery) cadence (MOBILE 90s / STATIC 45s / FREE 15s); `GossipEngine.modeState` reads it live, `livenessWindowOverrideMs` overrides |
+| O208 | **`[DONE 2026-10-11]`** Routed DM was withheld from its own recipient — `relay()` set `intendedPeers` to crumb candidates only, so a relay never offered a DM to the recipient standing next to it unless a crumb named them; recipient now unioned in (`RoutedDmReachesRecipientTest`) |
+| O209 | **`[DONE 2026-10-11]`** `awaitUntil` returned silently on timeout — preconditions could fail invisibly and leave assertions measuring the wrong state (one vacuous test + O208 found this way). Now throws; see `docs/SIMULATOR_TESTING.md` |
 | O206 | **`[TODO/CODE]`** Socket-level persistent connections for static/infra nodes — keep-open vs per-round reconnect on always-on/O104 nodes (amortize HELLO, exact liveness signal); O98 does the link-selection half |
 | O207 | **`[TODO/CODE+UI+DECISION]`** Presence sharing model — drop unknowable "offline" for last-seen-by-you + last-reported-online; scope sharing (all/contacts/whitelist/off, private default) |
 #### Tier 5 — bridge hardware track
