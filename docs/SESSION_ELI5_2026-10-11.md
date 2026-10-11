@@ -60,6 +60,9 @@ session start, which cost ~20 minutes of retries before dependencies resolved.
 6. **⚠️ Measured a serious sybil weakness** (O173) — **8 fake identities can
    capture the entire "backbone" of a 20-phone mesh.** Measured, not fixed: the
    fix needs a decision from you. **Read this one.**
+7. **Finished the transfer-layer tests** (O159 closed) — the "ask again for
+   missing pieces" timer and the whole sending side now have tests, after a small
+   refactor to make a 60-second timer testable in 40 milliseconds. ✅ shipped.
 
 ---
 
@@ -361,4 +364,54 @@ So the real options, for you to pick:
 My read: **(a) and (b) together** — (a) is nearly free and (b) can't fragment
 anything. (c) is a real bootstrap-trust decision and belongs with your O135/O136
 thinking. But it's your call, which is why I stopped at the numbers.
+
+
+---
+
+### 7 — The retry timer and the sending side now have tests (O159 — closed)
+
+Continuing #4. Two parts were still untested.
+
+**Part one: the "ask again" timer.** When chunks of a file go missing, your phone
+waits 60 seconds, asks the sender to resend, waits 2 minutes, asks again, and
+after 5 fruitless rounds gives up and throws the partial file away. None of that
+had tests, for a dull but real reason: testing it meant a test suite that sleeps
+for minutes, so nobody did.
+
+I made the three timing numbers into settings with their current values as the
+defaults — production behaviour is **identical**, but a test can run the same
+logic on a 40-millisecond schedule. Then wrote the tests:
+
+- A stalled transfer does get abandoned, **and gives its storage back** (that was
+  a leak you'd fixed on one path; this pins it on the other).
+- It asks for a *bounded batch* of missing pieces, never the whole list.
+- **A manifest with no chunks behind it never starts a timer at all.** This is the
+  control that makes the first test mean something: without it, "the stalled
+  transfer got abandoned" only proves the clock ticked, not that stalling is what
+  triggered it. It's also a real defence — otherwise a flood of cheap manifests
+  would each start a timer and a stream of requests.
+- A *slow* transfer is never abandoned: any progress refills the retry budget, so
+  a huge file over a bad link survives while a genuinely dead one doesn't.
+
+**Part two: the sending side**, which had zero tests. It now has three, driven by
+real signed messages over the simulated radio rather than by calling methods
+directly:
+
+- It resends **exactly** the pieces that were asked for — nothing else. (A sender
+  that replies to "I'm missing piece 3" with the entire file hands the receiver a
+  way to make it flood the network.)
+- It ignores a request for a transfer it never sent, so a stranger can't make your
+  phone emit traffic out of nothing.
+- When the receiver cancels, it marks the transfer dead and **stops answering** —
+  with a pre-cancel request served first as the positive control, so "nothing was
+  resent" can't pass just because the resend path was broken in the test setup.
+
+**All six teeth-verified**, one rule broken at a time, confirming only the
+matching test fails each time. Six for six.
+
+**A trap I fell into and am recording so nobody repeats it:** my first version of
+the sender test used a 40-byte file. Files are chunked at 60 KB, so that's **one**
+chunk — and my test asked for pieces 1 and 3, which correctly don't exist, so the
+code correctly did nothing and my test proved nothing. The loud-timeout change
+from #3 is what caught it. Now uses a 200 KB file (4 real chunks).
 
