@@ -213,7 +213,7 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O141 | **`[TODO/CODE]`** Pre-ship comment cleanup — strip conversational provenance from source (filed 2026-07-22) |
 | O130 | **`[TODO/CODE]`** 2026-07-19 audit residue — §19/§20 grab-bag (doc-drift, dead code, efficiency) |
 | O158 | **`[TODO/CODE]`** `TransferAssembler` never releases chunk BLOBs on the SUCCESS path — happy-path storage leak (audit #2) |
-| O159 | **`[PART 2026-10-11]`** `TransferAssembler` receive-side hardening now covered (`TransferAssemblerHardeningTest`, 5 defences, each teeth-verified by disabling it); `TransferSender` + the 60s-delay NACK watchdog still need the injectable-Clock/scope refactor |
+| O159 | **`[DONE 2026-10-11]`** Transfer-layer coverage: `TransferAssemblerHardeningTest` (5 receive-side defences), `TransferNackWatchdogTest` (abandon + evidence-gating + progress-refill, after making the NACK schedule/clock/scope injectable with unchanged defaults), `TransferSenderTest` (exact-index retransmit, unknown-transfer ignore, receiver-cancel silence). All 11 teeth-verified by breaking one rule at a time |
 | O160 | **`[TODO/CODE]`** O32 routed/flooded TTL split is inert — `decrementHops` kills routed DMs at the flood ceiling (audit #4) |
 | O161 | **`[TODO/CODE]`** Bridged broadcasts never persisted — invisible in Feed, no Contact, gone on restart (audit #6) |
 | O164 | **`[TODO/CODE]`** `MeshControllerHolder.NoOp` silently drops sends/relays during the bind race; UI reports success (audit #8) |
