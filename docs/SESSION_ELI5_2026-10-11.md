@@ -52,6 +52,11 @@ session start, which cost ~20 minutes of retries before dependencies resolved.
    it to you. ✅ shipped + tested. **This is the one worth your attention.**
 3. **Fixed the test harness lying about preconditions** (O209) — one existing
    test was proving nothing at all, and it's how #2 was found. ✅ shipped.
+4. **Wrote the first tests for the file-transfer defences** (O159, part) — five
+   anti-abuse checks on the receiving side had **zero** tests. Now covered, and
+   I verified each test actually catches the thing it claims. ✅ shipped.
+5. **Three more tests that couldn't tell success from nothing-happened** (O210) —
+   including one that made a working feature look broken. ✅ shipped.
 
 ---
 
@@ -185,4 +190,85 @@ some real-wire tests (`LanMeshHarnessTest`, `LanLivenessValidationTest`) are
 timing-sensitive — I measured them failing in isolation on pristine code too.
 I did not "fix" those by loosening anything; if they reappear I'll report them
 rather than paper over them.
+
+
+---
+
+### 4 — The file-transfer defences had zero tests (O159, part)
+
+**The plain version.** When someone sends you a file, it arrives as many small
+numbered chunks plus a "manifest" describing them. Your phone has five defences
+against a malicious sender abusing that:
+
+| Defence | What it stops |
+|---|---|
+| Manifest sanity check | A sender claiming "this file has 2 billion chunks" to make your phone commit to 2 billion chunks of work |
+| 8-transfers-per-sender cap | One sender opening unlimited simultaneous transfers to fill your storage |
+| Chunk-number bounds | A chunk claiming to be number 99 of a 2-chunk file |
+| Chunk-size bounds | A chunk 10× bigger than the manifest said chunks would be |
+| Per-chunk fingerprint check | A bad sender slipping in corrupt bytes for one chunk, which would otherwise only be caught after the *whole* file arrived and was paid for |
+
+**All five had no tests whatsoever.** (The storage leak you had fixed earlier,
+O158, was the proof that gap was live — nothing would have caught it.)
+
+**What I did.** Five tests, driven through the real simulated radio — the hostile
+manifests and chunks are genuinely signed and arrive over the wire exactly as an
+attacker's would, rather than being handed to the code directly.
+
+**The part you specifically asked for.** "Nothing got stored" is the correct
+outcome of a working defence *and* of a test whose message never arrived. So every
+case has a twin that differs **only** in the field being tested and must be
+accepted. The best example: the 8-transfer cap's control is that a **different**
+sender still gets through — otherwise the "defence" would be a weapon, letting one
+sender lock everyone else out of your phone.
+
+Then I **deleted each of the five defences in turn and confirmed the matching
+test fails.** That check immediately earned its keep: my first manifest-sanity
+test **passed with the defence deleted** — it was checking too early, before the
+bad manifest had been processed. I'd have shipped a test that proved nothing.
+Fixed by sending a *good* manifest after the bad one and waiting for the good one
+to register, which proves the bad one was already dealt with.
+
+**What's still missing (honest):** the *sending* side has no tests, and the
+"chunk didn't arrive, ask again" retry timer still can't be tested — it uses real
+60-second waits with no way to fast-forward. That needs a small refactor I did
+**not** do rather than fake. It's recorded in the backlog.
+
+---
+
+### 5 — Three more tests that couldn't tell success from nothing-happened (O210)
+
+Same theme as #3. Clearing the last flaky tests turned up three, and one of them
+matters beyond tests:
+
+1. **The 1-in-3 flake** — a routing test waited for the wrong signal, then
+   inspected the wrong copy of the message. Now waits for the specific thing it
+   inspects. 8 runs out of 8 green afterwards.
+2. **A test that got *easier* the slower the machine was.** It checked "this
+   message must NOT reach B" after a fixed 25-second wait. On a loaded machine,
+   nothing reaches anywhere in 25 seconds — so it passed for free. That's the
+   dangerous direction: a **silent false pass**. It now waits for proof the
+   network could carry a message in that window (an unrestricted broadcast must
+   get through on the same path), so "it didn't arrive" means something.
+3. **⚠️ A working feature looked broken.** The real-radio test for the liveness
+   routing feature you shipped default-on was failing, and it looked like the
+   feature didn't work. It isn't the feature. This container has 4 cores and the
+   test spins up six real network stacks; sometimes the bypass route **never
+   connects at all**, and when that happens the message sits still — which from
+   the test's point of view is identical to "routing failed."
+
+   I instrumented it for 2 minutes per run: in the bad run **nothing at all**
+   moved across the bypass; in good runs the message arrived in ~30 seconds,
+   **including when I forced the liveness timer fully stale as a control.** So
+   your feature does work over a real wire. The test now proves the network
+   formed *before* measuring routing on it, and says so plainly if it didn't.
+
+   **Why you should care:** that test is the evidence the handoff cites for
+   flipping liveness routing default-on. It was capable of failing for reasons
+   that have nothing to do with the thing it certifies — in either direction.
+
+I also raised the real-radio patience from 120 s to 240 s. To be clear, that's
+patience, not a weakened check: a four-hop delivery at a 10-second radio cadence
+can't physically finish in much under 40 s, the old ceiling was only ~2.4× that,
+and a wait that succeeds costs only as long as the delivery actually takes.
 
