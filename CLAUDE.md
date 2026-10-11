@@ -213,7 +213,7 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O141 | **`[TODO/CODE]`** Pre-ship comment cleanup — strip conversational provenance from source (filed 2026-07-22) |
 | O130 | **`[TODO/CODE]`** 2026-07-19 audit residue — §19/§20 grab-bag (doc-drift, dead code, efficiency) |
 | O158 | **`[TODO/CODE]`** `TransferAssembler` never releases chunk BLOBs on the SUCCESS path — happy-path storage leak (audit #2) |
-| O159 | **`[TODO/CODE]`** `TransferAssembler`/`TransferSender` have zero unit-test coverage (audit #12) |
+| O159 | **`[PART 2026-10-11]`** `TransferAssembler` receive-side hardening now covered (`TransferAssemblerHardeningTest`, 5 defences, each teeth-verified by disabling it); `TransferSender` + the 60s-delay NACK watchdog still need the injectable-Clock/scope refactor |
 | O160 | **`[TODO/CODE]`** O32 routed/flooded TTL split is inert — `decrementHops` kills routed DMs at the flood ceiling (audit #4) |
 | O161 | **`[TODO/CODE]`** Bridged broadcasts never persisted — invisible in Feed, no Contact, gone on restart (audit #6) |
 | O164 | **`[TODO/CODE]`** `MeshControllerHolder.NoOp` silently drops sends/relays during the bind race; UI reports success (audit #8) |
@@ -237,6 +237,7 @@ Counts as of 2026-07-30: 24 DECISION rows · 100 open work rows (14 of them `[PA
 | O204 | **`[DECISION, sim-DONE 2026-08-03]`** `hopsToLive` doesn't bound DM/broadcast reach (store-backfill re-offers as-received copies); routing's win is targeting not reach |
 | O205 | **`[DONE 2026-10-11]`** Mode-aware liveness routing window — `ModeEnvelope.livenessWindowMs` = 3 × max(gossip, discovery) cadence (MOBILE 90s / STATIC 45s / FREE 15s); `GossipEngine.modeState` reads it live, `livenessWindowOverrideMs` overrides |
 | O208 | **`[DONE 2026-10-11]`** Routed DM was withheld from its own recipient — `relay()` set `intendedPeers` to crumb candidates only, so a relay never offered a DM to the recipient standing next to it unless a crumb named them; recipient now unioned in (`RoutedDmReachesRecipientTest`) |
+| O210 | **`[DONE 2026-10-11]`** Vacuous-test sweep round 2 — `PerPeerRoutingTest` awaited a signal that wasn't the marked relay copy (1-in-3 flake); the real-wire strand test asserted absence after a fixed delay (silent false pass under load); `LanLivenessValidationTest` gained a readiness gate because an unformed LanTransport bypass reads exactly like a routing regression (it was one — the O198 fallback does work on real wire, verified with the window forced stale) |
 | O209 | **`[DONE 2026-10-11]`** `awaitUntil` returned silently on timeout — preconditions could fail invisibly and leave assertions measuring the wrong state (one vacuous test + O208 found this way). Now throws; see `docs/SIMULATOR_TESTING.md` |
 | O206 | **`[TODO/CODE]`** Socket-level persistent connections for static/infra nodes — keep-open vs per-round reconnect on always-on/O104 nodes (amortize HELLO, exact liveness signal); O98 does the link-selection half |
 | O207 | **`[TODO/CODE+UI+DECISION]`** Presence sharing model — drop unknowable "offline" for last-seen-by-you + last-reported-online; scope sharing (all/contacts/whitelist/off, private default) |

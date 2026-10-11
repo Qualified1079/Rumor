@@ -26,6 +26,12 @@ import org.junit.Test
  *
  * Slow (LanTransport gossips every 10 s; a 4-hop carry is tens of seconds) — a
  * real-wire spot-check, kept to two arms.
+ *
+ * Timeouts are deliberately generous (240 s for a 4-hop carry whose floor is ~40 s).
+ * A wait that succeeds costs only what the delivery actually takes, so patience is
+ * nearly free, and the 120 s ceiling was tight enough that this test failed under
+ * full-suite CPU contention on a 4-core box — a flake, not a finding. Patience is
+ * not a weakened assertion: what is asserted is unchanged.
  */
 class LanLivenessValidationTest {
 
@@ -37,6 +43,27 @@ class LanLivenessValidationTest {
         h.nodes.forEach { it.gossipEngine.livenessRouting = liveness }
         h.start(edges = EDGES)
         h.setOnline(3, up = false)  // m2 dead from the start → never ONLINE in m1's tracker
+
+        // READINESS GATE (2026-10-11). Six real LanTransports on a loaded box do not
+        // always finish forming every session, and when the bypass m1─r─m3 fails to
+        // come up the DM sits at m1 forever — which is indistinguishable, from the
+        // assertions below, from the liveness fallback not working. That is exactly
+        // how this test read as a routing regression once: instrumented, the stuck
+        // run had NOTHING on the bypass at all, while runs where the bypass formed
+        // delivered in ~30 s (also verified with the window forced fully stale).
+        //
+        // So prove the mesh exists before measuring routing on it: an unrestricted
+        // broadcast from A must reach B over the bypass. It is sent BEFORE the crumbs
+        // are laid, and it is a broadcast from A, so the crumbs it creates are for A
+        // and cannot affect the DM's routing toward B.
+        val probe = h.broadcast(from = 0, text = "readiness-probe") ?: error("broadcast null")
+        check(h.awaitDelivered(probe, to = 1, timeoutMs = 240_000)) {
+            "HARNESS NOT READY: a plain broadcast never crossed A→…→B, so the real-wire " +
+                "mesh (specifically the m1─r─m3 bypass) never formed. Nothing about " +
+                "routing can be concluded from this run — re-run; if it persists, the " +
+                "LanTransport harness is the problem, not the routing under test."
+        }
+
         // Single straight-line crumb trail — m1's only crumb is the (dead) m2.
         h.nodes[0].breadcrumbs.record(h.nodes[1].userId, h.nodes[2].userId) // A : B via m1
         h.nodes[2].breadcrumbs.record(h.nodes[1].userId, h.nodes[3].userId) // m1: B via (dead) m2
@@ -52,7 +79,7 @@ class LanLivenessValidationTest {
         try {
             assertTrue(
                 "liveness ON must deliver to B via the live bypass over real LanTransport",
-                h.awaitDelivered(id, to = 1, timeoutMs = 120_000),
+                h.awaitDelivered(id, to = 1, timeoutMs = 240_000),
             )
             // Discrimination: it did NOT go through the dead relay (m2 is offline).
             assertFalse(
@@ -93,7 +120,24 @@ class LanLivenessValidationTest {
                 h.awaitDelivered(id, to = 2, timeoutMs = 45_000),
             )
             // ...but m1's only crumb points at the dead m2 and it never floods → stranded.
-            delay(25_000) // ample gossip rounds; the strand is structural, not slow
+            //
+            // PROGRESS CONTROL (2026-10-11). This assertion is an absence, and the
+            // fixed `delay(25_000)` that used to precede it made the absence hold for
+            // free whenever the box was too loaded to complete 4 gossip rounds — the
+            // failure mode is a silent false PASS, which is worse than the flake in
+            // the sibling test. So instead of waiting a fixed time, wait for proof
+            // that this mesh CAN carry a message A→B in this window: an unrestricted
+            // BROADCAST from A, over the very same live bypass (A→m1→r→m3→B) the
+            // stranded DM declined to use. If the broadcast lands and the DM does not,
+            // the strand is structural. If the broadcast never lands, the test fails
+            // loudly instead of congratulating itself.
+            val canary = h.broadcast(from = 0, text = "progress-control") ?: error("broadcast null")
+            assertTrue(
+                "progress control: an unrestricted broadcast must reach B over the live " +
+                    "bypass — without this, 'the DM never arrived' cannot be distinguished " +
+                    "from 'nothing had time to arrive'",
+                h.awaitDelivered(canary, to = 1, timeoutMs = 240_000),
+            )
             assertFalse(
                 "baseline (liveness OFF) must strand — B must never receive it",
                 h.nodes[1].messageRepo.getById(id) != null,
