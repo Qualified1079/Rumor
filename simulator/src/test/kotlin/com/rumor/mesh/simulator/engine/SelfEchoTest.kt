@@ -4,6 +4,8 @@ import com.rumor.mesh.core.model.UserMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -22,6 +24,20 @@ import kotlin.random.Random
  *  2. **Online-status echo** — a peer's exchange-time online snapshot contains
  *     *us* (it just saw us). Merging it verbatim marks our own userId ONLINE in
  *     our own tracker, surfacing self as an unnamed contact.
+ *
+ * **2026-10-11 — this test was vacuous and is now not.** It awaited the beacon
+ * landing in B's *repo*, but `handleSelfPresence` ingests SELF_PRESENCE with
+ * `persist = false` by design (ephemeral control traffic), so that condition
+ * could never hold. `awaitUntil` returned silently on timeout back then, so the
+ * test went on to assert "A's own id is absent from A's view" against a mesh
+ * where **the beacon had never moved at all** — an absence that holds for free
+ * whether the self-echo guard exists or not. Surfaced by making `awaitUntil`
+ * fail loudly; it then failed 3/3 in isolation.
+ *
+ * The fix is the two positive controls now asserted before the absence: B really
+ * received and *processed* the beacon (it appears in B's own MeshView), and B
+ * really *offers it back* to A. Without those, "self never appeared" cannot
+ * distinguish a working guard from a message that never arrived.
  */
 class SelfEchoTest {
 
@@ -34,20 +50,40 @@ class SelfEchoTest {
         val beacon = a.gossipEngine.composeSelfPresence(UserMode.STATIC)!!
         a.flushSchedulerToRepo()
 
-        // A → B: B learns and stores A's beacon.
+        // A → B. Await the DEDUP set, not the repo: SELF_PRESENCE is ingested with
+        // persist=false, so b.knownMessages() is the one signal that can never fire.
         SimTransport(a, b).exchange(Random(1))
-        awaitUntil { b.knownMessages().any { it.id == beacon.id } }
+        awaitUntil(what = "B to see A's beacon") { beacon.id in b.gossipEngine.knownMessageIds() }
 
-        // B → A: B offers A's own beacon back. handleSelfPresence would record A
-        // into A's own MeshView if the self-echo guard didn't drop it first. A
-        // never beacons about itself, so a self entry here means the echo leaked in.
+        // Control 1 — B didn't just dedup the bytes, it ran handleSelfPresence on
+        // them. If this fails the absence assertion below proves nothing.
+        awaitUntil(what = "B to record A in its own MeshView") {
+            a.userId in b.meshView.assembleView().modes.keys
+        }
+
+        // Control 2 — the echo is actually attempted. B relays the beacon, so its
+        // offer back to A contains A's own message; that is the input the guard
+        // has to drop. (Pre-2026-10-11 this test never got this far.)
+        assertTrue(
+            "B must offer A's own beacon back to A — otherwise there is no echo to test",
+            b.gossipEngine.messagesForExchange(a.userId).any { it.id == beacon.id },
+        )
+
+        // B → A: handleSelfPresence would record A into A's own MeshView if the
+        // self-echo guard didn't drop it first. A never beacons about itself, so a
+        // self entry here means the echo leaked in.
         repeat(6) { SimTransport(b, a).exchange(Random(it + 2)) }
-        awaitUntil { b.knownMessages().any { it.id == beacon.id } } // settle handlers
+        delay(300) // absence assertion: settle, per docs/SIMULATOR_TESTING.md
 
         assertFalse(
             "A's own userId must not appear in its assembled view via a relayed self-beacon",
             a.userId in a.meshView.assembleView().modes.keys,
         )
+        assertFalse(
+            "…nor in A's own online tracker",
+            a.userId in a.onlineTracker.statuses.value,
+        )
+        scope.cancel()
     }
 
     @Test
@@ -68,7 +104,7 @@ class SelfEchoTest {
             SimTransport(a, b).exchange(Random(it))
             SimTransport(b, a).exchange(Random(it + 100))
         }
-        awaitUntil { b.userId in a.onlineTracker.statuses.value }
+        awaitUntil(what = "A to see B online") { b.userId in a.onlineTracker.statuses.value }
 
         assertTrue(
             "A should know B is online",
@@ -78,5 +114,6 @@ class SelfEchoTest {
             "A must never record its own userId as an online peer",
             a.userId in a.onlineTracker.statuses.value,
         )
+        scope.cancel()
     }
 }
