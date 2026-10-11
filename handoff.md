@@ -38,6 +38,108 @@ should still be treated with normal suspicion regardless of this note.
 
 ---
 
+## §1 — ORIENT HERE FIRST (permanent; read before touching anything)
+
+*Not a session entry. The per-session stack starts below this. Added 2026-10-11
+because new instances were re-deriving context that is already written down,
+and re-making mistakes this project has already paid for.*
+
+### Read in this order
+
+1. **`CLAUDE.md`** — architecture, the key invariants, coding conventions, and
+   the one-line backlog index. The **conventions are not suggestions**: minimal
+   comments (WHY not WHAT), no premature abstractions, no feature flags, and
+   **commit + push straight to `main`** (2026-07-19 user directive — do NOT
+   create a feature branch; force-push stays denied).
+2. **`docs/OPEN_BACKLOG.md`** — full row bodies. `CLAUDE.md`'s tiers are only an
+   index. **Check a row here before believing anything about its status**; rows
+   go stale, and at least one session has built against a row that had shipped
+   months earlier.
+3. **`docs/DECISIONS.md`** — narrow recorded positions (O11, O12, O63, O66, O82,
+   O86, O104, O125, O146, O147, O150, O155). A "per O12" cross-ref resolves here.
+4. **`docs/SIMULATOR_TESTING.md`** — **mandatory before writing any `:simulator`
+   or `:core` scenario test.** It encodes the vacuous-test traps this project has
+   already hit.
+5. **`docs/RENAMED_FIELDS_NEVER_REUSE.md`** — **mandatory before touching any
+   wire format, domain tag, `_ext` key or `MessageType` serial name.** Names and
+   tags are reserved FOREVER; a changed canonical-byte layout needs a new tag.
+6. **`docs/COMPLETED_GAPS.md`** — only when closing a row (move the record there,
+   delete the open row). Don't load it during normal work.
+
+### Practices this project paid for — violating these is how it breaks
+
+- **A green suite can be vacuous.** Five separate green-but-meaningless traps
+  were found in one session (2026-10-10). Before trusting a pass: check
+  `skipped`/`errors` are 0 and no class has 0 tests, then **teeth-check it** —
+  disable the guard, confirm *exactly* the test claiming it fails, restore.
+  **A teeth check can itself be wrong**: confirm you disabled the line you meant
+  to (one of mine removed a `deleteAllForTransfer` from `cancel()` instead of
+  `attemptReassembly` and made a good test look weak).
+- **Every scenario carries negative controls** — a baseline (defense off → bad
+  outcome visible) and a discrimination control (defense lets the good case
+  through, it is not a blackhole). A "must be refused" assertion passes
+  trivially if delivery is broken.
+- **When the security boundary is on RECEIVE, the test must bypass compose.** A
+  hostile client never calls our compose path. A test of mine passed with the
+  receive-side moderator check disabled because it was really exercising a
+  compose-side precondition, which is only UX.
+- **Source-scanning guards match COMMENTS, not just code.**
+  `SourceInvariantTest` (O5a) and `DomainTagInvariantTest` both do substring
+  scans — an explanatory comment naming `selfAuthenticating` failed the build,
+  and a stale KDoc kept the tag guard green through an entire `v2→v3` bump while
+  the code emitted v3. **A comment is not evidence**; assert emitted bytes.
+- **Verify from the code, not from the invariant list.** Reasoning from
+  `CLAUDE.md`'s invariants produced a confident, wrong security claim (that
+  `contentType` was signed — it wasn't, O212). Read `signableBytes` itself.
+- **An identifier that is ASSERTED rather than derived is a smell here.**
+  `userId = SHA-256(pubkey)`, `trafficClass` derived from type, routing tag
+  derived from roomId. An asserted room id was a HIGH squatting bug (O214/O187).
+- **Don't add a prune with no caller.** Four shipped as documented periodic
+  maintenance with zero call sites. Wire it and test it with an injected clock,
+  or file the wiring.
+- **Run the background security review and act on it.** Two real bugs in
+  2026-10-10's Rooms work were in code that had already passed a full green
+  suite *and* my own teeth checks, because the tests only probed the gates I had
+  thought of.
+
+### Build in a cloud container (none of this is in the repo)
+
+The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
+
+- **No JDK 17 and no Android SDK preinstalled.** Fetch Temurin 17 to the session
+  scratchpad. **`:app` cannot be compiled or tested in these containers at all**
+  — hand-review it and say so; CI is the gate.
+- `gradle.properties` sets `file.encoding` but **not `sun.jnu.encoding`**, and
+  `RbsrBandwidthScenarioTest` has an **em-dash in a test method name**, so its
+  class-file path is unwritable under a POSIX locale and the whole `:simulator`
+  test compile dies with `InvalidPathException`. Needs `LANG=C.utf8` (that exact
+  spelling) **plus** `-Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8
+  -Dsun.jnu.encoding=UTF-8"`, and `-Dkotlin.compiler.execution.strategy=in-process`.
+- Maven Central intermittently **429s** the shared proxy IP while `curl` to the
+  same URL returns 200. Work around by curl-prefetching into `~/.m2` behind a
+  scoped `--init-script` adding `mavenLocal()` to
+  `dependencyResolutionManagement` (the project sets `FAIL_ON_PROJECT_REPOS`, so
+  a project-level `repositories {}` block is rejected).
+- **`LanLivenessValidationTest` / `LanMeshHarnessTest` are load-flaky** (real
+  sockets, 12–52 s each). Failing under the full suite but passing in isolation
+  is the known signature, not a regression — see O208.
+
+### State of play, 2026-10-11
+
+- **Rooms SHIP in v1** (O210, user decision). O89 write authority and O187's
+  wire/repo/authority layer are done; **O214 records the settled design** —
+  plaintext default, optional encryption mode, invite-chain gated, amnesiac
+  timers, hard crypto stays in DMs.
+- **The next Rooms work is O216/O217/O218**, and O216 is the load-bearing one:
+  **there is no join path at all**, so `RoomMembershipPolicy` is stored and
+  never consulted.
+- **Nothing of Rooms reaches the phone** — O187 is `[PART]`, no Room DAO, no
+  schema bump, no UI. That half needs a device.
+- **CI has no verdict on `main`** (O208) — its last runs were *cancelled*, not
+  red. Do not read silence as green.
+
+---
+
 # Handoff — Rooms shipped (O89 write authority) + rumor-msg-v3 + transfer/O159 coverage + app silent-failure fixes (2026-10-10)
 
 **Interactive session on `main` (per the 2026-07-19 directive: commit + push
