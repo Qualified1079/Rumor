@@ -32,7 +32,13 @@ suspend fun awaitUntil(
     timeoutMs: Long = 10_000,
     /** What is being waited for, named in the timeout message. Worth the few words. */
     what: String? = null,
-    condition: () -> Boolean,
+    /**
+     * Suspend so a condition can read a repository directly — the transfer-layer
+     * observables (`chunkRepo.getReceivedIndices`, `transferRepo.getById`) are all
+     * suspend, and a plain lambda is assignable here, so every existing call site
+     * is unaffected.
+     */
+    condition: suspend () -> Boolean,
 ) {
     val deadline = System.currentTimeMillis() + timeoutMs
     while (System.currentTimeMillis() < deadline) {

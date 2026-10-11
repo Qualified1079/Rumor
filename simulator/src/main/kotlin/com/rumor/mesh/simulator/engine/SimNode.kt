@@ -96,8 +96,9 @@ class SimNode(
     internal val messageRepo    = InMemoryMessageRepository()
     private val routeRepo       = InMemoryRouteRepository()
     private val breadcrumbRepo  = InMemoryBreadcrumbRepository()
-    private val transferRepo    = InMemoryTransferRepository()
-    private val chunkRepo       = InMemoryChunkRepository()
+    /** Internal (not private) so transfer-layer scenarios can assert on receiver state. */
+    internal val transferRepo   = InMemoryTransferRepository()
+    internal val chunkRepo      = InMemoryChunkRepository()
     private val blockEntryRepo  = InMemoryBlockEntryRepository()
     /** O79 — per-node room-subscription store, in-memory. Exposed so scenarios can add subscriptions. */
     val roomSubscriptionRepo    = com.rumor.mesh.core.data.memory.InMemoryRoomSubscriptionRepository()
