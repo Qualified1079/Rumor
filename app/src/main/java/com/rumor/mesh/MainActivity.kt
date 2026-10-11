@@ -115,11 +115,14 @@ class MainActivity : ComponentActivity() {
         // skipped because identity is already non-null at composition.
         // HARD-GATED on BuildConfig.DEBUG — this code path cannot exist in a
         // release build. The passphrase is the fleet dev passphrase only.
+        // Off the main thread: the KDF is ~4s on older phones and froze every launch.
         if (BuildConfig.DEBUG && identityManager.hasIdentity && !identityManager.isUnlocked) {
-            val ok = identityManager.unlock(DEBUG_AUTO_UNLOCK_PASSPHRASE)
-            com.rumor.mesh.core.logging.RumorLog.i(
-                "MainActivity", "DEBUG auto-unlock ${if (ok) "succeeded" else "FAILED (wrong dev passphrase?)"}",
-            )
+            lifecycleScope.launch(Dispatchers.Default) {
+                val ok = identityManager.unlock(DEBUG_AUTO_UNLOCK_PASSPHRASE)
+                com.rumor.mesh.core.logging.RumorLog.i(
+                    "MainActivity", "DEBUG auto-unlock ${if (ok) "succeeded" else "FAILED (wrong dev passphrase?)"}",
+                )
+            }
         }
 
         // Identity may still be locked at onStart() (first-run onboarding); react to
@@ -267,6 +270,16 @@ private fun RumorApp(identityManager: IdentityManager) {
                 var error by remember { mutableStateOf<String?>(null) }
                 var busy by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
+                // Navigate on the identity itself, not the button: the DEBUG
+                // auto-unlock now completes in the background after this screen shows.
+                LaunchedEffect(identity) {
+                    if (identity != null) {
+                        navController.navigate(Screen.Feed.route) {
+                            popUpTo(Screen.Unlock.route) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                }
                 OnboardingScreen(
                     isFirstLaunch = false,
                     onPassphraseConfirmed = { passphrase ->
@@ -275,13 +288,7 @@ private fun RumorApp(identityManager: IdentityManager) {
                             scope.launch {
                                 val ok = withContext(Dispatchers.Default) { identityManager.unlock(passphrase) }
                                 busy = false
-                                if (ok) {
-                                    navController.navigate(Screen.Feed.route) {
-                                        popUpTo(Screen.Unlock.route) { inclusive = true }
-                                    }
-                                } else {
-                                    error = "Wrong passphrase"
-                                }
+                                if (!ok) error = "Wrong passphrase"
                             }
                         }
                     },

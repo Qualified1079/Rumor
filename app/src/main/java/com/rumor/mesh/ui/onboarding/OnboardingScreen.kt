@@ -130,6 +130,14 @@ fun OnboardingScreen(
             enabled = isValid && !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
+            if (busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = LocalContentColor.current,
+                )
+                Spacer(Modifier.width(12.dp))
+            }
             Text(
                 when {
                     busy && isFirstLaunch -> "Creating identity…"

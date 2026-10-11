@@ -92,6 +92,14 @@ fun ChangePassphraseScreen(
                 enabled = !state.busy && current.isNotBlank() && new.length >= 8 && new == confirm,
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                if (state.busy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = LocalContentColor.current,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                }
                 Text(if (state.busy) "Changing…" else "Change passphrase")
             }
 
