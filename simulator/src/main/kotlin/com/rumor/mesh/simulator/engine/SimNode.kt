@@ -74,7 +74,20 @@ class SimNode(
      * self-presence beacons (`composeSelfPresence(mode, …)`); it feeds the
      * planner's degree budget via the MeshView the beacons assemble into.
      */
-    var mode: com.rumor.mesh.core.model.UserMode = com.rumor.mesh.core.model.UserMode.MOBILE
+    var mode: com.rumor.mesh.core.model.UserMode
+        get() = modeFlow.value
+        set(value) { modeFlow.value = value }
+
+    private val modeFlow = MutableStateFlow(com.rumor.mesh.core.model.UserMode.MOBILE)
+
+    /**
+     * O205 — the engine reads the live mode for its cadence-derived liveness window,
+     * so [mode] is backed by a flow rather than a plain field. Scenarios still just
+     * assign `node.mode = FREE`.
+     */
+    private val modeState = object : com.rumor.mesh.core.mode.ModeState {
+        override val mode: StateFlow<com.rumor.mesh.core.model.UserMode> = modeFlow.asStateFlow()
+    }
 
     val identityProvider = SimIdentityProvider(index)
     val userId: String get() = identityProvider.identity.value!!.userId
@@ -145,6 +158,7 @@ class SimNode(
         clock           = clock,
         roomSubscriptionProvider = roomSubscriptionProvider,
         meshView        = meshView,
+        modeState       = modeState,
     )
 
     val transferSender = TransferSender(gossipEngine, identityProvider, transferRepo, chunkRepo)

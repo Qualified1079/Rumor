@@ -26,6 +26,7 @@ import com.rumor.mesh.core.model.routedHops
 import com.rumor.mesh.core.model.withTtlSplit
 import com.rumor.mesh.core.policy.InboxFilter
 import com.rumor.mesh.core.routing.BreadcrumbCache
+import com.rumor.mesh.core.mode.ModeState
 import com.rumor.mesh.core.routing.MeshViewTracker
 import com.rumor.mesh.core.routing.OnlineStatusTracker
 import com.rumor.mesh.core.routing.TopologyTracker
@@ -66,11 +67,14 @@ private const val RBSR_SNAPSHOT_LIMIT = 50_000
 /** Deeper O92: per-exchange ceiling on fetch-by-id so a hostile Request can't scan the store. */
 private const val MAX_BY_ID_FETCH = 500
 /**
- * O198 liveness window: a breadcrumb candidate counts as "reachable now" only if we
- * exchanged with it within this long. ~3 LAN gossip rounds (ROUND_INTERVAL_MS=10s) —
- * a routing-cadence threshold, deliberately NOT the 5-min presence-DISPLAY window.
- * Mode-aware tuning (longer under LOW_POWER duty-cycling) is future work; settable
- * per-engine via [GossipEngine.livenessWindowMs].
+ * O198 liveness window fallback: a breadcrumb candidate counts as "reachable now" only
+ * if we exchanged with it within this long. ~3 LAN gossip rounds — a routing-cadence
+ * threshold, deliberately NOT the 5-min presence-DISPLAY window.
+ *
+ * O205: this constant is now only the no-[ModeState] fallback. When a ModeState is
+ * wired, the window is [ModeEnvelope.livenessWindowMs] for the live mode (longer under
+ * MOBILE duty-cycling, shorter on a FREE anchor); [GossipEngine.livenessWindowOverrideMs]
+ * beats both.
  */
 private const val DEFAULT_LIVENESS_WINDOW_MS = 30_000L
 /** Bound on the first-hand-exchange map so a sybil id-flood can't grow it unboundedly. */
@@ -165,6 +169,12 @@ class GossipEngine(
      * backbone. Null disables tracking — relay of the beacon still happens.
      */
     private val meshView: MeshViewTracker? = null,
+    /**
+     * O205 — live device mode, read for the [livenessWindowMs] cadence only (same
+     * optional-and-nullable shape as MessageStore/Scheduler use for their boosts).
+     * Null = fall back to [DEFAULT_LIVENESS_WINDOW_MS].
+     */
+    private val modeState: ModeState? = null,
 ) {
     /**
      * O198/liveness routing (sim-validated at all three fidelity tiers —
@@ -185,9 +195,23 @@ class GossipEngine(
     @Volatile
     var livenessRouting: Boolean = true
 
-    /** Recent-exchange window for [livenessRouting]; settable for tests / future mode-aware tuning. */
+    /**
+     * O205 escape hatch: pin the [livenessWindowMs] to an exact value, ignoring the
+     * mode. Null (the default) = derive it from the live mode. Tests and a future
+     * user-facing override are the only intended writers.
+     */
     @Volatile
-    var livenessWindowMs: Long = DEFAULT_LIVENESS_WINDOW_MS
+    var livenessWindowOverrideMs: Long? = null
+
+    /**
+     * Recent-exchange window for [livenessRouting]. Explicit override first, else the
+     * live mode's cadence-derived window (O205), else the fixed fallback. Read fresh on
+     * every use so a mode transition takes effect without re-wiring anything.
+     */
+    val livenessWindowMs: Long
+        get() = livenessWindowOverrideMs
+            ?: modeState?.envelope?.livenessWindowMs
+            ?: DEFAULT_LIVENESS_WINDOW_MS
 
     // O198: first-hand "I directly exchanged with this peer at time T", for the
     // liveness routing filter only. Distinct from OnlineStatusTracker, which also
