@@ -137,6 +137,112 @@ The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
   schema bump, no UI. That half needs a device.
 - **CI has no verdict on `main`** (O208) — its last runs were *cancelled*, not
   red. Do not read silence as green.
+- **An unmerged review branch exists: `away/2026-10-11-overnight`** (15 commits,
+  none of it in `main`). It was built on a stale `main` by a concurrent session
+  and **duplicates O186 and O159**; it also **re-uses O208/O209/O210 and G52 for
+  different rows**. Read its handoff section immediately below before touching
+  either of those rows or filing a new number. Two user decisions are pending on
+  it (O173 sybil capture, O205 window values).
+
+---
+
+# Handoff — UNMERGED review branch `away/2026-10-11-overnight` (2026-10-11, away session)
+
+**Nothing described here is in `main`.** This section exists on `main` only so the
+next instance can find the branch and, more importantly, **not re-do or mis-number
+work that already exists on it**. The branch's own `handoff.md` top section and
+`docs/SESSION_ELI5_2026-10-11.md` carry the full detail.
+
+## Why it is a branch at all, and why it is stale
+
+The user asked for an unattended overnight session off `main` so they could review
+it in the morning — a per-request exception to the push-straight-to-`main`
+directive. That session **branched from a stale local `main` and never fetched**,
+so it ran concurrently with the 2026-10-10 interactive session below and never saw
+its 16 commits. `docs/MULTI_INSTANCE_COORDINATION.md` exists to prevent exactly
+this and was not read. **Fetch and compare before branching or claiming a row.**
+
+## Collisions — `main` wins every one of these
+
+`main`'s numbers were filed first (O208–O211 at 16:19 on 10-10, G52 at 17:13); the
+branch's were filed hours later in ignorance of them. The project rule is **no
+number reuse**, so the BRANCH's rows are the ones that must be renumbered (to
+O219+ and G53+), not `main`'s.
+
+| Number | `main` (authoritative) | Branch (must be renumbered) |
+|---|---|---|
+| O208 | CI stopped reporting on `main` | routed DM withheld from its own recipient |
+| O209 | no v1 release-gate checklist | `awaitUntil` timed out silently |
+| O210 | Rooms ship in v1 (decided) | vacuous-test sweep round 2 |
+| G52 | O159 transfer coverage | the branch's own O205 entry |
+
+**Duplicated work — `main`'s implementation is canonical, discard the branch's:**
+
+- **O186** (text-only feed drop). Both sessions implemented it independently.
+  `main`'s landed first (`27aed8a`) and was then refined to drop *before the
+  seen-commit* (`1259202`), which the branch's version does not do.
+- **O159** (transfer coverage). Both wrote `TransferAssembler` + `TransferSender`
+  tests. `main`'s are `:core` unit tests (`3b30a0d`, `af7a1e5`, closed as G52);
+  the branch's are `:simulator` real-transport suites **plus** a NACK-watchdog
+  suite that required making the watchdog's schedule/clock/scope injectable. The
+  watchdog half may be genuinely additive — diff before discarding either side.
+
+## What on the branch is NOT duplicated and is worth salvaging
+
+- **One real product bug.** `relay()` set `intendedPeers` to breadcrumb candidates
+  only, so a relay holding a DM for A, with A standing there as a direct peer,
+  would NOT offer it to A unless a crumb named them. It arrived later via the
+  store-backfill re-offer (whose re-derivation does allow the recipient), which is
+  why it looked like latency and showed up only as a 1-in-3 flaky test. Under O55
+  a contact window may be the only one for hours. One-line fix + a test verified
+  to fail without it.
+- **`awaitUntil` returned silently on timeout** — at ~30 call sites it gates a
+  PRECONDITION, so a silent timeout ran the test against a state it was never
+  written for. Measured: `PerPeerRoutingTest` failed 2 of 4 runs on an unmodified
+  tree, and `SelfEchoTest` was **vacuous** (it awaited the beacon reaching B's
+  *repo*, but SELF_PRESENCE is ingested `persist = false`, so that could never
+  hold — it would have passed with the self-echo guard deleted). This is the same
+  family as the vacuous-test traps §1 already warns about, and the fix plus two
+  new `docs/SIMULATOR_TESTING.md` rules are on the branch.
+- **O205 mode-aware liveness window** — the O198 liveness window was a fixed 30 s,
+  which is ~3 LAN gossip rounds but roughly ONE Wi-Fi-discovery beat for a
+  duty-cycled MOBILE phone, so a quiet-but-alive link read as dead and the routed
+  DM false-flooded. Derived now from each mode's slower cadence (MOBILE 90 s /
+  STATIC 45 s / FREE 15 s).
+- **O173 sybil measurement** (below).
+
+## Pending user decisions carried on the branch
+
+1. **O173 — sybil backbone capture, measured and deliberately NOT fixed.** 8 fake
+   identities declaring `UserMode.FREE` capture the ENTIRE backbone of a 20-phone
+   mesh (0 honest↔honest links; all 20 isolated if they defect). Control: the same
+   identities declaring MOBILE take 2 slots and leave it spanning. Adjacency
+   claims need no reciprocity either. **Do not implement a mitigation unattended**
+   — ranking by observed relay history breaks the planner's one hard property
+   (agreement without a coordinator), since first-hand evidence is per-node and A
+   and B would compute different plans (the O99 fragmentation). Three options with
+   costs are in the branch's O173 row. Scope: this is the persistent-link layer,
+   not message delivery.
+2. **O205's three window values** (90/45/15 s) are a judgement call — "3 contacts
+   of grace". One line (`ModeEnvelope.LIVENESS_WINDOW_ROUNDS`) if the user wants
+   2 or 5.
+
+## Two container findings that complement §1
+
+- §1's locale diagnosis is right; the branch independently hit the same em-dash
+  class-file failure and fixed it with `LANG=C.UTF-8` exported **before the Kotlin
+  daemon starts** (an already-running daemon keeps the POSIX encoding, so
+  `./gradlew --stop` first if the first attempt failed).
+- **`LanLivenessValidationTest`'s flakiness has a root cause**, not just a
+  signature: instrumented over 120 s, a stuck run had **nothing at all** crossing
+  the m1─r─m3 bypass, while runs where the bypass formed delivered in ~30 s —
+  **including with the liveness window forced fully stale as a control**. So the
+  O198 fallback does work over a real wire and that test was reporting the
+  harness, not the routing. An unformed bypass is indistinguishable from "the
+  feature is broken", and it did read as a routing regression. The branch adds a
+  readiness gate (a plain broadcast must cross A→B before any routing is
+  measured) and patience derived from that probe rather than a constant. Worth
+  porting whichever way the rest of the branch goes.
 
 ---
 
