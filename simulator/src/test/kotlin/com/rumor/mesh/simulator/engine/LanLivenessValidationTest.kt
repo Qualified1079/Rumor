@@ -38,7 +38,10 @@ class LanLivenessValidationTest {
     private val EDGES = listOf(0 to 2, 2 to 3, 3 to 4, 4 to 1, 2 to 5, 5 to 4)
 
     /** Build the diamond, kill m2 before any exchange, lay the single stale crumb chain, send A→B. */
-    private suspend fun startDiamond(liveness: Boolean, seed: Long): Pair<LanMeshHarness, String> {
+    /** Ceiling for the readiness probe itself — beyond this the harness is broken, not slow. */
+    private val PROBE_CEILING_MS = 240_000L
+
+    private suspend fun startDiamond(liveness: Boolean, seed: Long): Triple<LanMeshHarness, String, Long> {
         val h = LanMeshHarness(n = 6, seed = seed)
         h.nodes.forEach { it.gossipEngine.livenessRouting = liveness }
         h.start(edges = EDGES)
@@ -56,13 +59,27 @@ class LanLivenessValidationTest {
         // broadcast from A must reach B over the bypass. It is sent BEFORE the crumbs
         // are laid, and it is a broadcast from A, so the crumbs it creates are for A
         // and cannot affect the DM's routing toward B.
+        val probeStart = System.currentTimeMillis()
         val probe = h.broadcast(from = 0, text = "readiness-probe") ?: error("broadcast null")
-        check(h.awaitDelivered(probe, to = 1, timeoutMs = 240_000)) {
-            "HARNESS NOT READY: a plain broadcast never crossed A→…→B, so the real-wire " +
-                "mesh (specifically the m1─r─m3 bypass) never formed. Nothing about " +
-                "routing can be concluded from this run — re-run; if it persists, the " +
-                "LanTransport harness is the problem, not the routing under test."
+        check(h.awaitDelivered(probe, to = 1, timeoutMs = PROBE_CEILING_MS)) {
+            "HARNESS NOT READY: a plain broadcast never crossed A→…→B in ${PROBE_CEILING_MS}ms, " +
+                "so the real-wire mesh (specifically the m1─r─m3 bypass) never formed. " +
+                "Nothing about routing can be concluded from this run — re-run; if it " +
+                "persists, the LanTransport harness is the problem, not the routing " +
+                "under test."
         }
+        // SELF-CALIBRATING PATIENCE. The probe just measured what a 4-hop carry
+        // actually costs on THIS machine right now, which on a loaded 4-core box
+        // varies by an order of magnitude (the suite runs these 6-transport classes
+        // in a JVM shared with up to 14 other scenario classes — `forkEvery = 15`).
+        // A constant ceiling is therefore either too tight (flaky) or absurd on a
+        // fast box. The routed DM needs the same carry plus the flood-fallback round,
+        // so give it a multiple of the measured figure, floored so a suspiciously
+        // fast probe can't starve it and capped so a genuine failure still reports
+        // in bounded time. This changes patience only; what is asserted is identical.
+        val measuredCarryMs = (System.currentTimeMillis() - probeStart).coerceAtLeast(1_000)
+        val dmBudgetMs = (measuredCarryMs * 6).coerceIn(120_000, 600_000)
+        println("LAN-CALIBRATION probeCarry=${measuredCarryMs}ms dmBudget=${dmBudgetMs}ms")
 
         // Single straight-line crumb trail — m1's only crumb is the (dead) m2.
         h.nodes[0].breadcrumbs.record(h.nodes[1].userId, h.nodes[2].userId) // A : B via m1
@@ -70,16 +87,16 @@ class LanLivenessValidationTest {
         h.nodes[4].breadcrumbs.record(h.nodes[1].userId, h.nodes[1].userId) // m3: B via B
         delay(300) // let the async breadcrumb upserts settle before composing
         val id = h.sendDm(from = 0, to = 1, text = "survive?")!!
-        return h to id
+        return Triple(h, id, dmBudgetMs)
     }
 
     @Test
     fun livenessOnDeliversAroundTheDeadCrumbTargetOverRealWire() = runBlocking {
-        val (h, id) = startDiamond(liveness = true, seed = 11)
+        val (h, id, budget) = startDiamond(liveness = true, seed = 11)
         try {
             assertTrue(
                 "liveness ON must deliver to B via the live bypass over real LanTransport",
-                h.awaitDelivered(id, to = 1, timeoutMs = 240_000),
+                h.awaitDelivered(id, to = 1, timeoutMs = budget),
             )
             // Discrimination: it did NOT go through the dead relay (m2 is offline).
             assertFalse(
