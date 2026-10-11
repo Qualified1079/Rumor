@@ -36,6 +36,11 @@ class AppModuleTest {
                 // BlockManager's localUserId provider — supplied inside the
                 // single{} lambda from IdentityProvider, not resolved from graph.
                 Function0::class,
+                // Left at their null defaults until O187's Android half adds a
+                // Room-backed RoomRepository + RoomAuthorityResolver; null =
+                // ungoverned feed, lifecycle messages relayed but not tracked.
+                com.rumor.mesh.core.protocol.GossipEngine.RoomAuthorityProvider::class,
+                com.rumor.mesh.core.data.RoomRepository::class,
             ),
         )
     }
