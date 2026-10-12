@@ -191,12 +191,13 @@ G56 (first `:app` compile + identity onboarding), G57 (O98 field round), G58
 
 ## Pending, in priority order
 
-1. **Cage re-run** (user has a cage; it must be sealed and several metres away
-   — the first attempt leaked ~-48 dBm and kept the link up). Verifies two
-   things not yet field-tested: the **partition merge** (G57 #9 — cage the
-   group's senior-named host, wait for the survivors to regroup, uncage, expect
-   everyone back in the senior group within ~1–2 min) and **presence** (G58 —
-   the caged phone should drop to "Recently" on both survivors within ~75 s).
+1. **The merge check never fired in the field** (cage re-run 20:33–20:42;
+   presence was verified in the same run — G58). Mesh re-formed ~2 min after
+   uncage via planner view decay instead. Cause and fix candidate are in O223
+   (persist HELLO-verified host names across restarts, bounded). To re-test,
+   the returning phone must be one the scanning client has HELLO'd this run.
+   The cage that worked: sealed, several metres away (the first attempt leaked
+   at ~-48 dBm and kept the link up).
 2. **The seven `:app` rows' behaviour** (O164 send-failure snackbar, O184 relay
    double-tap, O169/O168 bridge crash + toggle, O179 battery warning,
    O178/O183 removed controls). Compiled; never exercised on a device.
