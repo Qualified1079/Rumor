@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Speed
@@ -77,6 +78,14 @@ fun SettingsScreen(
             icon = Icons.Default.Inbox,
             title = "Inbox policy",
             onClick = onOpenInboxPolicy,
+        )
+        SwitchRow(
+            icon = Icons.Default.Lock,
+            title = "Block screenshots of private screens",
+            subtitle = "Passphrase entry, blocklist export and message threads can't be " +
+                "screenshotted, recorded, or shown in Recents.",
+            checked = state.blockScreenshots,
+            onCheckedChange = viewModel::setBlockScreenshots,
         )
 
         Spacer(Modifier.height(4.dp))

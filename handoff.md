@@ -168,7 +168,7 @@ The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
   different rows**. Read its handoff section immediately below before touching
   either of those rows or filing a new number. Two user decisions are pending on
   it (O173 sybil capture, O205 window values). **O219–O221 and G55 are reserved
-  for its renumbering** (2026-10-11) — `main`'s next free numbers are O228 / G60.
+  for its renumbering** (2026-10-11) — `main`'s next free numbers are O229 / G60.
 
 ---
 
@@ -178,7 +178,7 @@ The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
 Commits: `2d7cef1` `f163fdf` `e324f55` `ffe87a3` `36a16a9` `329ad63` `3c89609`. Closed as
 G56 (first `:app` compile + identity onboarding), G57 (O98 field round), G58
 (presence), G59 (the seven 10-10 `:app` rows on hardware); full detail lives in
-`docs/COMPLETED_GAPS.md`. Filed O222–O227.
+`docs/COMPLETED_GAPS.md`. Filed O222–O228.
 
 ## User directives this session (apply them)
 

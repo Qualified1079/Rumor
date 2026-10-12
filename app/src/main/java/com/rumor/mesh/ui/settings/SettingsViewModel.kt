@@ -24,6 +24,7 @@ data class SettingsState(
     val currentMode: UserMode = UserMode.MOBILE,
     val modeTransitions: List<ModeStateManager.ModeTransition> = emptyList(),
     val showBatteryOptimisationWarning: Boolean = false,
+    val blockScreenshots: Boolean = true,
 )
 class SettingsViewModel(
     private val identityManager: IdentityManager,
@@ -31,7 +32,10 @@ class SettingsViewModel(
     private val context: Context,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(SettingsState(debugLogging = RumorLog.debugMode))
+    private val _state = MutableStateFlow(SettingsState(
+        debugLogging = RumorLog.debugMode,
+        blockScreenshots = com.rumor.mesh.ui.ScreenshotPolicy.isBlocking(context),
+    ))
     val state: StateFlow<SettingsState> = _state.asStateFlow()
 
     init {
@@ -73,6 +77,11 @@ class SettingsViewModel(
     fun setDebugLogging(enabled: Boolean) {
         RumorLog.debugMode = enabled
         _state.update { it.copy(debugLogging = enabled) }
+    }
+
+    fun setBlockScreenshots(enabled: Boolean) {
+        com.rumor.mesh.ui.ScreenshotPolicy.setBlocking(context, enabled)
+        _state.update { it.copy(blockScreenshots = enabled) }
     }
 
     fun onViewLogsTapped() {

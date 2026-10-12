@@ -26,9 +26,29 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 private val secureScreens = AtomicInteger(0)
 
+/**
+ * User setting, ON by default: some users want to screenshot their own DMs.
+ * Read when a secure screen is entered, so a change applies from the next one.
+ * Residual risk: anyone holding the unlocked phone can turn it off unnoticed.
+ */
+object ScreenshotPolicy {
+    private const val PREFS = "rumor_ui"
+    private const val KEY = "block_screenshots"
+
+    fun isBlocking(context: android.content.Context): Boolean =
+        context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).getBoolean(KEY, true)
+
+    fun setBlocking(context: android.content.Context, blocking: Boolean) {
+        context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY, blocking).apply()
+    }
+}
+
 @Composable
 fun SecureScreen() {
     val view = LocalView.current
+    val blocking = androidx.compose.runtime.remember { ScreenshotPolicy.isBlocking(view.context) }
+    if (!blocking) return
     DisposableEffect(Unit) {
         val window = view.context.findActivity()?.window
         if (window != null && secureScreens.getAndIncrement() == 0) {
