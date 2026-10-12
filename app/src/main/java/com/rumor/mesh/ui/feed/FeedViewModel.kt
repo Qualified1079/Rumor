@@ -57,15 +57,13 @@ class FeedViewModel(
      */
     fun relay(message: RumorMessage): Boolean {
         if (!controllerHolder.isBound()) return false
-        if (!relaying.add(message.id)) return false
+        // A repeat tap is success from the user's side; returning false here
+        // made the screen report "not connected" on a double tap.
+        if (!relaying.add(message.id)) return true
         controllerHolder.controller().manualRelay(message)
-        viewModelScope.launch {
-            try {
-                messageStore.markRelayed(message.id)
-            } finally {
-                relaying.remove(message.id)
-            }
-        }
+        // The id stays held: releasing it after the write left a gap before the
+        // button redraws as "Relayed" in which a second tap relayed again.
+        viewModelScope.launch { messageStore.markRelayed(message.id) }
         return true
     }
 

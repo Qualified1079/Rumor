@@ -667,6 +667,7 @@ class GossipEngine(
         // msg the Feed hands us carries its persisted trustLevel (O162), so this
         // guard is meaningful even after a reload.
         if (msg.trustLevel == TrustLevel.BRIDGED) return
+        RumorLog.i(TAG, "Manual relay of ${msg.id.take(8)}")
         enqueueImmediate(messageStore.boostHopsForManualRelay(msg))
         _userSendQueued.tryEmit(Unit)
         scope.launch { messageStore.markRelayed(msg.id) }
