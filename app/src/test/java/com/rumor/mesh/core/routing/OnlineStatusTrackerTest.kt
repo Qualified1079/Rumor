@@ -29,8 +29,8 @@ class OnlineStatusTrackerTest {
     @Test
     fun `merge with recent timestamp shows ONLINE`() {
         val tracker = OnlineStatusTracker()
-        val twoMinutesAgo = System.currentTimeMillis() - 2 * MINUTE_MS
-        tracker.mergeRemoteStatus(mapOf("alice" to twoMinutesAgo))
+        val thirtySecondsAgo = System.currentTimeMillis() - 30_000L
+        tracker.mergeRemoteStatus(mapOf("alice" to thirtySecondsAgo))
         assertEquals(OnlineStatus.ONLINE, tracker.statusFor("alice"))
     }
 
@@ -54,7 +54,7 @@ class OnlineStatusTrackerTest {
     fun `merge takes the fresher of two timestamps`() {
         val tracker = OnlineStatusTracker()
         val older = System.currentTimeMillis() - 10 * MINUTE_MS   // RECENTLY
-        val newer = System.currentTimeMillis() - 1 * MINUTE_MS    // ONLINE
+        val newer = System.currentTimeMillis() - 30_000L        // ONLINE (60s window)
 
         tracker.mergeRemoteStatus(mapOf("alice" to older))
         assertEquals(OnlineStatus.RECENTLY, tracker.statusFor("alice"))
@@ -67,7 +67,7 @@ class OnlineStatusTrackerTest {
     @Test
     fun `merge keeps fresher timestamp when stale update arrives later`() {
         val tracker = OnlineStatusTracker()
-        val fresh = System.currentTimeMillis() - 1 * MINUTE_MS    // ONLINE
+        val fresh = System.currentTimeMillis() - 30_000L        // ONLINE (60s window)
         val stale = System.currentTimeMillis() - 10 * MINUTE_MS   // RECENTLY
 
         tracker.mergeRemoteStatus(mapOf("alice" to fresh))
@@ -85,6 +85,20 @@ class OnlineStatusTrackerTest {
 
         tracker.recordDirectContact("alice")
         assertEquals(OnlineStatus.ONLINE, tracker.statusFor("alice"))
+    }
+
+    @Test
+    fun `a vanished peer leaves ONLINE on refresh with no further contact`() {
+        val tracker = OnlineStatusTracker()
+        tracker.mergeRemoteStatus(mapOf("alice" to System.currentTimeMillis() - 59_000L))
+        assertEquals(OnlineStatus.ONLINE, tracker.statuses.value["alice"]!!.status)
+
+        Thread.sleep(1_200)
+        // Control: nothing recomputed yet, so the published status is stale.
+        assertEquals(OnlineStatus.ONLINE, tracker.statuses.value["alice"]!!.status)
+
+        tracker.refresh()
+        assertEquals(OnlineStatus.RECENTLY, tracker.statuses.value["alice"]!!.status)
     }
 
     @Test

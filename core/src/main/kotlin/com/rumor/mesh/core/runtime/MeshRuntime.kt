@@ -189,6 +189,15 @@ class MeshRuntime(
             }
         }
 
+        // Presence ages by elapsed time alone: without this a vanished peer
+        // stayed ONLINE until some unrelated contact forced a recompute.
+        scope.launch {
+            while (isActive) {
+                delay(PRESENCE_REFRESH_MS)
+                gossipEngine.refreshPresence()
+            }
+        }
+
         // ── O98: backbone recompute loop ─────────────────────────────────────
         // Fold the assembled view through planner + reconciler on a fixed tick.
         // Logs every change so the coordinator-free convergence is observable
@@ -269,5 +278,8 @@ class MeshRuntime(
          * so hourly is generous; the calls are cheap fire-and-forget deletes.
          */
         const val PRUNE_INTERVAL_MS = 60 * 60 * 1000L
+
+        /** A quarter of the 60s ONLINE window, so a lost peer flips within ~75s. */
+        const val PRESENCE_REFRESH_MS = 15_000L
     }
 }

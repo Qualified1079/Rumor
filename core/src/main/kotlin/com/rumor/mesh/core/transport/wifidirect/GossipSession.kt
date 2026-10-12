@@ -356,11 +356,12 @@ class GossipSession(
             // Neither side ever blocks on a frame the peer hasn't already committed
             // to sending, so the tail cannot deadlock either.
             send(out, GossipPacket.Ack(received.map { it.id }))
-            send(out, GossipPacket.OnlineStatus(recentOnlineUsers))
+            send(out, GossipPacket.OnlineStatus.withAges(recentOnlineUsers, System.currentTimeMillis()))
             send(out, GossipPacket.Bye())
 
             val ackedByPeer = (receive(inp) as? GossipPacket.Ack)?.acceptedIds ?: emptyList()
-            val theirOnline = (receive(inp) as? GossipPacket.OnlineStatus)?.recentUsers ?: emptyMap()
+            val theirOnline = (receive(inp) as? GossipPacket.OnlineStatus)
+                ?.recentUsersOnLocalClock(System.currentTimeMillis()) ?: emptyMap()
 
             val duration = System.currentTimeMillis() - startMs
 

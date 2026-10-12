@@ -1288,6 +1288,9 @@ class GossipEngine(
      * MeshRuntime owns the tick; keep any new prunable state hooked in HERE so
      * the next orphan can't happen (PruneWiringInvariantTest greps for this).
      */
+    /** Re-age presence statuses; see [com.rumor.mesh.core.routing.OnlineStatusTracker.refresh]. */
+    fun refreshPresence() = onlineStatusTracker.refresh()
+
     fun pruneMaintenance() {
         breadcrumbs?.pruneOld()
         topologyTracker.pruneStale()

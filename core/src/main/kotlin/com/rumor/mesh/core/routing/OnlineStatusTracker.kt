@@ -1,5 +1,6 @@
 package com.rumor.mesh.core.routing
 
+import com.rumor.mesh.core.Clock
 import com.rumor.mesh.core.SystemClock
 import com.rumor.mesh.core.model.OnlineStatus
 import com.rumor.mesh.core.model.PeerPresence
@@ -9,7 +10,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-private const val ONLINE_WINDOW_MS = 5 * 60 * 1000L
+// "Online" should mean reachable now: a live link refreshes this every ~10s
+// round, so a lost peer reads RECENTLY within a minute rather than lingering
+// as ONLINE for 5 (field 2026-10-11). Duty-cycled MOBILE peers may flicker.
+private const val ONLINE_WINDOW_MS = 60 * 1000L
 private const val RECENTLY_WINDOW_MS = 30 * 60 * 1000L
 
 // O128: peer-asserted timestamps are clamped to now + this budget. Without it a
@@ -26,8 +30,8 @@ private const val PRUNE_RETENTION_MS = 24 * 60 * 60 * 1000L
  * Tracks the per-userId "last seen" timestamp and derives a coarse
  * [PeerPresence] for each known peer:
  *  - **ONLINE** — direct contact within the last [ONLINE_WINDOW_MS]
- *    (5 minutes by default).
- *  - **RECENTLY_SEEN** — between 5 and 30 minutes ago.
+ *    (60 seconds).
+ *  - **RECENTLY_SEEN** — between 1 and 30 minutes ago.
  *  - **OFFLINE** — more than [RECENTLY_WINDOW_MS] ago, or never seen.
  *
  * Two ingress paths:
@@ -50,58 +54,76 @@ private const val PRUNE_RETENTION_MS = 24 * 60 * 60 * 1000L
  * but only as a coarse "this peer told me they saw X at time T"
  * signal — not full beacon propagation.
  */
-class OnlineStatusTracker : SynchronizedObject() {
-    private val lastSeen = mutableMapOf<String, Long>()
+class OnlineStatusTracker(
+    private val wallClock: Clock = SystemClock,
+    /**
+     * Sightings are kept on a monotonic clock so their AGE survives any wall
+     * clock change on this device, in either direction. Wall time appears only
+     * at the edges: the legacy timestamp map and [PeerPresence.lastSeenMs].
+     */
+    private val monotonicMs: () -> Long = { System.nanoTime() / 1_000_000 },
+) : SynchronizedObject() {
+    private val seenAtMono = mutableMapOf<String, Long>()
 
     private val _statuses = MutableStateFlow<Map<String, PeerPresence>>(emptyMap())
     val statuses: StateFlow<Map<String, PeerPresence>> = _statuses.asStateFlow()
 
     fun recordDirectContact(userId: String) = synchronized(this) {
-        lastSeen[userId] = SystemClock.now()
+        seenAtMono[userId] = monotonicMs()
         recompute()
     }
 
+    /** [remoteUsers] are timestamps on OUR wall clock (see OnlineStatus.recentUsersOnLocalClock). */
     fun mergeRemoteStatus(remoteUsers: Map<String, Long>) = synchronized(this) {
-        val ceiling = SystemClock.now() + REMOTE_SKEW_BUDGET_MS
+        val wallNow = wallClock.now()
+        val monoNow = monotonicMs()
+        val ceiling = wallNow + REMOTE_SKEW_BUDGET_MS
         for ((id, ts) in remoteUsers) {
-            val clamped = minOf(ts, ceiling)
-            val existing = lastSeen[id]
-            if (existing == null || clamped > existing) lastSeen[id] = clamped
+            val mono = monoNow - (wallNow - minOf(ts, ceiling))
+            val existing = seenAtMono[id]
+            if (existing == null || mono > existing) seenAtMono[id] = mono
         }
         recompute()
     }
 
     /** O120: drop entries too old to ever surface again. Call from the host's maintenance tick. */
     fun pruneStale(retentionMs: Long = PRUNE_RETENTION_MS) = synchronized(this) {
-        val cutoff = SystemClock.now() - retentionMs
-        if (lastSeen.entries.removeAll { it.value < cutoff }) recompute()
+        val cutoff = monotonicMs() - retentionMs
+        if (seenAtMono.entries.removeAll { it.value < cutoff }) recompute()
     }
 
+    /**
+     * Re-derive statuses from elapsed time alone. Without a tick, a peer that
+     * vanished kept its last status until some OTHER peer's contact happened
+     * to trigger a recompute — on a quiet node, indefinitely.
+     */
+    fun refresh() = synchronized(this) { recompute() }
+
+    /** Wall-clock form for peers that predate `_ext.ages`: now minus age. */
     fun currentSnapshot(): Map<String, Long> = synchronized(this) {
-        val cutoff = SystemClock.now() - RECENTLY_WINDOW_MS
-        lastSeen.filterValues { it >= cutoff }
+        val wallNow = wallClock.now()
+        val monoNow = monotonicMs()
+        seenAtMono.filterValues { monoNow - it <= RECENTLY_WINDOW_MS }
+            .mapValues { (_, mono) -> wallNow - (monoNow - mono) }
     }
 
     fun statusFor(userId: String): OnlineStatus = synchronized(this) {
-        val ts = lastSeen[userId] ?: return@synchronized OnlineStatus.AWAY
-        val age = SystemClock.now() - ts
-        when {
-            age <= ONLINE_WINDOW_MS -> OnlineStatus.ONLINE
-            age <= RECENTLY_WINDOW_MS -> OnlineStatus.RECENTLY
-            else -> OnlineStatus.AWAY
-        }
+        val mono = seenAtMono[userId] ?: return@synchronized OnlineStatus.AWAY
+        statusForAge(monotonicMs() - mono)
+    }
+
+    private fun statusForAge(age: Long) = when {
+        age <= ONLINE_WINDOW_MS -> OnlineStatus.ONLINE
+        age <= RECENTLY_WINDOW_MS -> OnlineStatus.RECENTLY
+        else -> OnlineStatus.AWAY
     }
 
     private fun recompute() {
-        val now = SystemClock.now()
-        val updated = lastSeen.mapValues { (userId, ts) ->
-            val status = when {
-                now - ts <= ONLINE_WINDOW_MS -> OnlineStatus.ONLINE
-                now - ts <= RECENTLY_WINDOW_MS -> OnlineStatus.RECENTLY
-                else -> OnlineStatus.AWAY
-            }
-            PeerPresence(userId, status, ts)
+        val wallNow = wallClock.now()
+        val monoNow = monotonicMs()
+        _statuses.value = seenAtMono.mapValues { (userId, mono) ->
+            val age = monoNow - mono
+            PeerPresence(userId, statusForAge(age), wallNow - age)
         }
-        _statuses.value = updated
     }
 }

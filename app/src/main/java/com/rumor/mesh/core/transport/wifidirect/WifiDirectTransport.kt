@@ -315,11 +315,28 @@ class WifiDirectTransport(
     private val KNOWN_PEER_JOIN_CANDIDATES = 2
     private val KNOWN_PEER_JOIN_RETRY_MS = 120_000L
 
-    private fun trustedSsids(): Set<String> {
+    /**
+     * Names derived from contacts. Good enough to JOIN (HELLO checks the join)
+     * — but a contact exists for any sender whose signed message ever reached
+     * us, relayed ones included, so it is NOT good enough to stand down for.
+     */
+    private fun knownSsids(): Set<String> {
         val known = config?.knownPeerUserIds?.invoke().orEmpty()
             .mapTo(HashSet()) { GroupCredentials.forHost(it).networkName }
         return known + provenHostSsids
     }
+
+    /** SSIDs of peers that completed a session with us directly, this run. */
+    private val directPeerSsids = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Names we will stand down for — defer, yield, merge, leave a working group.
+     * One relayed message must not buy that power; a peer that completed HELLO
+     * with us directly (or a host we verified) has at least paid a real
+     * handshake in radio range. Residual risk (O173 floor): such a peer hosting
+     * the most senior name can still capture us.
+     */
+    private fun trustedSsids(): Set<String> = directPeerSsids + provenHostSsids
 
     /**
      * Before hosting: a recently-seen peer's group may be up but invisible to
@@ -376,7 +393,7 @@ class WifiDirectTransport(
             // cooldown. An unknown name escalates 3→6→12→24→30 min per repeat:
             // a stranger whose phone died mid-first-contact costs 3 min, a
             // squatter that keeps re-capturing us quickly hits the cap.
-            val ms = if (ssid in trustedSsids()) {
+            val ms = if (ssid in knownSsids()) {
                 SSID_COOLDOWN_MS
             } else {
                 val strikes = noHelloStrikes.merge(ssid, 1, Int::plus) ?: 1
@@ -578,6 +595,14 @@ class WifiDirectTransport(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         val cfg = config ?: return
         val creds = GroupCredentials.forHost(cfg.localUserId)
+        // Already a client in a group whose GO proved its name: we are in one
+        // group with the peers the plan wants, which is all today's single-group
+        // realization can deliver. Leaving to host our own broke a working
+        // group and split the mesh (field 2026-10-11, Moto + S10e).
+        if (groupConnected && !_isGroupOwner.value && currentClientSsidVerified) {
+            RumorLog.d(TAG, "O98 planned host, but already in verified group $currentClientSsid — staying")
+            return
+        }
         // Defer to a senior group already on the air: clients join the
         // lexicographically-first visible SSID, so a junior competing group
         // never attracts anyone (field-observed: a skewed-view node hosted a
@@ -774,9 +799,9 @@ class WifiDirectTransport(
                 .mapNotNull { it.SSID }
                 .filter { GroupCredentials.BACKBONE_SSID_REGEX.matches(it) }
             if (all.isNotEmpty()) backboneSeenAtMs = now
-            // Trusted names first; an unknown name is still joinable (a brand-new
+            // Known names first; an unknown name is still joinable (a brand-new
             // node has no known peers) and verifyGroupHost checks it on HELLO.
-            val trusted = trustedSsids()
+            val trusted = knownSsids()
             all.filter { it != own && (ssidCooldownUntil[it] ?: 0L) <= now }
                 .distinct()
                 .sortedWith(compareBy({ it !in trusted }, { it }))
@@ -1133,6 +1158,7 @@ class WifiDirectTransport(
         }
 
         priorityReconnectPending.remove(result.peerUserId)
+        directPeerSsids.add(GroupCredentials.forHost(result.peerUserId).networkName)
         // Outbound from a client only ever reaches the GO — the peer that must own the SSID.
         if (!isInbound && !_isGroupOwner.value) verifyGroupHost(result.peerUserId)
 
@@ -1216,6 +1242,49 @@ class WifiDirectTransport(
         }
     }
 
+    private var seniorMergeJob: Job? = null
+    private val SENIOR_MERGE_CHECK_MS = 60_000L
+
+    /**
+     * Partition merge. The idle watchdog only ever fires for a clientless GO,
+     * so two healthy groups that come back into range stay split forever —
+     * field 2026-10-11: the Moto returned from a cage to find the OnePlus+S10e
+     * group, and nothing ever merged them. An active GO hands over to a
+     * TRUSTED senior group on the air; its clients rejoin the senior (it heads
+     * their known-first ordering). Trusted only: a squatter's name must not
+     * be able to break up a working group.
+     *
+     * A CLIENT runs the same check against the group it is in, because a GO
+     * often cannot scan at all (S10e) and would never see the senior: the
+     * client leaves for the senior, and the emptied junior GO follows via its
+     * idle check. Cost under attack: a peer that completed HELLO with us can
+     * pull us out once per name, then HELLO-mismatch cools that name 30 min.
+     */
+    private fun startSeniorMergeCheck() {
+        if (seniorMergeJob?.isActive == true) return
+        seniorMergeJob = scope.launch {
+            while (isActive && groupConnected) {
+                delay(SENIOR_MERGE_CHECK_MS - SCAN_WAIT_MS)
+                runCatching { @Suppress("DEPRECATION") wifiManager?.startScan() }
+                delay(SCAN_WAIT_MS)
+                if (!groupConnected) break
+                val isGo = _isGroupOwner.value
+                val current = if (isGo) {
+                    config?.let { GroupCredentials.forHost(it.localUserId).networkName }
+                } else {
+                    // Only a verified backbone membership is ours to judge; a
+                    // legacy group or one still mid-HELLO is left alone.
+                    currentClientSsid?.takeIf { currentClientSsidVerified }
+                } ?: continue
+                val senior = seniorBackboneSsid(current, trustedOnly = true) ?: continue
+                RumorLog.i(TAG, "O98 merging partitions — ${if (isGo) "handing group" else "leaving"} " +
+                    "$current for senior $senior")
+                removeGroup()
+                break
+            }
+        }
+    }
+
     /**
      * One live session per peer, first-come-wins.
      *
@@ -1287,7 +1356,7 @@ class WifiDirectTransport(
                     }
                 }
             }
-            if (isGo) armGoIdleWatchdog()
+            if (isGo) { armGoIdleWatchdog(); startSeniorMergeCheck() }
             // Read the actual GO address from WifiP2pInfo. The well-known constant
             // (192.168.49.1) is the typical value but is not guaranteed by spec —
             // vendor builds vary. Fall back to the constant if the API returns null.
@@ -1304,6 +1373,7 @@ class WifiDirectTransport(
                 // Record the name we joined so the first HELLO can check it.
                 currentClientSsidVerified = false
                 wifiP2pManager?.requestGroupInfo(channel) { group -> currentClientSsid = group?.networkName }
+                startSeniorMergeCheck()
                 // Quirk: Samsung/MediaTek may ignore our GO intent and become GO anyway.
                 // Run both a server socket and a client connect attempt; whichever
                 // TCP connection succeeds first wins.
@@ -1326,6 +1396,7 @@ class WifiDirectTransport(
         legacyGoConversionJob?.cancel()
         if (backboneRole !is BackboneRealizer.Role.None) backboneRetriesLeft = MAX_BACKBONE_RETRIES
         goIdleWatchdog?.cancel()
+        seniorMergeJob?.cancel()
         // The round loop belongs to the group that just ended — left running it
         // would dial whatever GO comes next, including ourselves.
         clientLoopJob?.cancel()

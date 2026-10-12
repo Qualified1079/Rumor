@@ -4,6 +4,9 @@ import com.rumor.mesh.core.sync.RbsrFrameWire
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 /**
  * Wire protocol frames exchanged between two nodes during a gossip session.
@@ -140,14 +143,48 @@ sealed class GossipPacket {
     /**
      * Recently-seen user IDs shared during gossip exchange.
      * Key = User ID, Value = wall-clock epoch ms when that user was last seen.
-     * Devices use their hardware RTC; small clock skew is acceptable for the
-     * "online within the last N minutes" granularity this map drives.
+     * Timestamps are on the SENDER's clock — read them through
+     * [recentUsersOnLocalClock], never [recentUsers] directly.
      */
     @Serializable @SerialName("online_status")
     data class OnlineStatus(
         val recentUsers: Map<String, Long>,
         @SerialName("_ext") val ext: Map<String, JsonElement>? = null,
-    ) : GossipPacket()
+    ) : GossipPacket() {
+        /**
+         * [recentUsers] re-expressed on the RECEIVER's clock. A current sender
+         * also ships `_ext.ages` — ms since each sighting, which no wall clock
+         * enters into — and those win: "small clock skew is acceptable" (above)
+         * was wrong in the field, where a phone months behind clamped every
+         * report from a phone minutes ahead to now+budget, re-raised on each
+         * exchange, so a peer gone for good read ONLINE indefinitely
+         * (2026-10-11). An offset from a sender-stamped clock was tried and
+         * dropped: it can't correct entries stamped before the sender's clock
+         * jumped backwards. A pre-ages sender gets the verbatim behaviour.
+         */
+        fun recentUsersOnLocalClock(localNowMs: Long): Map<String, Long> {
+            val ages = ext?.get(EXT_AGES) as? JsonObject ?: return recentUsers
+            return ages.mapNotNull { (id, v) ->
+                val age = (v as? JsonPrimitive)?.longOrNull ?: return@mapNotNull null
+                id to localNowMs - age.coerceAtLeast(0)
+            }.toMap()
+        }
+
+        companion object {
+            const val EXT_AGES = "ages"
+
+            /**
+             * [recentUsers] is the sender's tracker snapshot, which it derives
+             * from monotonic ages at [senderNowMs] (moments ago), so subtracting
+             * again recovers the ages; only a wall-clock change inside this one
+             * exchange could leak in.
+             */
+            fun withAges(recentUsers: Map<String, Long>, senderNowMs: Long) = OnlineStatus(
+                recentUsers,
+                mapOf(EXT_AGES to JsonObject(recentUsers.mapValues { (_, ts) -> JsonPrimitive(senderNowMs - ts) })),
+            )
+        }
+    }
 
     /** Graceful disconnect signal. */
     @Serializable @SerialName("bye")
