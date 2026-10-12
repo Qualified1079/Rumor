@@ -124,6 +124,26 @@ The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
   sockets, 12–52 s each). Failing under the full suite but passing in isolation
   is the known signature, not a regression — see O208.
 
+### Build + device testing on the user's Windows machine (2026-10-11)
+
+- Android SDK + adb at `%LOCALAPPDATA%\Android\Sdk` (adb not on PATH); JDK 21/25
+  only. The toolchain wants 17: fetch Temurin 17 to the scratchpad and pass
+  `-Porg.gradle.java.installations.paths=<jdk17>` as a **`-P` Gradle property**
+  (a `-D` system property doesn't reach an already-running daemon; `./gradlew
+  --stop` once). `:app` builds and tests here.
+- Git Bash mangles device paths: `export MSYS_NO_PATHCONV=1` before `adb shell`.
+- Fleet: Moto `ZY22KP7F59`, OnePlus `ec5b0707`, S10e `R58M30FSJKE`, passphrase
+  `passphrase1`. Clocks: Moto ~10 min behind, OnePlus ~3 MONTHS behind, S10e ~7
+  min ahead — measure offsets (`adb shell date +%s` vs PC) before merging logs.
+  ColorOS rejects `pm grant`; the user taps the prompts. Identity screens are
+  FLAG_SECURE (screenshots come back 0 bytes) — read UI via `uiautomator dump`.
+- **"Is the mesh connected?" — check only recent handshakes** (e.g. `logcat -T`
+  the last 30 s). Grepping a long log window counts stale peers and told me
+  "all three connected" when the OnePlus had already split off.
+- `am force-stop` is NOT an unannounced death: the framework tears the group
+  down politely. Use a sealed Faraday cage several metres away (verify by
+  calling the phone) for a real no-goodbye loss.
+
 ### State of play, 2026-10-11
 
 - **Rooms SHIP in v1** (O210, user decision). O89 write authority and O187's
@@ -136,13 +156,61 @@ The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
 - **Nothing of Rooms reaches the phone** — O187 is `[PART]`, no Room DAO, no
   schema bump, no UI. That half needs a device.
 - **CI has no verdict on `main`** (O208) — its last runs were *cancelled*, not
-  red. Do not read silence as green.
+  red. Do not read silence as green. Proof it mattered: `:core`'s test sources
+  did not even COMPILE on `main` (stale room tests after `87633ed`), found and
+  fixed 2026-10-11.
+- **The 3-phone fleet runs `main` as of `329ad63`** and forms one group. O98's
+  field round is G57; presence is G58; follow-ups O222–O226. Next device work is
+  in the 2026-10-11 section below.
 - **An unmerged review branch exists: `away/2026-10-11-overnight`** (15 commits,
   none of it in `main`). It was built on a stale `main` by a concurrent session
   and **duplicates O186 and O159**; it also **re-uses O208/O209/O210 and G52 for
   different rows**. Read its handoff section immediately below before touching
   either of those rows or filing a new number. Two user decisions are pending on
-  it (O173 sybil capture, O205 window values).
+  it (O173 sybil capture, O205 window values). **O219–O221 and G55 are reserved
+  for its renumbering** (2026-10-11) — `main`'s next free numbers are O227 / G59.
+
+---
+
+# Handoff — first on-device run of the 10-10 tree; O98 field round; presence (2026-10-11, interactive)
+
+**Interactive, on `main`, phones attached** (see §1 for the Windows/adb setup).
+Commits: `2d7cef1` `f163fdf` `e324f55` `ffe87a3` `36a16a9` `329ad63`. Closed as
+G56 (first `:app` compile + identity onboarding), G57 (O98 field round), G58
+(presence); full detail lives in `docs/COMPLETED_GAPS.md`. Filed O222–O226.
+
+## User directives this session (apply them)
+
+- **After every change, reason about how it could break or be abused** and say
+  so before calling it done (saved to memory). Two of my changes needed it: a
+  scan receiver that spun at ~40ms, and a clock-offset presence fix the user
+  correctly predicted would break on a backward clock jump (replaced with
+  monotonic ages before it was pushed).
+- **Unresolved issues you raise → OPEN_BACKLOG; completed → COMPLETED_GAPS and
+  out of the handoff.**
+
+## Pending, in priority order
+
+1. **Cage re-run** (user has a cage; it must be sealed and several metres away
+   — the first attempt leaked ~-48 dBm and kept the link up). Verifies two
+   things not yet field-tested: the **partition merge** (G57 #9 — cage the
+   group's senior-named host, wait for the survivors to regroup, uncage, expect
+   everyone back in the senior group within ~1–2 min) and **presence** (G58 —
+   the caged phone should drop to "Recently" on both survivors within ~75 s).
+2. **The seven `:app` rows' behaviour** (O164 send-failure snackbar, O184 relay
+   double-tap, O169/O168 bridge crash + toggle, O179 battery warning,
+   O178/O183 removed controls). Compiled; never exercised on a device.
+3. **O198 liveness two-phone A/B** (still never run; the mesh now forms, so it
+   is possible).
+4. The O173 decision is now also the place for O222(a).
+
+## Things that look wrong but aren't
+
+- After `install -r` the apps restart; the OnePlus/Moto auto-unlock (O138, now
+  off the main thread — the Unlock screen shows for a few seconds first).
+- A freshly-cleared phone has no contacts, so it has no trusted names: it can
+  still join (HELLO-checked) but won't stand down for anyone until it has
+  completed a session — by design (G57 trust split).
 
 ---
 
@@ -250,14 +318,14 @@ O219+ and G53+), not `main`'s.
 
 **Interactive session on `main` (per the 2026-07-19 directive: commit + push
 straight to `main`, no feature branch).** Everything below is committed and
-pushed. Verified work is labelled as such; the `:app` work is explicitly NOT
-compiled — read "Verification honesty" before trusting any of it.
+pushed. Verified work is labelled as such. (The `:app` work has since been
+compiled, unit-tested and run on all three phones — G56, 2026-10-11.)
 
-## ⚠️ READ FIRST — the wire broke, reflash every phone together
+## The wire broke — `rumor-msg-v2:` → `rumor-msg-v3:` (fleet reflashed 2026-10-11)
 
-`rumor-msg-v2:` → **`rumor-msg-v3:`** (commit `831c2c6`). **Every existing
-signature is invalidated.** Mixed-version phones cannot talk. Pre-release hard
-cutover, same justification O144 used for v2 (no shipped users). v3 adds:
+Commit `831c2c6`. Every v2 signature is invalidated; mixed-version phones cannot
+talk. Pre-release hard cutover, same justification O144 used for v2 (no shipped
+users). Cross-device v3 verification confirmed on hardware 2026-10-11 (G56). v3 adds:
 - the rest of `MessagePayload` — `contentType` / `filename` / `mimeType` /
   `sizeBytes` (**O212**, closed as G54);
 - the room posting cert `_ext.pc` for `ROOM_MESSAGE` (**O89**, closed as G53).
@@ -340,11 +408,11 @@ Consequence: **O89 and O187 are hard release blockers.** O89 is now done.
   per-sender cap, O158 chunk release, O18 cancel path, O89 enforcement (removing
   one line fails exactly the 6 refusal tests and leaves the 2 delivery tests
   passing).
-- **`:app` WAS NEVER COMPILED — this container has no Android SDK.** All seven
-  `:app` rows are hand-review only (every changed call site grepped for the new
-  Boolean signatures). CI is the gate and per O208 it currently has no verdict.
-  Highest residual risk: `SnackbarHost` is placed in the existing `Column`, not
-  a `Scaffold`, so the snackbar may render at the wrong edge — layout nit.
+- **`:app` compiled and unit-tested 2026-10-11 (G56)** — only `AppModuleTest`
+  needed a fixture fix. What is still NOT verified on a device is the
+  *behaviour* of the seven rows (O164 send-failure snackbar incl. its
+  `Column`-not-`Scaffold` placement, O184, O169, O168, O179, O178/O183);
+  O165 FLAG_SECURE is verified. See the 2026-10-11 section's pending list.
 - `:simulator` had 2 failures, both the real-socket LAN tests
   (`LanLivenessValidationTest`, `LanMeshHarnessTest`); **both pass in
   isolation** → load flake per the known-flaky list, not a regression.
