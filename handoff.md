@@ -159,8 +159,8 @@ The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
   red. Do not read silence as green. Proof it mattered: `:core`'s test sources
   did not even COMPILE on `main` (stale room tests after `87633ed`), found and
   fixed 2026-10-11.
-- **The 3-phone fleet runs `main` as of `329ad63`** and forms one group. O98's
-  field round is G57; presence is G58; follow-ups O222–O226. Next device work is
+- **The 3-phone fleet runs `main` as of `3c89609`** and forms one group. O98's
+  field round is G57; presence is G58; `:app` rows G59; follow-ups O222–O227. Next device work is
   in the 2026-10-11 section below.
 - **An unmerged review branch exists: `away/2026-10-11-overnight`** (15 commits,
   none of it in `main`). It was built on a stale `main` by a concurrent session
@@ -168,16 +168,17 @@ The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
   different rows**. Read its handoff section immediately below before touching
   either of those rows or filing a new number. Two user decisions are pending on
   it (O173 sybil capture, O205 window values). **O219–O221 and G55 are reserved
-  for its renumbering** (2026-10-11) — `main`'s next free numbers are O227 / G59.
+  for its renumbering** (2026-10-11) — `main`'s next free numbers are O228 / G60.
 
 ---
 
 # Handoff — first on-device run of the 10-10 tree; O98 field round; presence (2026-10-11, interactive)
 
 **Interactive, on `main`, phones attached** (see §1 for the Windows/adb setup).
-Commits: `2d7cef1` `f163fdf` `e324f55` `ffe87a3` `36a16a9` `329ad63`. Closed as
+Commits: `2d7cef1` `f163fdf` `e324f55` `ffe87a3` `36a16a9` `329ad63` `3c89609`. Closed as
 G56 (first `:app` compile + identity onboarding), G57 (O98 field round), G58
-(presence); full detail lives in `docs/COMPLETED_GAPS.md`. Filed O222–O226.
+(presence), G59 (the seven 10-10 `:app` rows on hardware); full detail lives in
+`docs/COMPLETED_GAPS.md`. Filed O222–O227.
 
 ## User directives this session (apply them)
 
@@ -198,9 +199,8 @@ G56 (first `:app` compile + identity onboarding), G57 (O98 field round), G58
    the returning phone must be one the scanning client has HELLO'd this run.
    The cage that worked: sealed, several metres away (the first attempt leaked
    at ~-48 dBm and kept the link up).
-2. **The seven `:app` rows' behaviour** (O164 send-failure snackbar, O184 relay
-   double-tap, O169/O168 bridge crash + toggle, O179 battery warning,
-   O178/O183 removed controls). Compiled; never exercised on a device.
+2. **The seven `:app` rows:** done except the bridges — G59. O169/O168 need a
+   radio or a test-dep decision (O227).
 3. **O198 liveness two-phone A/B** (still never run; the mesh now forms, so it
    is possible).
 4. The O173 decision is now also the place for O222(a).
