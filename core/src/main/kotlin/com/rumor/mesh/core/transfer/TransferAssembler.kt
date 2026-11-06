@@ -102,6 +102,9 @@ class TransferAssembler(
      */
     suspend fun cancel(transferId: String) {
         val transfer = transferRepo.getById(transferId) ?: return
+        // O231: only an in-progress receive can be cancelled — a finished one keeps
+        // its outcome, and a SENDING record would "cancel" towards our own id.
+        if (transfer.direction != TransferDirection.RECEIVING || transfer.status != TransferStatus.IN_PROGRESS) return
         watchdogs.remove(transferId)?.cancel()
         paused.remove(transferId)
         // senderId is nullable on the repo record (legacy: it can be unknown
@@ -226,8 +229,21 @@ class TransferAssembler(
         if (received.size >= transfer.totalChunks) attemptReassembly(chunk.transferId)
     }
 
+    // O231: ingest and the watchdog can both reach a full set of chunks at once.
+    private val reassembling = ConcurrentSet<String>()
+
     private suspend fun attemptReassembly(transferId: String) {
+        if (!reassembling.add(transferId)) return
+        try {
+            reassemble(transferId)
+        } finally {
+            reassembling.remove(transferId)
+        }
+    }
+
+    private suspend fun reassemble(transferId: String) {
         val transfer = transferRepo.getById(transferId) ?: return
+        if (transfer.status != TransferStatus.IN_PROGRESS) return
         val rawChunks = chunkRepo.getByTransfer(transferId)
         val chunks = rawChunks.map { e ->
             Chunk(e.transferId, e.chunkIndex, transfer.totalChunks, Base64Codec.encode(e.data))
@@ -245,10 +261,18 @@ class TransferAssembler(
             recipientId = transfer.recipientId,
         )
         val data = Chunker.reassemble(chunks, meta) ?: run {
-            RumorLog.w(TAG, "Reassembly failed for ${transferId.take(8)}… — hash mismatch or missing chunks")
+            // O231: every index is present, so the watchdog has nothing to NACK and
+            // the transfer would sit IN_PROGRESS forever holding a per-sender slot.
+            // The content hash is signed, so retrying the same chunks cannot help.
+            RumorLog.w(TAG, "Reassembly failed for ${transferId.take(8)}… — content hash mismatch, marking FAILED")
+            activeBySender.remove(transferId)
+            chunkHashesByTransfer.remove(transferId)
+            paused.remove(transferId)
+            transferRepo.updateStatus(transferId, TransferStatus.FAILED, clock.now())
+            chunkRepo.deleteAllForTransfer(transferId)
+            watchdogs.remove(transferId)?.cancel()
             return
         }
-        watchdogs.remove(transferId)?.cancel()
         activeBySender.remove(transferId)
         chunkHashesByTransfer.remove(transferId)
         transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, clock.now())
@@ -259,6 +283,9 @@ class TransferAssembler(
         chunkRepo.deleteAllForTransfer(transferId)
         RumorLog.i(TAG, "Transfer ${transferId.take(8)}… complete (${data.size}B)")
         _assembledTransfers.emit(AssembledTransfer(meta, data))
+        // Last: when the watchdog itself called us, cancelling it earlier made the
+        // suspending writes above throw on a real (dispatching) repo.
+        watchdogs.remove(transferId)?.cancel()
     }
 
     private fun armWatchdog(transferId: String, totalChunks: Int, senderUserId: String) {

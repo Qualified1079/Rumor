@@ -252,4 +252,45 @@ class TransferAssemblerTest {
         assembler.handleChunk(chunk(id, 0, payload, totalChunks = 2))
         assertEquals("after resume, chunks land again", listOf(0), chunkRepo.getReceivedIndices(id))
     }
+
+    // ── O231: a content-hash mismatch is terminal, not a wedge ───────────────
+
+    @Test
+    fun `a content hash mismatch marks the transfer FAILED and releases everything`() = runBlocking {
+        // No per-chunk hashes, so the wrong bytes are stored and only the signed
+        // whole-file hash catches them — every index present, nothing to NACK.
+        val id = "5".repeat(32)
+        assembler.handleMetadata(meta(id, payload = byteArrayOf(1, 2, 3, 4)), senderUserId = "sender")
+        assembler.handleChunk(chunk(id, 0, byteArrayOf(9, 9, 9, 9)))
+
+        assertEquals("a mismatched transfer must end FAILED, not stay IN_PROGRESS", TransferStatus.FAILED, transferRepo.getById(id)?.status)
+        assertTrue("its chunk rows must be released", chunkRepo.getReceivedIndices(id).isEmpty())
+    }
+
+    @Test
+    fun `a failed transfer frees its per-sender slot`() = runBlocking {
+        val failing = "6".repeat(32)
+        assembler.handleMetadata(meta(failing, payload = byteArrayOf(1, 2, 3, 4)), senderUserId = "busy")
+        repeat(7) { i -> assembler.handleMetadata(meta("%032x".format(100 + i)), senderUserId = "busy") }
+        val overCap = "7".repeat(32)
+        assembler.handleMetadata(meta(overCap), senderUserId = "busy")
+        assertNull("control: at the cap, another transfer from this sender is refused", transferRepo.getById(overCap))
+
+        assembler.handleChunk(chunk(failing, 0, byteArrayOf(9, 9, 9, 9)))
+        val next = "8".repeat(32)
+        assembler.handleMetadata(meta(next), senderUserId = "busy")
+        assertNotNull("once the mismatched transfer fails, its slot is free again", transferRepo.getById(next))
+    }
+
+    @Test
+    fun `cancel leaves a finished transfer's outcome alone`() = runBlocking {
+        val id = "9".repeat(32)
+        val payload = byteArrayOf(1, 2, 3, 4)
+        assembler.handleMetadata(meta(id, payload = payload), senderUserId = "sender")
+        assembler.handleChunk(chunk(id, 0, payload))
+        assertEquals(TransferStatus.COMPLETE, transferRepo.getById(id)?.status)
+
+        assembler.cancel(id)
+        assertEquals("cancel must not rewrite COMPLETE as ABANDONED", TransferStatus.COMPLETE, transferRepo.getById(id)?.status)
+    }
 }

@@ -144,3 +144,43 @@ is in `:app`, which can't be compiled here, so it's hand-checked only**; it's a
 change inside an SQL string, which the compiler doesn't check anyway. I did *not*
 wire up (1): that needs a schedule and a test with a controllable clock, so it's
 filed as O249.
+
+---
+
+### 4 — One bad file could jam a sender's file slots forever (O231, half → G68)
+
+**The plain version.** Your phone accepts at most 8 incoming files at once from any
+one sender, so a spammer can't flood it. Each file comes with a signed fingerprint
+of the whole thing. If all the pieces arrived but the fingerprint didn't match
+(corrupted or tampered pieces), your phone logged "reassembly failed" and then...
+did nothing. The file stayed "in progress" forever, kept one of that sender's 8
+slots, and the "ask for missing pieces" timer had nothing to ask for, because no
+piece was *missing*, they were just wrong. Eight bad files and that sender could
+never send you anything again.
+
+**What changed.**
+- A fingerprint mismatch now marks the file **FAILED** (a status that existed but
+  was never used) and frees everything: the slot, the stored pieces, the timer.
+- "Cancel" now only works on a file you're still receiving. It used to be able to
+  overwrite a finished file as "cancelled", or on a file *you* were sending, send
+  a cancel note to yourself.
+- Only one "put the pieces together" can run per file at a time (the piece-arrival
+  path and the timer could both try).
+- A subtle ordering bug: when the timer itself finished a file, it cancelled
+  *itself* before saving "done". On the real phone database that would make the
+  save fail. The timer now stops itself last.
+
+**How I proved it.** Three new tests: a mismatched file ends FAILED with its pieces
+deleted; a failed file frees its sender's slot (with a check that the sender
+really was at the 8-file cap first); cancelling a finished file leaves it
+finished. Teeth: undo the mismatch fix and the first two fail; undo the cancel
+check and the third fails.
+
+**What I could NOT prove.** The last two bullets (one-at-a-time, and the timer
+ordering) only bite on a database that actually pauses mid-save, like the phone's.
+The test database never pauses, so no JVM test can reach them. They're
+reviewed, not tested. Worth watching for on the phones.
+
+**Not done.** Pausing a file still lets the timer give up on it; nothing recovers
+half-received files after a restart; and two writers can still overwrite each
+other's status at the database level. All three stay in O231.
