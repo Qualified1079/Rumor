@@ -93,7 +93,7 @@ Each row carries a status tag in its title:
 | `[TODO/HW]` | Needs real hardware (a Pixel-class device for battery; a Meshtastic/MeshCore radio for bridge work). |
 | `[STRUCT]` | Foundational/structural — cross-platform architecture correction (phone app + desktop app + USB-bootable node). Schedule ahead of feature work touching the same area; deferring one multiplies the cost of every later change in its area. |
 
-Counts as of 2026-10-11: 24 DECISION rows · 115 open work rows (2026-10-11: O222–O228 filed from the first 3-phone run of the 10-10 tree; G56–G59 closed; **O219–O221 and G55 are RESERVED** for renumbering the unmerged `away/2026-10-11-overnight` branch's colliding O208/O209/O210/G52 — do not use them for anything else. 2026-10-10: O208–O212 filed; O89+O212 closed as G53/G54 (rumor-msg-v3 transcript), O210 decided SHIP — CI stopped reporting on `main` (last 4 runs cancelled, tip unverified), no consolidated v1 release-gate checklist (`docs/RELEASE_GATES.md`), and Rooms ship-or-cut needs an explicit call; same pass corrected the Coding-conventions Room version 11→12) (of the older rows, 14 are `[PART]` remainders, 2 `[STRUCT]`; 2026-07-30: O189–O201 filed from the privacy/security workshop — three-mode duress, ephemeral mode, ratcheted DM path (supersedes O38/absorbs O53), key-retirement beacon, relay-ephemeral DM caching, eclipse/RF decision, traffic-analysis resistance (padding+delay+mix), cover-traffic-rejection decision, limited onion routing, breadcrumb minimization, lock/device-access hardening, notification privacy controls (O200, UI), and post-quantum-hybrid research (O201); the security-program review lives in `docs/SECURITY_RESEARCH.md`; 2026-07-30: O156–O188 filed by triaging the 2026-07-24 overnight audit's 43 findings — bodies in `docs/OPEN_BACKLOG.md`, 7 pure doc-staleness findings folded into O122 instead; 2026-07-24: O146–O155 filed from the DM/Room + moderation/authority + feed design session, full derivation in `docs/MODERATION_AUTHORITY_RESEARCH.md`; 2026-07-22: 14 pure-UI rows folded into O143, bodies in `docs/UI_BACKLOG.md`) · 4 tombstones · 54 completed G-rows. (O127–O130 added from the 2026-07-19 overnight audit; §15 Rooms-enforcement finding folded into O89/O79; O126 closed as G43 same week it was filed; O106 headless slice shipped → `[PART]`.)
+Counts as of 2026-11-06: 24 DECISION rows · 135 open work rows (2026-11-06: O229–O248 filed from the implicit-state-machine audit — lifecycle/progress state encoded as scattered flags; O167 extended; 2026-10-11: O222–O228 filed from the first 3-phone run of the 10-10 tree; G56–G59 closed; **O219–O221 and G55 are RESERVED** for renumbering the unmerged `away/2026-10-11-overnight` branch's colliding O208/O209/O210/G52 — do not use them for anything else. 2026-10-10: O208–O212 filed; O89+O212 closed as G53/G54 (rumor-msg-v3 transcript), O210 decided SHIP — CI stopped reporting on `main` (last 4 runs cancelled, tip unverified), no consolidated v1 release-gate checklist (`docs/RELEASE_GATES.md`), and Rooms ship-or-cut needs an explicit call; same pass corrected the Coding-conventions Room version 11→12) (of the older rows, 14 are `[PART]` remainders, 2 `[STRUCT]`; 2026-07-30: O189–O201 filed from the privacy/security workshop — three-mode duress, ephemeral mode, ratcheted DM path (supersedes O38/absorbs O53), key-retirement beacon, relay-ephemeral DM caching, eclipse/RF decision, traffic-analysis resistance (padding+delay+mix), cover-traffic-rejection decision, limited onion routing, breadcrumb minimization, lock/device-access hardening, notification privacy controls (O200, UI), and post-quantum-hybrid research (O201); the security-program review lives in `docs/SECURITY_RESEARCH.md`; 2026-07-30: O156–O188 filed by triaging the 2026-07-24 overnight audit's 43 findings — bodies in `docs/OPEN_BACKLOG.md`, 7 pure doc-staleness findings folded into O122 instead; 2026-07-24: O146–O155 filed from the DM/Room + moderation/authority + feed design session, full derivation in `docs/MODERATION_AUTHORITY_RESEARCH.md`; 2026-07-22: 14 pure-UI rows folded into O143, bodies in `docs/UI_BACKLOG.md`) · 4 tombstones · 54 completed G-rows. (O127–O130 added from the 2026-07-19 overnight audit; §15 Rooms-enforcement finding folded into O89/O79; O126 closed as G43 same week it was filed; O106 headless slice shipped → `[PART]`.)
 
 **Organization (2026-07-15 audit):** rows are grouped by disposition — recorded decisions first, then unimplemented work ordered **most → least foundational** in tiers (a tier reflects structural dependency: what other work stacks on it — not priority or difficulty), then closed-row tombstones. `[PART]` rows sit in the tier of their *missing remainder*; the shipped substrate is described in the row body. When a row closes, move it to Completed gaps; when new work is identified, slot it into the tier whose downstream-dependency weight matches.
 
@@ -133,6 +133,10 @@ Counts as of 2026-10-11: 24 DECISION rows · 115 open work rows (2026-10-11: O22
 | O182 | **`[DONE 2026-07-31]`** `:node` now has `src/test` — `NodeIdentityProviderTest` (3): fresh-identity well-formedness + identity binding, seed persistence across restart, `FileHlcStore` default+round-trip. Uses the declared junit+vintage scaffolding; runs in CI via O163. |
 | O208 | **`[TODO/CODE]`** CI stopped reporting on `main` — last 4 runs CANCELLED, tip has no verdict; suite wall-clock outgrew the budget (bundle with O163) |
 | O209 | **`[TODO/DOC]`** No single v1 release-gate checklist — deliverable is `docs/RELEASE_GATES.md` (pointers only) |
+| O229 | **`[STRUCT]` `[TODO/CODE]`** `MeshRuntime` has no lifecycle state — loops outlive `stop()`; restart would double every loop + plugin sink (+ DebouncedHlcStore stuck-scheduled) |
+| O238 | **`[TODO/CODE+SIM]`** Backbone role has no hysteresis; a one-sided stale beacon makes both ends Host (likely O223 root cause) |
+| O247 | **`[TODO/CODE]`** `:node` has no shutdown hook — headless SIGTERM skips stop/flush; late-start throw unwinds nothing |
+| O248 | **`[STRUCT]` `[TODO/CODE+HW]`** `WifiDirectTransport` link state is ~30 independent fields — model as one sealed state when O107 lands, not standalone |
 #### Tier 2 — security/crypto substrate (pre-ship blockers; Tier 3 is gated on the first two rows)
 
 | # | Item |
@@ -160,6 +164,12 @@ Counts as of 2026-10-11: 24 DECISION rows · 115 open work rows (2026-10-11: O22
 | O191 | **`[TODO/SIM]` — NOT committed; de-risk in sim first** Ratcheted DM path — Double Ratchet for 2-person DMs; would supersede O38, absorb O53 + repudiable auth (privacy workshop) |
 | O199 | **`[TODO/EMU]`** Lock & device-access privacy hardening — passphrase-only lockdown, panic action, wipe-on-N, FLAG_SECURE; extends O189 (privacy workshop) |
 | O201 | **`[DECISION+RESEARCH]`** Post-quantum hybrid for DM/prekey path — harvest-now-decrypt-later under the decades-horizon threat model; see docs/SECURITY_RESEARCH.md (privacy workshop) |
+| O230 | **`[TODO/CODE]`** `LanTransport` start/stop has no generation token — failed start sticks, stop-during-start leaks socket+mDNS, O166 cap loosens after restart |
+| O232 | **`[TODO/CODE]`** Send-side transfers never reach COMPLETE (chunks kept forever); `TRANSFER_CANCEL` not bound to the transfer's receiver |
+| O233 | **`[TODO/CODE]`** `DIRECT_ACK` receipts accepted for any id from any sender — gate for O203(A) ✓✓ UI |
+| O234 | **`[TODO/CODE]`** Priority-link handshake has no requested state — unsolicited ACCEPT self-promotes a peer |
+| O242 | **`[TODO/CODE]`** GossipSession accepts out-of-order frames silently (`as?` casts, unchecked done-count, RBSR invariant only a comment) |
+| O243 | **`[TODO/CODE]`** Passphrase change re-unlocks to verify, zeroing the live private key mid-use |
 #### Tier 3 — plugin platform chain (ordered internally; ALL gated behind O20/O44)
 
 | # | Item |
@@ -175,6 +185,7 @@ Counts as of 2026-10-11: 24 DECISION rows · 115 open work rows (2026-10-11: O22
 | O88 | **`[TODO/UI]`** In-thread plugin display widget hook** |
 | O168 | **`[TODO/CODE]`** `PluginCatalog.enable()` shows a bridge ON when the attach silently rolled back (audit #9) |
 | O169 | **`[TODO/CODE]`** Plugin scopes have no `CoroutineExceptionHandler` — a bridge collector crash kills the process (audit #10) |
+| O236 | **`[TODO/CODE]`** Plugin enabled state kept in catalog + registry, drifts (crash leaves ON, dead attach registered live, same-process restart never re-attaches) |
 #### Tier 4 — protocol/feature work
 
 | # | Item |
@@ -254,6 +265,14 @@ Counts as of 2026-10-11: 24 DECISION rows · 115 open work rows (2026-10-11: O22
 | O207 | **`[TODO/CODE+UI+DECISION]`** Presence sharing model — drop unknowable "offline" for last-seen-by-you + last-reported-online; scope sharing (all/contacts/whitelist/off, private default) |
 | O210 | **`[DECIDED 2026-10-10 — SHIP]`** Rooms ship in v1 (user call: without governed rooms everything is public spam) → O89 + O187 are hard release blockers; order O89 → O187 → O185 |
 | O211 | **`[DECISION+TODO/CODE]`** Toolchain modernization — Kotlin 2.x FIRST, then JDK 21 for `:core`/`:simulator`/`:node` (`:node` leads); gated behind O208 |
+| O231 | **`[TODO/CODE]`** Receive-side transfer lifecycle split across five stores — hash mismatch wedges IN_PROGRESS forever; `FAILED` never set (merge away branch first) |
+| O235 | **`[TODO/CODE+HW]`** BLE advertise/scan state invisible — orphaned advertisers, peer-nearby signal sticks true |
+| O237 | **`[TODO/CODE]`** Auto-mode evaluated on four threads, no debounce; can override a manual mode |
+| O239 | **`[TODO/CODE]`** `MeshViewTracker` staleness judged by the sender's clock — slow-clock peers never enter the view |
+| O240 | **`[TODO/CODE]`** Recurring schedule with `remainingFires = 0` fires forever |
+| O241 | **`[TODO/CODE]`** Deleted/evicted ids are seen-only-in-memory — O40 deletes undo on restart |
+| O245 | **`[TODO/CODE]`** Route `failureCount` reset by any successful session; failing peers never age out |
+| O246 | **`[TODO/SIM]`** Simulator run/scenario lifecycle races (reset not atomic, partition two-writer, job stuck RUNNING) |
 #### Tier 5 — bridge hardware track
 
 | # | Item |
@@ -287,6 +306,7 @@ Counts as of 2026-10-11: 24 DECISION rows · 115 open work rows (2026-10-11: O22
 | O183 | **`[TODO/UI]`** `FeedViewModel.markRead()` is unreachable (audit #27) |
 | O184 | **`[TODO/UI]`** Feed "Relay" button has no in-flight/debounce guard (audit #28) |
 | O188 | **`[TODO/CODE]`** README correctness pass — 4 user/contributor-facing misinfo items (killed-O41 "just needs UI", fabricated `elapsedMs`, stale device-ID + static-mode) (audit #37-40) |
+| O244 | **`[TODO/CODE+EMU]`** Activity bind/onboarding flow state — `isBound` ignores bind result, onboarding `busy` never resets |
 #### Closed-row tombstones (one-line don't-rediscover facts; full records in docs/COMPLETED_GAPS.md)
 
 | # | Item | Don't-rediscover fact |
