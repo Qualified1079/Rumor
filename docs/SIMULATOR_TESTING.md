@@ -35,6 +35,24 @@ effect in the causal chain, never an earlier one.
 - **Absence assertions** ("X never arrived") need a settle delay *after* the last
   awaited positive effect — otherwise you're asserting absence during a window
   where it simply hasn't arrived yet.
+- **`awaitUntil` FAILS the test on timeout** (2026-10-11). It used to return
+  silently and leave the caller's assertion to "report the failure state", which
+  only works where the awaited condition *is* the asserted property. At the ~30
+  sites where it is a precondition, a silent timeout ran the test against a state
+  it was never written for — `PerPeerRoutingTest` failed on 2 of 4 runs on an
+  unmodified tree, each time on a different assertion, none of them the property
+  under test; and `SelfEchoTest` awaited a condition that *could never hold*
+  (SELF_PRESENCE is ingested `persist = false`, so it never enters the repo), then
+  asserted an absence that holds for free when nothing propagated. Pass `what =`
+  so the timeout names what never happened. **Do not "fix" a timeout by shortening
+  the wait or deleting it** — find out why the effect never lands, and await a
+  signal that can actually fire.
+- **An absence assertion needs a positive control in the same test**: something
+  that proves the input the defence is supposed to reject actually arrived. In
+  `SelfEchoTest` that is "B recorded A in its own MeshView" (B really processed
+  the beacon) plus "B offers the beacon back to A" (the echo is really attempted).
+  Without those, a passing absence cannot tell a working guard from a message
+  that never moved.
 
 (Origin: O114/G41 — a real CI flake from awaiting the wrong effect.)
 

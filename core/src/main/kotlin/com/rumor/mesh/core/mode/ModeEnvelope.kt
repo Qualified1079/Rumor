@@ -69,7 +69,33 @@ data class ModeEnvelope(
      */
     val storageCacheBoost: Int,
 ) {
+    /**
+     * (i, derived) O205 — routing-liveness window: how long after a direct exchange a
+     * breadcrumb candidate still counts as "reachable now" for [livenessRouting]-style
+     * next-hop selection.
+     *
+     * Derived rather than a recorded per-mode constant because the quantity it has to
+     * track is the *inter-contact* interval, and that is the SLOWER of this mode's two
+     * beats: a duty-cycled MOBILE node meets a live peer on the Wi-Fi discovery beat
+     * (30 s + backoff), not the gossip beat. Taking the max means a quiet-but-alive
+     * link is not declared dead between discovery cycles — a fixed 30 s window would
+     * false-flood on every such link and burn exactly the battery O55 is conserving.
+     *
+     * `wifiDiscoveryCadenceMs = 0` means *continuous* discovery (FREE), so the max
+     * correctly falls through to the gossip cadence there.
+     */
+    val livenessWindowMs: Long
+        get() = LIVENESS_WINDOW_ROUNDS * maxOf(gossipRoundIntervalMs, wifiDiscoveryCadenceMs)
+
     companion object {
+        /**
+         * O205: contacts of grace before a silent peer is treated as unreachable.
+         * Three, so one missed beat (a scan that found nothing, a dropped round)
+         * doesn't flip a live link to dead — the same "~3 rounds" judgement the
+         * pre-O205 fixed 30 s window encoded for a 10 s LAN cadence.
+         */
+        const val LIVENESS_WINDOW_ROUNDS = 3L
+
         /**
          * The three recorded envelopes. Grounded in the pre-O62 constants
          * (STATIC_BOOST=3, STATIC_CACHE_BOOST=4, gossip 15s, breadcrumb 24h,

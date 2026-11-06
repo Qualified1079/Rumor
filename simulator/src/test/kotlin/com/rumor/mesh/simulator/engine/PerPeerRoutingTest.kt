@@ -66,8 +66,13 @@ class PerPeerRoutingTest {
         // C → B exchange. B receives the DM (recipientId != B, so B relays it,
         // marking intendedPeers = breadcrumb candidates for A = {D}).
         SimTransport(c, b).exchange(kotlin.random.Random(3))
-        // Ingest + RelayBatcher (1ms in sim) are asynchronous.
-        awaitUntil { b.knownMessages().any { it.id == dm.id } && b.schedulerQueueDepth > 0 }
+        // Await the DM in B's store (the backfill source for the A offer) AND the
+        // marked relay copy being queued — the old wait accepted any non-empty
+        // scheduler, which the seed broadcast alone satisfies.
+        awaitUntil(what = "B to hold the DM and have relayed it") {
+            b.knownMessages().any { it.id == dm.id } && b.schedulerQueueDepth > 0
+        }
+        kotlinx.coroutines.delay(100)
 
         val dmInOfferD = b.gossipEngine.messagesForExchange(d.userId).any { it.id == dm.id }
         val dmInOfferA = b.gossipEngine.messagesForExchange(a.userId).any { it.id == dm.id }
@@ -119,14 +124,25 @@ class PerPeerRoutingTest {
         // C → B: B relays the DM. Its breadcrumb for A names C, so relay takes
         // the routed path — intendedPeers = {C}, routedHops incremented.
         SimTransport(c, b).exchange(kotlin.random.Random(13))
-        // Ingest + RelayBatcher (1ms in sim) are asynchronous.
-        awaitUntil { b.knownMessages().any { it.id == dm.id } && b.schedulerQueueDepth > 0 }
 
-        // The routed copy carrying the bumped routedHops lives in B's offer
-        // batch (intendedPeers = {C}), NOT in knownMessages() — relay() enqueues
-        // it via the batcher/scheduler and never writes the bumped copy back to
-        // the repo. messagesForExchange destructively drains, so call it once.
-        val relayed = b.gossipEngine.messagesForExchange(c.userId).firstOrNull { it.id == dm.id }
+        // The routed copy carrying the bumped routedHops lives in B's offer batch
+        // (intendedPeers = {C, A}), NOT in knownMessages() — relay() enqueues it via
+        // the batcher/scheduler and never writes the bumped copy back to the repo.
+        //
+        // Await the MARKED copy specifically. "dm is in the repo AND the scheduler is
+        // non-empty" was the old wait, and neither half is the relay copy landing: the
+        // queue can be non-empty because of the seed broadcast, in which case this
+        // call returns the unrouted STORE copy (routedHops = 0) and the assertion
+        // below fails for a reason that has nothing to do with the TTL split. That was
+        // a ~1-in-3 flake. Polling messagesForExchange is safe despite the destructive
+        // drain: whatever a poll takes is in the list it returns, so nothing is lost.
+        var marked: com.rumor.mesh.core.model.RumorMessage? = null
+        awaitUntil(what = "B's MARKED relay copy of the DM to reach its offer to C") {
+            marked = b.gossipEngine.messagesForExchange(c.userId)
+                .firstOrNull { it.id == dm.id && it.intendedPeers != null }
+            marked != null
+        }
+        val relayed = marked
         assertNotNull("B should offer the routed DM to breadcrumb candidate C", relayed)
         assertTrue(
             "Routed hop must increment routedHops " +
@@ -184,9 +200,16 @@ class PerPeerRoutingTest {
         c.seedMessage(deep)
 
         SimTransport(c, b).exchange(kotlin.random.Random(23))
-        awaitUntil { b.knownMessages().any { it.id == dm.id } && b.schedulerQueueDepth > 0 }
 
-        val relayed = b.gossipEngine.messagesForExchange(c.userId).firstOrNull { it.id == dm.id }
+        // Await the marked relay copy, not "repo + non-empty queue" — see the note
+        // in the previous test for why that wait made this a flake.
+        var marked: com.rumor.mesh.core.model.RumorMessage? = null
+        awaitUntil(what = "B's MARKED relay copy of the deep routed DM to reach its offer to C") {
+            marked = b.gossipEngine.messagesForExchange(c.userId)
+                .firstOrNull { it.id == dm.id && it.intendedPeers != null }
+            marked != null
+        }
+        val relayed = marked
         assertNotNull("A deep routed DM must still be forwarded along the breadcrumb", relayed)
         assertTrue(
             "routedHops must advance past the old flood-coupled ceiling (now ${relayed!!.routedHops})",

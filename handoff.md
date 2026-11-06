@@ -162,13 +162,11 @@ The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
 - **The 3-phone fleet runs `main` as of `3c89609`** and forms one group. O98's
   field round is G57; presence is G58; `:app` rows G59; follow-ups O222–O227. Next device work is
   in the 2026-10-11 section below.
-- **An unmerged review branch exists: `away/2026-10-11-overnight`** (15 commits,
-  none of it in `main`). It was built on a stale `main` by a concurrent session
-  and **duplicates O186 and O159**; it also **re-uses O208/O209/O210 and G52 for
-  different rows**. Read its handoff section immediately below before touching
-  either of those rows or filing a new number. Two user decisions are pending on
-  it (O173 sybil capture, O205 window values). **O219–O221 and G55 are reserved
-  for its renumbering** (2026-10-11) — `main`'s next free numbers are O229 / G60.
+- **The `away/2026-10-11-overnight` branch was MERGED 2026-11-06.** Its rows
+  were renumbered (O208/O209/O210 → O219/O220/O221; G52–G57 → G55, G60–G64) and its
+  duplicate O186 relay-side drop was discarded for `main`'s `MessageStore` one. Two
+  user decisions it raised are still pending: O173 sybil capture, O205 window values.
+  `main`'s next free numbers are O249 / G65.
 
 ---
 
@@ -215,103 +213,122 @@ G56 (first `:app` compile + identity onboarding), G57 (O98 field round), G58
 
 ---
 
-# Handoff — UNMERGED review branch `away/2026-10-11-overnight` (2026-10-11, away session)
+# Handoff — overnight away session: test honesty, transfer coverage, sybil measurement (2026-10-11)
 
-**Nothing described here is in `main`.** This section exists on `main` only so the
-next instance can find the branch and, more importantly, **not re-do or mis-number
-work that already exists on it**. The branch's own `handoff.md` top section and
-`docs/SESSION_ELI5_2026-10-11.md` carry the full detail.
+**Branch `away/2026-10-11-overnight` — merged into `main` 2026-11-06.** It was built
+off a stale `main` by a session running concurrently with 2026-10-10's, so at merge its
+numbers were renumbered (O208/O209/O210 → O219/O220/O221, G52–G57 → G55/G60–G64 —
+already applied in the text below) and its relay-side O186 drop was discarded in favour
+of `main`'s `MessageStore` drop (its `FeedTextOnlyEnforcementTest` was kept). 16 commits.
+Plain-English review doc for the user: `docs/SESSION_ELI5_2026-10-11.md`.
 
-## Why it is a branch at all, and why it is stale
+## ⭐ TOP PRIORITY FOR NEXT INSTANCE — two user decisions are blocking, don't guess
 
-The user asked for an unattended overnight session off `main` so they could review
-it in the morning — a per-request exception to the push-straight-to-`main`
-directive. That session **branched from a stale local `main` and never fetched**,
-so it ran concurrently with the 2026-10-10 interactive session below and never saw
-its 16 commits. `docs/MULTI_INSTANCE_COORDINATION.md` exists to prevent exactly
-this and was not read. **Fetch and compare before branching or claiming a row.**
+Earlier `TOP PRIORITY` markers further down this file are **superseded** (the
+mid-path-dropout test they point at was finished on 2026-08-03).
 
-## Collisions — `main` wins every one of these
-
-`main`'s numbers were filed first (O208–O211 at 16:19 on 10-10, G52 at 17:13); the
-branch's were filed hours later in ignorance of them. The project rule is **no
-number reuse**, so the BRANCH's rows are the ones that must be renumbered (to
-O219+ and G53+), not `main`'s.
-
-| Number | `main` (authoritative) | Branch (must be renumbered) |
-|---|---|---|
-| O208 | CI stopped reporting on `main` | routed DM withheld from its own recipient |
-| O209 | no v1 release-gate checklist | `awaitUntil` timed out silently |
-| O210 | Rooms ship in v1 (decided) | vacuous-test sweep round 2 |
-| G52 | O159 transfer coverage | the branch's own O205 entry |
-
-**Duplicated work — `main`'s implementation is canonical, discard the branch's:**
-
-- **O186** (text-only feed drop). Both sessions implemented it independently.
-  `main`'s landed first (`27aed8a`) and was then refined to drop *before the
-  seen-commit* (`1259202`), which the branch's version does not do.
-- **O159** (transfer coverage). Both wrote `TransferAssembler` + `TransferSender`
-  tests. `main`'s are `:core` unit tests (`3b30a0d`, `af7a1e5`, closed as G52);
-  the branch's are `:simulator` real-transport suites **plus** a NACK-watchdog
-  suite that required making the watchdog's schedule/clock/scope injectable. The
-  watchdog half may be genuinely additive — diff before discarding either side.
-
-## What on the branch is NOT duplicated and is worth salvaging
-
-- **One real product bug.** `relay()` set `intendedPeers` to breadcrumb candidates
-  only, so a relay holding a DM for A, with A standing there as a direct peer,
-  would NOT offer it to A unless a crumb named them. It arrived later via the
-  store-backfill re-offer (whose re-derivation does allow the recipient), which is
-  why it looked like latency and showed up only as a 1-in-3 flaky test. Under O55
-  a contact window may be the only one for hours. One-line fix + a test verified
-  to fail without it.
-- **`awaitUntil` returned silently on timeout** — at ~30 call sites it gates a
-  PRECONDITION, so a silent timeout ran the test against a state it was never
-  written for. Measured: `PerPeerRoutingTest` failed 2 of 4 runs on an unmodified
-  tree, and `SelfEchoTest` was **vacuous** (it awaited the beacon reaching B's
-  *repo*, but SELF_PRESENCE is ingested `persist = false`, so that could never
-  hold — it would have passed with the self-echo guard deleted). This is the same
-  family as the vacuous-test traps §1 already warns about, and the fix plus two
-  new `docs/SIMULATOR_TESTING.md` rules are on the branch.
-- **O205 mode-aware liveness window** — the O198 liveness window was a fixed 30 s,
-  which is ~3 LAN gossip rounds but roughly ONE Wi-Fi-discovery beat for a
-  duty-cycled MOBILE phone, so a quiet-but-alive link read as dead and the routed
-  DM false-flooded. Derived now from each mode's slower cadence (MOBILE 90 s /
-  STATIC 45 s / FREE 15 s).
-- **O173 sybil measurement** (below).
-
-## Pending user decisions carried on the branch
-
-1. **O173 — sybil backbone capture, measured and deliberately NOT fixed.** 8 fake
+1. **O173 — sybil backbone capture. Measured, deliberately NOT fixed.** 8 fake
    identities declaring `UserMode.FREE` capture the ENTIRE backbone of a 20-phone
-   mesh (0 honest↔honest links; all 20 isolated if they defect). Control: the same
-   identities declaring MOBILE take 2 slots and leave it spanning. Adjacency
-   claims need no reciprocity either. **Do not implement a mitigation unattended**
-   — ranking by observed relay history breaks the planner's one hard property
-   (agreement without a coordinator), since first-hand evidence is per-node and A
-   and B would compute different plans (the O99 fragmentation). Three options with
-   costs are in the branch's O173 row. Scope: this is the persistent-link layer,
-   not message delivery.
-2. **O205's three window values** (90/45/15 s) are a judgement call — "3 contacts
-   of grace". One line (`ModeEnvelope.LIVENESS_WINDOW_ROUNDS`) if the user wants
-   2 or 5.
+   mesh (0 honest↔honest links; all 20 isolated if the sybils defect). Control: the
+   same identities declaring MOBILE take 2 slots and leave it spanning. Adjacency
+   claims need no reciprocity either — `assembleView` keeps an edge whenever the
+   *named* endpoint is a known beaconing node, so a node that has never been in
+   radio range of anyone gets all 20 claims into the view and the planner turns them
+   into real link assignments. **Do not implement a mitigation unattended.** The
+   obvious one (rank by observed relay history) breaks the planner's one hard
+   property — agreement without a coordinator — because first-hand evidence is
+   per-node, so A and B would compute different plans (the O99 fragmentation).
+   Options (a) reciprocity, (b) local no-history clamp, (c) earned capacity, with
+   costs, are in the O173 row in `docs/OPEN_BACKLOG.md`. The numbers are the
+   baseline any fix must beat: `PersistencePlannerSybilBiasTest`.
+2. **O205's three window values (90 s / 45 s / 15 s)** are a judgement call — "3
+   contacts of grace", the same reasoning the old fixed 30 s encoded for a 10 s
+   cadence. If the user wants 2 or 5 contacts it is a one-line change
+   (`ModeEnvelope.LIVENESS_WINDOW_ROUNDS`).
 
-## Two container findings that complement §1
+## The theme that produced everything else: tests that proved nothing
 
-- §1's locale diagnosis is right; the branch independently hit the same em-dash
-  class-file failure and fixed it with `LANG=C.UTF-8` exported **before the Kotlin
-  daemon starts** (an already-running daemon keeps the POSIX encoding, so
-  `./gradlew --stop` first if the first attempt failed).
-- **`LanLivenessValidationTest`'s flakiness has a root cause**, not just a
-  signature: instrumented over 120 s, a stuck run had **nothing at all** crossing
-  the m1─r─m3 bypass, while runs where the bypass formed delivered in ~30 s —
-  **including with the liveness window forced fully stale as a control**. So the
-  O198 fallback does work over a real wire and that test was reporting the
-  harness, not the routing. An unformed bypass is indistinguishable from "the
-  feature is broken", and it did read as a routing regression. The branch adds a
-  readiness gate (a plain broadcast must cross A→B before any routing is
-  measured) and patience derived from that probe rather than a constant. Worth
-  porting whichever way the rest of the branch goes.
+The user's one mid-session instruction was *make sure a test's result actually means
+what it claims — "0 failures" can mean "0 of the checks ran"*. Acting on it is what
+found the session's only real product bug.
+
+- **`awaitUntil` returned silently on timeout** (G61). At ~30 call sites it gates a
+  PRECONDITION, so a silent timeout ran the test against a state it was never
+  written for. `PerPeerRoutingTest` failed 2 of 4 runs on an **unmodified tree**;
+  `SelfEchoTest` was **vacuous** — it awaited a condition that could never hold
+  (SELF_PRESENCE ingests `persist = false`, so it never enters the repo) and then
+  asserted an absence that holds for free. It would have passed with the self-echo
+  guard deleted. Timeout now throws and names the subject; `docs/SIMULATOR_TESTING.md`
+  carries both new rules.
+- **The method, now the house standard here:** every fix is verified by *deleting
+  the thing it fixes* and confirming the matching test fails. 11 for 11 on the
+  transfer work (G63). It caught two of my own tests that proved nothing — a
+  plausibility test asserting before the hostile input was processed, and a sender
+  test using a 40-byte payload when `Chunker` defaults to 60 KB chunks (so it was a
+  one-chunk transfer and the NACK for index 1/3 was correctly ignored).
+- **An absence assertion needs a positive control in the same test** proving the
+  input the defence rejects actually arrived. Two real-wire tests were silently
+  passing under load without one (G62).
+
+## Closed this session → `docs/COMPLETED_GAPS.md` G55–G64
+
+O205 (mode-aware liveness window), O219 (**the real bug**: a relay withheld a routed
+DM from its own recipient), O220 + O221 (test-honesty sweeps), O159 (transfer-layer
+coverage incl. making the 60 s NACK watchdog testable in 40 ms), O177 (was already
+fixed — the row was drift).
+
+## Environment facts that cost time; check these first in a cloud container
+
+- **No `adb`, no Android SDK, no route to the user's LAN.** The user believed three
+  phones were connected; they are connected to *their* machine. So `:app` could not
+  be compiled, let alone tested, and every `[TODO/EMU]` / `[TODO/HW]` row and any
+  fix living in `:app` was out of scope. **The one `:app` line this branch touches
+  (O205's `modeState = get<ModeState>()` in AppModule) has never been compiled.**
+  For device work the session must run on the machine the phones are plugged into.
+- **No JDK 17** — `JAVA_HOME=/home/user/jdk17` from the previous handoff did not
+  exist (fresh container has only JDK 21; the toolchain pins 17). Downloaded Temurin
+  17 — §1 now says to put it in the session scratchpad.
+- **`LANG` must be set.** A test name contains an em dash, and under the container's
+  POSIX locale the Kotlin daemon dies with `InvalidPathException` writing the class
+  file. Every build command needs
+  `export LANG=C.UTF-8 LC_ALL=C.UTF-8 JAVA_HOME=/home/user/jdk17`. Worth making the
+  build robust to this (`kotlin.daemon.jvmargs` in `gradle.properties`) rather than
+  re-learning it — not done, the user's call since it is shared build config.
+- Maven Central rate-limited (HTTP 429) for ~20 min at session start. It clears; retry.
+
+## Suite reliability — read before trusting a red run
+
+`:simulator:test` takes ~5–6 min and the two `LanMeshHarness`-based classes
+(`LanLivenessValidationTest`, `LanMeshHarnessTest`) are **timing-sensitive on a
+4-core box**, failing roughly half of full-suite runs before this session's work. I
+verified that is environmental, not a regression, by reproducing on a pristine tree
+with my changes stashed. Mitigations shipped: a readiness gate (distinguishes "the
+harness never formed" from "routing failed"), a progress control instead of a fixed
+delay, and patience derived from a measured probe (`LAN-CALIBRATION` line in the
+output; ~20.5 s carry → ~123 s budget on an idle box). **If one of these two classes
+goes red, re-run it in isolation and read the calibration line before concluding
+anything about routing.** The structural cause is `forkEvery = 15` in
+`simulator/build.gradle.kts` — these classes share a JVM with up to 14 other
+scenario classes' live nodes. Lowering it is untested.
+
+## Next-session candidates (no device needed)
+
+- **Doc-drift chore, bounded:** `CLAUDE.md`'s index still lists ~12 rows from
+  earlier sessions as open that are `[DONE]` in their own text (O182, O144, O156,
+  O157, O162, O166, O170, O172, O180, O132, O136, O138). The convention is that a
+  closed row moves to `COMPLETED_GAPS.md` and leaves the index. I moved only this
+  session's rows — deliberately, to stay in scope — so the index is now consistent
+  for 2026-10-11 and still stale for those. Part of O122.
+- O159's successor is closed, but `TransferAssembler.attemptReassembly` and the
+  swarm paths (O100) remain untested.
+- O186 remainder: the per-room `allowMedia` policy is gated on O187 (Rooms unbuilt),
+  and the feed's own identity is an O154 decision. The enforcement point is in
+  `MessageStore` (main's implementation; the branch's `processIncoming` copy was
+  discarded at merge) — extend it, never delete it.
+- O102 (neighbour-aware forward delegation), O112 residue (hostile-string corpus
+  through the remaining entry points).
+- **Do NOT touch** `RelayEvictionModelTest` — the 2026-08-03 handoff marks it
+  USER-REVIEW because reworking it changes O193's published conclusions.
 
 ---
 

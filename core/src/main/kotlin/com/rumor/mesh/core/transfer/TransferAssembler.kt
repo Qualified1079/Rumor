@@ -47,6 +47,12 @@ class TransferAssembler(
     // O159: injected so a test owns the lifetime instead of inheriting a
     // process-lived IO scope. Default keeps every production call site unchanged.
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+    // Timestamps here drive eviction and abandon decisions, so tests need the clock.
+    private val clock: com.rumor.mesh.core.Clock = SystemClock,
+    // Shipped values by default; a test shrinks them instead of sleeping for minutes.
+    private val nackInitialDelayMs: Long = NACK_INITIAL_DELAY_MS,
+    private val nackDelayCapMs: Long = NACK_DELAY_CAP_MS,
+    private val nackMaxRetries: Int = NACK_MAX_RETRIES,
 ) {
     private val watchdogs = ConcurrentMap<String, Job>()
 
@@ -106,7 +112,7 @@ class TransferAssembler(
         transfer.senderId?.let { gossipEngine.composeTransferCancel(transferId, it) }
         transferRepo.upsert(transfer.copy(
             status = TransferStatus.ABANDONED,
-            completedAtMs = SystemClock.now(),
+            completedAtMs = clock.now(),
         ))
         chunkRepo.deleteAllForTransfer(transferId)
     }
@@ -171,7 +177,7 @@ class TransferAssembler(
                 contentHash = meta.contentHash,
                 recipientId = meta.recipientId,
                 senderId = senderUserId,
-                startedAtMs = SystemClock.now(),
+                startedAtMs = clock.now(),
                 completedAtMs = null,
                 status = TransferStatus.IN_PROGRESS,
             )
@@ -212,7 +218,7 @@ class TransferAssembler(
                 transferId = chunk.transferId,
                 chunkIndex = chunk.chunkIndex,
                 data = bytes,
-                receivedAtMs = SystemClock.now(),
+                receivedAtMs = clock.now(),
                 ackedAtMs = null,
             )
         )
@@ -245,7 +251,7 @@ class TransferAssembler(
         watchdogs.remove(transferId)?.cancel()
         activeBySender.remove(transferId)
         chunkHashesByTransfer.remove(transferId)
-        transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, SystemClock.now())
+        transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, clock.now())
         // O158: release the raw chunk BLOBs now that the file is assembled — the
         // happy path leaked them forever (cancel() and the abandon path already
         // free theirs). The reassembled bytes are handed to the caller via the
@@ -257,8 +263,8 @@ class TransferAssembler(
 
     private fun armWatchdog(transferId: String, totalChunks: Int, senderUserId: String) {
         val job = scope.launch {
-            var delayMs = NACK_INITIAL_DELAY_MS
-            var retriesLeft = NACK_MAX_RETRIES
+            var delayMs = nackInitialDelayMs
+            var retriesLeft = nackMaxRetries
             var lastCount = -1
             while (retriesLeft > 0) {
                 delay(delayMs)
@@ -270,11 +276,11 @@ class TransferAssembler(
                 // transfer keeps going as long as chunks keep landing; only a
                 // genuinely stalled one burns down to abandonment.
                 if (lastCount in 0 until received.size) {
-                    retriesLeft = NACK_MAX_RETRIES
-                    delayMs = NACK_INITIAL_DELAY_MS
+                    retriesLeft = nackMaxRetries
+                    delayMs = nackInitialDelayMs
                 } else {
                     retriesLeft--
-                    delayMs = minOf(delayMs * 2, NACK_DELAY_CAP_MS)
+                    delayMs = minOf(delayMs * 2, nackDelayCapMs)
                 }
                 lastCount = received.size
                 if (retriesLeft <= 0) break
@@ -285,8 +291,8 @@ class TransferAssembler(
             }
             val transfer = transferRepo.getById(transferId)
             if (transfer?.status == TransferStatus.IN_PROGRESS) {
-                RumorLog.w(TAG, "Transfer ${transferId.take(8)}… abandoned after $NACK_MAX_RETRIES stalled retries")
-                transferRepo.updateStatus(transferId, TransferStatus.ABANDONED, SystemClock.now())
+                RumorLog.w(TAG, "Transfer ${transferId.take(8)}… abandoned after $nackMaxRetries stalled retries")
+                transferRepo.updateStatus(transferId, TransferStatus.ABANDONED, clock.now())
                 // O108: abandoned transfers release their chunk rows — the
                 // watchdog path previously leaked them forever (cancel() was
                 // the only cleanup).
