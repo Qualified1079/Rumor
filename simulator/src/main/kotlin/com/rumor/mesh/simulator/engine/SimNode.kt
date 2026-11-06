@@ -92,7 +92,7 @@ class SimNode(
     val identityProvider = SimIdentityProvider(index)
     val userId: String get() = identityProvider.identity.value!!.userId
 
-    private val contactRepo     = InMemoryContactRepository()
+    val contactRepo             = InMemoryContactRepository()
     internal val messageRepo    = InMemoryMessageRepository()
     private val routeRepo       = InMemoryRouteRepository()
     private val breadcrumbRepo  = InMemoryBreadcrumbRepository()

@@ -86,6 +86,9 @@ private const val MAX_BY_ID_FETCH = 500
  * beats both.
  */
 private const val DEFAULT_LIVENESS_WINDOW_MS = 30_000L
+
+// O234: weeks of partition are normal under O55, so a request stays answerable a while.
+private const val PRIORITY_REQUEST_TTL_MS = 7L * 24 * 60 * 60 * 1000
 /** Bound on the first-hand-exchange map so a sybil id-flood can't grow it unboundedly. */
 private const val LIVENESS_MAX_PEERS = 512
 /**
@@ -330,6 +333,10 @@ class GossipEngine(
     private val sentDmPlaintext = com.rumor.mesh.core.platform.BoundedFifoMap<String, String>(500)
 
     fun sentPlaintextFor(messageId: String): String? = sentDmPlaintext[messageId]
+
+    // O234: a PRIORITY_LINK_ACCEPT is honoured only against a request we sent.
+    // In memory, so a restart forgets them and the user simply asks again.
+    private val outstandingPriorityRequests = com.rumor.mesh.core.platform.BoundedFifoMap<String, Long>(256)
 
     private val _incomingMessages = MutableSharedFlow<RumorMessage>(extraBufferCapacity = 256)
     val incomingMessages: SharedFlow<RumorMessage> = _incomingMessages
@@ -799,6 +806,7 @@ class GossipEngine(
             payload = MessagePayload(ContentType.CONTROL, ""),
             recipientId = recipientId,
         )
+        outstandingPriorityRequests.put(recipientId, clock.now())
         enqueueImmediate(msg)
         return msg
     }
@@ -810,6 +818,7 @@ class GossipEngine(
      */
     fun acceptPriorityLink(request: RumorMessage) {
         if (request.type != MessageType.PRIORITY_LINK_REQUEST) return
+        if (request.recipientId != identityProvider.identity.value?.userId) return
         scope.launch {
             contactRepo.setPriorityPeer(request.senderId, true)
             RumorLog.i(TAG, "Accepted priority link from ${request.senderId.take(8)}…")
@@ -1414,10 +1423,14 @@ class GossipEngine(
             )
         }
 
-        // Auto-accept incoming priority link acceptance: mark the sender as priority peer.
         if (msg.type == MessageType.PRIORITY_LINK_ACCEPT &&
             msg.recipientId == identityProvider.identity.value?.userId) {
-            scope.launch { contactRepo.setPriorityPeer(msg.senderId, true) }
+            val requestedAt = outstandingPriorityRequests.remove(msg.senderId)
+            if (requestedAt != null && clock.now() - requestedAt <= PRIORITY_REQUEST_TTL_MS) {
+                scope.launch { contactRepo.setPriorityPeer(msg.senderId, true) }
+            } else {
+                RumorLog.w(TAG, "Ignoring unsolicited PRIORITY_LINK_ACCEPT from ${msg.senderId.take(8)}…")
+            }
         }
 
         // O40: signed delete-on-ACK request. Verify the issuer is the

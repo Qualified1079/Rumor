@@ -63,3 +63,37 @@ Teeth: with the check disabled, the new test fails and the others pass.
 
 **Not done.** Per-message delivery state (pending → passed-on → delivered) is still
 two separate signals the UI has to combine; that lands with O203's delivery column.
+
+---
+
+### 2 — Any phone could make itself your "priority" link (O234 → G66)
+
+**The plain version.** Two phones can agree to be "priority" partners: your phone
+then works harder to keep a standing connection to that one. The handshake is "can
+we be partners?" → "yes". Your phone accepted the "yes" without checking it had
+ever asked. So Mallory could just send "yes" and become your priority partner,
+holding a standing link to you without you ever choosing her. That matters because
+a peer that shapes your persistent links is in a position to shape what you see
+(the eclipse / sybil family, O135/O194).
+
+**What changed.** Your phone now remembers who it asked (in memory, at most 256
+outstanding requests, each good for 7 days, because under the long-collapse model
+an answer can take that long). A "yes" counts only if it answers one of those
+questions, and is used up once. Also, accepting someone else's request now checks
+the request was actually addressed to you.
+
+**Something you should know.** Nothing in the app calls this handshake today:
+there's no "request priority link" button. The only live way a contact ever became
+a priority peer was the forged-"yes" hole itself. Priority links in practice come
+from the backbone planner (O98), which this doesn't touch. So closing the hole
+removes no working feature.
+
+**How I proved it.** New `PriorityLinkAcceptBindingTest`. (1) Mallory sends a
+genuinely signed "yes" nobody asked for; positive control proves it arrived and
+Mallory is a known contact; result: not a priority peer. (2) Control: you ask Bob,
+Bob says yes, and Bob *does* become your priority peer, so the fix is not a
+blackhole. Teeth: with the check removed, test (1) fails.
+
+**Not done.** There is still no "stop being partners" message (one-sided removal
+only), and a restart forgets outstanding requests, so you'd have to ask again.
+Both only matter once a UI for this exists.
