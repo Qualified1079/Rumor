@@ -136,7 +136,7 @@ class TransferSenderTest {
     fun `a receiver cancel marks the transfer ABANDONED`() = runBlocking {
         val id = sender.sendFile(peer, ContentType.FILE, ByteArray(50) { 1 })!!
         drain()
-        sender.onTransferCancel(id)
+        sender.onTransferCancel(id, cancellerId = peer)
         assertEquals(
             "an in-progress transfer must become ABANDONED on receiver cancel",
             TransferStatus.ABANDONED,
@@ -148,7 +148,7 @@ class TransferSenderTest {
     fun `after a cancel, a chunk request resends nothing`() = runBlocking {
         val id = sender.sendFile(peer, ContentType.FILE, ByteArray(50) { 1 })!!
         drain()
-        sender.onTransferCancel(id)
+        sender.onTransferCancel(id, cancellerId = peer)
 
         sender.handleChunkRequest(ChunkRequest(id, listOf(0)), requesterId = peer)
         assertTrue(
@@ -176,5 +176,31 @@ class TransferSenderTest {
     fun `a chunk request for an unknown transfer is ignored`() = runBlocking {
         sender.handleChunkRequest(ChunkRequest("b".repeat(32), listOf(0, 1, 2)), requesterId = peer)
         assertTrue("an unknown transferId must not produce traffic", drain().isEmpty())
+    }
+
+    @Test
+    fun `a cancel from someone other than the receiver is ignored`() = runBlocking {
+        val id = sender.sendFile(peer, ContentType.FILE, ByteArray(50) { 1 })!!
+        drain()
+        sender.onTransferCancel(id, cancellerId = "f".repeat(64))
+        assertEquals(TransferStatus.IN_PROGRESS, transferRepo.getById(id)?.status)
+        sender.handleChunkRequest(ChunkRequest(id, listOf(0)), requesterId = peer)
+        assertEquals("the real receiver must still be served", 1, drain().count { it.type == MessageType.CHUNK })
+    }
+
+    /** O232: one receiver of a broadcast transfer opting out must not stop it for the rest. */
+    @Test
+    fun `a broadcast cancel opts out only that receiver`() = runBlocking {
+        val id = sender.sendFile(null, ContentType.FILE, ByteArray(50) { 1 })!!
+        drain()
+        val quitter = "e".repeat(64)
+        val other = "d".repeat(64)
+        sender.onTransferCancel(id, cancellerId = quitter)
+        assertEquals("a broadcast transfer survives one receiver's cancel", TransferStatus.IN_PROGRESS, transferRepo.getById(id)?.status)
+
+        sender.handleChunkRequest(ChunkRequest(id, listOf(0)), requesterId = quitter)
+        assertTrue("the receiver that cancelled is no longer served", drain().isEmpty())
+        sender.handleChunkRequest(ChunkRequest(id, listOf(0)), requesterId = other)
+        assertEquals("every other receiver still is", 1, drain().count { it.type == MessageType.CHUNK })
     }
 }

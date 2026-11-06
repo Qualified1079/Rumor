@@ -158,4 +158,52 @@ class TransferSenderTest {
             scope.cancel()
         }
     }
+
+    /**
+     * O232 — a TRANSFER_CANCEL from someone who is not the transfer's receiver must
+     * not stop the sender. The forger's cancel is built by its own engine, so it is
+     * genuinely signed; only the sender's receiver-binding can refuse it. The real
+     * receiver's cancel (test above) is the discrimination control.
+     */
+    @Test
+    fun `a cancel from a non-receiver neither abandons nor silences the transfer`() = runBlocking {
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        try {
+            val sender = SimNode(0, scope)
+            val receiver = SimNode(1, scope)
+            val forger = SimNode(2, scope)
+            val transferId = sender.transferSender.sendFile(
+                recipientId = receiver.userId,
+                contentType = ContentType.FILE,
+                data = ByteArray(200_000) { it.toByte() },
+            ) ?: error("sendFile null")
+            awaitUntil(what = "the transfer to be recorded as SENDING") {
+                sender.transferRepo.getById(transferId) != null
+            }
+
+            val forged = forger.gossipEngine.composeTransferCancel(transferId, sender.userId)
+                ?: error("composeTransferCancel null")
+            forger.flushSchedulerToRepo()
+            SimTransport(forger, sender).exchange(kotlin.random.Random(8))
+            awaitUntil(what = "the forged cancel to reach the sender") {
+                sender.knownMessages().any { it.id == forged.id }
+            }
+            kotlinx.coroutines.delay(300) // settle: absence assertion
+
+            assertEquals(
+                "a non-receiver's cancel must not abandon the transfer",
+                TransferStatus.IN_PROGRESS,
+                sender.transferRepo.getById(transferId)?.status,
+            )
+            val before = chunkIds(sender)
+            receiver.gossipEngine.composeChunkRequest(transferId, listOf(1), sender.userId)
+            receiver.flushSchedulerToRepo()
+            SimTransport(receiver, sender).exchange(kotlin.random.Random(9))
+            awaitUntil(what = "the real receiver's NACK still being served") {
+                retransmittedIndices(sender, before).contains(1)
+            }
+        } finally {
+            scope.cancel()
+        }
+    }
 }

@@ -97,3 +97,33 @@ blackhole. Teeth: with the check removed, test (1) fails.
 **Not done.** There is still no "stop being partners" message (one-sided removal
 only), and a restart forgets outstanding requests, so you'd have to ask again.
 Both only matter once a UI for this exists.
+
+---
+
+### 3 — Anyone could make your phone stop sending a file (O232, half → G67)
+
+**The plain version.** Big things (photos, files) are sent in pieces. If the
+receiver misses pieces, it asks again ("resend 3 and 7"), and your phone resends.
+The receiver can also say "stop, I don't want this" (a TRANSFER_CANCEL), and your
+phone gives up. Your phone obeyed "stop" from *anyone*, as long as the note was
+addressed to you. So Mallory could kill your file transfer to Bob. Worse, for a
+file sent to everyone (a broadcast), any single listener saying "stop" stopped
+resends for *every* listener.
+
+**What changed.** "Stop" now counts only from the person the file is for. For a
+broadcast file, "stop" from one listener means "stop answering *that* listener's
+resend requests". Everyone else keeps getting pieces, and the transfer stays
+in progress.
+
+**How I proved it.** Three new tests: (1) a stop from a stranger is ignored, and
+the real receiver is still served; (2) broadcast: the listener who said stop isn't
+served, and another listener still is; (3) the same as (1), but end to end over
+the simulated radio with a genuinely signed forged "stop" and proof it arrived.
+The older test, where the *real* receiver says stop and your phone does stop,
+still passes. That's the check the fix isn't just ignoring every stop. Teeth: with
+the new check removed, exactly the three new tests fail.
+
+**Not done (why it's only half).** The other half of O232 stays open: a file
+*you* send is never marked "done", so your phone keeps every sent file's pieces
+forever. Fixing that needs a design choice (how a sender learns the file
+arrived; how long to keep broadcast pieces), so I left it filed rather than guess.

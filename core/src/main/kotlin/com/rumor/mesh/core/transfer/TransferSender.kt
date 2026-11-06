@@ -50,6 +50,10 @@ class TransferSender(
      */
     private val cancelledByReceiver = ConcurrentSet<String>()
 
+    // O232: a broadcast transfer has many receivers, so one receiver's cancel
+    // only stops serving that receiver — "$transferId/$userId".
+    private val optedOutReceivers = ConcurrentSet<String>()
+
     init {
         scope.launch {
             gossipEngine.incomingMessages.collect { msg ->
@@ -68,7 +72,7 @@ class TransferSender(
                                 msg.payload?.content ?: return@collect
                             )
                         }.getOrNull() ?: return@collect
-                        onTransferCancel(cancel.transferId)
+                        onTransferCancel(cancel.transferId, cancellerId = msg.senderId)
                     }
                     else -> {}
                 }
@@ -80,7 +84,20 @@ class TransferSender(
      * O18 receiver-initiated cancel. Extracted from the inbound collector so
      * the behaviour is reachable (and testable, O159) without driving a flow.
      */
-    internal suspend fun onTransferCancel(transferId: String) {
+    internal suspend fun onTransferCancel(transferId: String, cancellerId: String) {
+        // O232: the cancel is signed by whoever sent it, so it must come from
+        // this transfer's receiver; otherwise any node could stop our resends.
+        val transfer = transferRepo.getById(transferId) ?: return
+        if (transfer.direction != TransferDirection.SENDING) return
+        val recipient = transfer.recipientId
+        if (recipient == null) {
+            optedOutReceivers.add("$transferId/$cancellerId")
+            return
+        }
+        if (cancellerId != recipient) {
+            RumorLog.w(TAG, "Ignoring TRANSFER_CANCEL for ${transferId.take(8)}… from a non-recipient")
+            return
+        }
         cancelledByReceiver.add(transferId)
         markAbandoned(transferId)
     }
@@ -159,6 +176,7 @@ class TransferSender(
         // security-relevant check at its call site is how an invariant ends up
         // safe only by accident — see SourceInvariantTest's O5a guards.)
         if (req.transferId in cancelledByReceiver) return
+        if ("${req.transferId}/$requesterId" in optedOutReceivers) return
         val transfer = transferRepo.getById(req.transferId) ?: return
         if (transfer.direction != TransferDirection.SENDING) return
         if (transfer.status == TransferStatus.COMPLETE || transfer.status == TransferStatus.ABANDONED) return
