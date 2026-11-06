@@ -35,6 +35,11 @@ private const val NACK_MAX_RETRIES = 5
 // single-identity flood; the aggregate bound is storage quota + eviction (O23).
 private const val MAX_ACTIVE_PER_SENDER = 8
 
+// O231: chunks come from any seeder (O100), and after a restart the signed
+// per-chunk hashes are gone, so one poisoned chunk can fail the whole-file hash.
+// Discard and re-fetch a few times before calling the transfer FAILED.
+private const val MAX_REASSEMBLY_REFETCHES = 2
+
 /**
  * Receive side of chunked transfers. Buffers incoming metadata and chunks,
  * fires CHUNK_REQUEST NACKs with exponential backoff for missing chunks,
@@ -112,6 +117,7 @@ class TransferAssembler(
         // can't tell anyone to stop, but we still drop local state.
         activeBySender.remove(transferId)
         chunkHashesByTransfer.remove(transferId)
+        refetchesUsed.remove(transferId)
         transfer.senderId?.let { gossipEngine.composeTransferCancel(transferId, it) }
         transferRepo.upsert(transfer.copy(
             status = TransferStatus.ABANDONED,
@@ -231,6 +237,7 @@ class TransferAssembler(
 
     // O231: ingest and the watchdog can both reach a full set of chunks at once.
     private val reassembling = ConcurrentSet<String>()
+    private val refetchesUsed = ConcurrentMap<String, Int>()
 
     private suspend fun attemptReassembly(transferId: String) {
         if (!reassembling.add(transferId)) return
@@ -261,10 +268,23 @@ class TransferAssembler(
             recipientId = transfer.recipientId,
         )
         val data = Chunker.reassemble(chunks, meta) ?: run {
-            // O231: every index is present, so the watchdog has nothing to NACK and
-            // the transfer would sit IN_PROGRESS forever holding a per-sender slot.
-            // The content hash is signed, so retrying the same chunks cannot help.
-            RumorLog.w(TAG, "Reassembly failed for ${transferId.take(8)}… — content hash mismatch, marking FAILED")
+            val used = refetchesUsed[transferId] ?: 0
+            val sender = transfer.senderId
+            if (used < MAX_REASSEMBLY_REFETCHES && sender != null) {
+                RumorLog.w(TAG, "Reassembly failed for ${transferId.take(8)}… — discarding chunks, re-fetch ${used + 1}/$MAX_REASSEMBLY_REFETCHES")
+                refetchesUsed[transferId] = used + 1
+                chunkRepo.deleteAllForTransfer(transferId)
+                // A fresh watchdog re-NACKs the now-empty set; the old one may be
+                // our caller, so it is cancelled after the replacement is armed.
+                val previous = watchdogs.remove(transferId)
+                armWatchdog(transferId, transfer.totalChunks, sender)
+                previous?.cancel()
+                return
+            }
+            // Every index is present, so without this the watchdog has nothing to
+            // NACK and the transfer would sit IN_PROGRESS holding a per-sender slot.
+            RumorLog.w(TAG, "Reassembly failed for ${transferId.take(8)}… after $used re-fetches — marking FAILED")
+            refetchesUsed.remove(transferId)
             activeBySender.remove(transferId)
             chunkHashesByTransfer.remove(transferId)
             paused.remove(transferId)
@@ -275,6 +295,7 @@ class TransferAssembler(
         }
         activeBySender.remove(transferId)
         chunkHashesByTransfer.remove(transferId)
+        refetchesUsed.remove(transferId)
         transferRepo.updateStatus(transferId, TransferStatus.COMPLETE, clock.now())
         // O158: release the raw chunk BLOBs now that the file is assembled — the
         // happy path leaked them forever (cancel() and the abandon path already
@@ -328,6 +349,7 @@ class TransferAssembler(
             watchdogs.remove(transferId)
             activeBySender.remove(transferId)
             chunkHashesByTransfer.remove(transferId)
+            refetchesUsed.remove(transferId)
         }
         watchdogs[transferId] = job
     }

@@ -253,22 +253,26 @@ class TransferAssemblerTest {
         assertEquals("after resume, chunks land again", listOf(0), chunkRepo.getReceivedIndices(id))
     }
 
-    // ── O231: a content-hash mismatch is terminal, not a wedge ───────────────
+    // ── O231: a content-hash mismatch is retried, then terminal — never a wedge ──
 
     @Test
-    fun `a content hash mismatch marks the transfer FAILED and releases everything`() = runBlocking {
-        // No per-chunk hashes, so the wrong bytes are stored and only the signed
-        // whole-file hash catches them — every index present, nothing to NACK.
+    fun `a content hash mismatch discards the chunks and the honest re-send completes`() = runBlocking {
+        // No per-chunk hashes (as after a restart), so the wrong bytes are stored and
+        // only the signed whole-file hash catches them.
         val id = "5".repeat(32)
-        assembler.handleMetadata(meta(id, payload = byteArrayOf(1, 2, 3, 4)), senderUserId = "sender")
+        val honest = byteArrayOf(1, 2, 3, 4)
+        assembler.handleMetadata(meta(id, payload = honest), senderUserId = "sender")
         assembler.handleChunk(chunk(id, 0, byteArrayOf(9, 9, 9, 9)))
 
-        assertEquals("a mismatched transfer must end FAILED, not stay IN_PROGRESS", TransferStatus.FAILED, transferRepo.getById(id)?.status)
-        assertTrue("its chunk rows must be released", chunkRepo.getReceivedIndices(id).isEmpty())
+        assertEquals("one poisoned chunk must not end the transfer", TransferStatus.IN_PROGRESS, transferRepo.getById(id)?.status)
+        assertTrue("the poisoned chunk must be discarded for re-fetch", chunkRepo.getReceivedIndices(id).isEmpty())
+
+        assembler.handleChunk(chunk(id, 0, honest))
+        assertEquals("the honest re-send must complete it", TransferStatus.COMPLETE, transferRepo.getById(id)?.status)
     }
 
     @Test
-    fun `a failed transfer frees its per-sender slot`() = runBlocking {
+    fun `a mismatch that persists past the re-fetch budget ends FAILED and frees the slot`() = runBlocking {
         val failing = "6".repeat(32)
         assembler.handleMetadata(meta(failing, payload = byteArrayOf(1, 2, 3, 4)), senderUserId = "busy")
         repeat(7) { i -> assembler.handleMetadata(meta("%032x".format(100 + i)), senderUserId = "busy") }
@@ -276,10 +280,13 @@ class TransferAssemblerTest {
         assembler.handleMetadata(meta(overCap), senderUserId = "busy")
         assertNull("control: at the cap, another transfer from this sender is refused", transferRepo.getById(overCap))
 
-        assembler.handleChunk(chunk(failing, 0, byteArrayOf(9, 9, 9, 9)))
+        repeat(3) { assembler.handleChunk(chunk(failing, 0, byteArrayOf(9, 9, 9, 9))) }
+        assertEquals("three mismatches (2 re-fetches) must end FAILED, not IN_PROGRESS", TransferStatus.FAILED, transferRepo.getById(failing)?.status)
+        assertTrue("its chunk rows must be released", chunkRepo.getReceivedIndices(failing).isEmpty())
+
         val next = "8".repeat(32)
         assembler.handleMetadata(meta(next), senderUserId = "busy")
-        assertNotNull("once the mismatched transfer fails, its slot is free again", transferRepo.getById(next))
+        assertNotNull("once it fails, its per-sender slot is free again", transferRepo.getById(next))
     }
 
     @Test

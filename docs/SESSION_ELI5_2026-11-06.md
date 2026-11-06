@@ -201,3 +201,31 @@ signature of the test's own timing, not a code bug.
 thing that happens), which is the rule `docs/SIMULATOR_TESTING.md` already
 states. Teeth: with the piece deletion removed from the code, the test still fails,
 so waiting longer didn't make it toothless.
+
+---
+
+### 4b — Correction to §4: one bad piece no longer kills a good file
+
+**What was wrong with my first fix.** In §4 I made a fingerprint mismatch end the
+file as FAILED right away. An automatic security review pointed out the hole:
+pieces can come from *anyone* who has them (that's how multi-source download
+works), and after a restart your phone forgets the per-piece fingerprints that
+normally catch a bad piece on arrival. In that window, Mallory could slip in one
+bad piece and my fix would throw away Bob's genuine file for good. Before my fix
+the same trick jammed the file forever instead, so it was a sideways move, not a
+real fix.
+
+**What changed.** On a mismatch your phone now throws away the stored pieces and
+asks for them all again, up to 2 times. Only if the file still doesn't match after
+that is it marked FAILED and its slot freed.
+
+**How I proved it.** The test now sends one bad piece (the file stays in progress
+and the bad piece is deleted), then the good piece, and the file completes. A
+second test sends the bad piece three times and checks it ends FAILED with the
+slot freed. Teeth: with re-fetching set to 0, the recovery test fails. The
+existing end-to-end "poisoned piece gets repaired" test (`TransferChunkVerifyTest`)
+still passes.
+
+**Still not done.** A FAILED file can't be restarted by its sender re-announcing
+it, and the per-piece fingerprints still don't survive a restart (O231 (b)), which
+would close the window properly.
