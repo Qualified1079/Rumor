@@ -118,11 +118,11 @@ class TransferNackWatchdogTest {
             awaitUntil(what = "the stalled transfer to be abandoned") {
                 f.transfers.getById("tx-stall")?.status == TransferStatus.ABANDONED
             }
-            assertEquals(
-                "the abandon path must release the chunk rows (O108) — it leaked them before",
-                emptyList<Int>(),
-                f.chunks.getReceivedIndices("tx-stall").sorted(),
-            )
+            // The status is written before the rows are released, so wait for the
+            // release itself rather than asserting the instant the status flips.
+            awaitUntil(what = "the abandon path to release the chunk rows (O108) — it leaked them before") {
+                f.chunks.getReceivedIndices("tx-stall").isEmpty()
+            }
             // It asked before it gave up: a stall must produce NACKs, not silence.
             assertTrue(
                 "a stalled transfer must have sent at least one CHUNK_REQUEST before abandoning",

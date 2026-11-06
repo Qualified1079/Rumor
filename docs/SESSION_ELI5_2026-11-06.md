@@ -184,3 +184,20 @@ reviewed, not tested. Worth watching for on the phones.
 **Not done.** Pausing a file still lets the timer give up on it; nothing recovers
 half-received files after a restart; and two writers can still overwrite each
 other's status at the database level. All three stay in O231.
+
+---
+
+### 5 — A test that checked one step too early (no row; test-only)
+
+**The plain version.** When a stalled file is given up on, the code does two things
+in order: mark it "abandoned", then delete its stored pieces. A test
+(`TransferNackWatchdogTest`) checked "pieces deleted?" the instant it saw
+"abandoned", so on a busy machine it sometimes looked in the gap between the two
+steps and failed. It failed once for me while three test classes ran in parallel,
+and passed 4/4 on the old code and 6/6 on the new code when run alone. That's the
+signature of the test's own timing, not a code bug.
+
+**What changed.** The test now waits for the pieces to be deleted (the last
+thing that happens), which is the rule `docs/SIMULATOR_TESTING.md` already
+states. Teeth: with the piece deletion removed from the code, the test still fails,
+so waiting longer didn't make it toothless.
