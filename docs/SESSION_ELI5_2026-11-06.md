@@ -10,6 +10,21 @@ Earlier the same day: the `away/2026-10-11-overnight` branch was merged into `ma
 of "implicit state machines": places where the app's state is spread across loose
 flags instead of one explicit state, so the pieces can disagree.
 
+## TL;DR
+
+| # | What | Row | Status |
+|---|------|-----|--------|
+| 1 | Strangers could mark your messages "delivered" | O233 | **Fixed** → G65 |
+| 2 | Any phone could make itself your priority link | O234 | **Fixed** → G66 |
+| 3 | Strangers could stop your file sends | O232 | **Half fixed** → G67 (sent-file cleanup still open) |
+| 3b | File-record cleanup never runs and matched the wrong words | O249 | Word bug fixed (`:app`, untested here); wiring **filed** |
+| 4 / 4b | One bad file could jam a sender's slots forever | O231 | **Half fixed** → G68 (pause/restart/CAS still open) |
+| 5 | A test checked one step too early | — | Test fixed |
+
+**Needs your eyes:** §4's two untestable pieces (watch on the phones for files that
+finish but never say "done"), and §2's note that the priority-link handshake has no
+button in the app at all.
+
 ---
 
 ## How everything here was verified (applies to every entry)
