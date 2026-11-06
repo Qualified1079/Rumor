@@ -127,3 +127,20 @@ the new check removed, exactly the three new tests fail.
 *you* send is never marked "done", so your phone keeps every sent file's pieces
 forever. Fixing that needs a design choice (how a sender learns the file
 arrived; how long to keep broadcast pieces), so I left it filed rather than guess.
+
+---
+
+### 3b — Found in passing: the file-cleanup job never runs, and was broken anyway (O249, filed)
+
+**The plain version.** There's a cleanup job that's meant to delete old finished or
+cancelled transfer records. Two problems. (1) Nothing ever runs it; it's the
+fifth "periodic cleanup" in this codebase written but never wired up. (2) Even if
+it ran, it looked for the words `complete`/`abandoned` in lowercase, while the
+database stores them as `COMPLETE`/`ABANDONED`. The database treats those as
+different words, so it would have deleted nothing.
+
+**What changed.** I fixed (2), a one-line change in `TransferDao.kt`. **That file
+is in `:app`, which can't be compiled here, so it's hand-checked only**; it's a
+change inside an SQL string, which the compiler doesn't check anyway. I did *not*
+wire up (1): that needs a schedule and a test with a controllable clock, so it's
+filed as O249.

@@ -28,7 +28,7 @@ interface TransferDao {
     suspend fun delete(transferId: String)
 
     /** Purge completed/abandoned transfers older than [beforeMs] to reclaim storage. */
-    @Query("DELETE FROM transfers WHERE status IN ('complete','abandoned','failed') AND completedAtMs < :beforeMs")
+    @Query("DELETE FROM transfers WHERE status IN ('COMPLETE','ABANDONED','FAILED') AND completedAtMs < :beforeMs")
     suspend fun pruneOlderThan(beforeMs: Long)
 }
 
