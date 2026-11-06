@@ -93,6 +93,51 @@ class DirectAckDeliveryTest {
         }
     }
 
+    /**
+     * O233 — a validly-signed ACK from someone who was never the DM's recipient
+     * must not raise a receipt. M's ACK is built by its own engine, so the
+     * signature is genuine: only A's receive-side binding can refuse it.
+     */
+    @Test
+    fun `an ACK from a non-recipient raises no receipt`() = kotlinx.coroutines.runBlocking<Unit> {
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        try {
+            val a = SimNode(0, scope)
+            val b = SimNode(1, scope)  // the real recipient — never online here
+            val m = SimNode(2, scope)  // forger
+
+            val receipts = ConcurrentHashMap.newKeySet<String>()
+            scope.launch { a.gossipEngine.deliveryReceipts.collect { receipts.add(it) } }
+
+            val dm = a.gossipEngine.composeDirect(
+                recipientId = b.userId,
+                recipientPublicKey = b.identityProvider.identity.value!!.publicKeyBytes,
+                text = "for B only",
+            ) ?: error("composeDirect returned null")
+            a.flushSchedulerToRepo()
+
+            val forged = m.gossipEngine.composeDirectAck(originalSenderId = a.userId, ackedMessageId = dm.id)
+                ?: error("composeDirectAck returned null")
+            val fabricated = m.gossipEngine.composeDirectAck(originalSenderId = a.userId, ackedMessageId = "never-sent")
+                ?: error("composeDirectAck returned null")
+            m.flushSchedulerToRepo()
+
+            SimTransport(m, a).exchange(kotlin.random.Random(4))
+            // Positive control: both ACKs really reached A, so an absent receipt
+            // is A refusing them, not delivery failing.
+            awaitUntil { a.knownMessages().map { it.id }.containsAll(listOf(forged.id, fabricated.id)) }
+            kotlinx.coroutines.delay(300)
+
+            assertTrue("a non-recipient's ACK must not mark the DM delivered (receipts=$receipts)", dm.id !in receipts)
+            assertTrue("an ACK for an id we never sent must not raise a receipt", "never-sent" !in receipts)
+            assertThrows(AssertionError::class.java) {
+                assertTrue("teeth: the DM id really is absent", dm.id in receipts)
+            }
+        } finally {
+            scope.cancel()
+        }
+    }
+
     @Test
     fun `a relay that is not the recipient does NOT ACK`() = kotlinx.coroutines.runBlocking<Unit> {
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())

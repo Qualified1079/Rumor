@@ -1461,9 +1461,24 @@ class GossipEngine(
         // O202: inbound DIRECT_ACK addressed to us confirms one of our own DMs
         // was delivered end-to-end. Surface the acked messageId on
         // deliveryReceipts; never emit it to the inbox (pure control signal).
+        // O233: the ACK is signed, but by whoever sent it — so only its addressee
+        // may confirm a DM. Without this any node could mark any of our DMs
+        // delivered. An own DM evicted from the store loses its receipt; that
+        // only costs the ✓✓, never a false one.
         if (msg.type == MessageType.DIRECT_ACK && msg.recipientId == localUserId) {
             msg.payload?.content?.takeIf { it.isNotBlank() }?.let { ackedId ->
-                scope.launch { _deliveryReceipts.emit(ackedId) }
+                scope.launch {
+                    val original = messageStore.getById(ackedId)
+                    if (original != null &&
+                        original.type == MessageType.DIRECT &&
+                        original.senderId == localUserId &&
+                        original.recipientId == msg.senderId
+                    ) {
+                        _deliveryReceipts.emit(ackedId)
+                    } else {
+                        RumorLog.w(TAG, "Ignoring DIRECT_ACK from ${msg.senderId.take(8)}… for a DM it was not sent")
+                    }
+                }
             }
         }
 
