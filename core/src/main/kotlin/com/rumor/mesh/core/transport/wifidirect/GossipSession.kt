@@ -74,6 +74,11 @@ class GossipSession(
     private val supportedFeatures: List<String> = LOCAL_SUPPORTED_FEATURES,
 ) {
     private val TAG = "GossipSession"
+
+    // O242: advertising rbsr-v1 without a snapshot to run it from would let both
+    // peers pick RBSR while this side runs bloom, wedging the session.
+    private val advertisedFeatures =
+        if (rbsrItemsProvider == null) supportedFeatures - RBSR_FEATURE else supportedFeatures
     private val SESSION_TIMEOUT_MS = 30_000L
 
     /**
@@ -173,7 +178,7 @@ class GossipSession(
                 nonce = ourNonce,
                 protocolVersion = LOCAL_PROTOCOL_VERSION,
                 maxProtocolVersion = LOCAL_MAX_PROTOCOL_VERSION,
-                supportedFeatures = supportedFeatures,
+                supportedFeatures = advertisedFeatures,
                 knownCount = knownMessageIds.size,
             )
             send(out, ourHello)
@@ -237,7 +242,12 @@ class GossipSession(
             // Phase 1c: NEIGHBOR_DIGEST — share compact representation of our known
             // message set so each side can compute an overlap fraction after the session.
             send(out, buildNeighborDigest())
-            val peerDigest = receive(inp) as? GossipPacket.NeighborDigest
+            // O242: every phase below is read strictly. A lenient cast here used to
+            // swallow whatever frame actually came next and desync the rest.
+            if (receive(inp) !is GossipPacket.NeighborDigest) {
+                RumorLog.w(TAG, "Expected NEIGHBOR_DIGEST — aborting")
+                return@withTimeout null
+            }
 
             // Phase 2: SUMMARY — exchange knowledge sets. O42 adaptive selection:
             // RBSR replaces the bloom/idlist path only when both peers advertise
@@ -248,7 +258,7 @@ class GossipSession(
             // knownCount + shared capability), so they never split modes. Falls
             // back to bloom/idlist on any precondition miss for clean backwards
             // compatibility with v0.1 peers.
-            val bothSupportRbsr = supportedFeatures.contains(RBSR_FEATURE) &&
+            val bothSupportRbsr = advertisedFeatures.contains(RBSR_FEATURE) &&
                 hello.supportedFeatures.contains(RBSR_FEATURE)
             val useRbsr = rbsrItemsProvider != null &&
                 com.rumor.mesh.core.sync.shouldUseRbsr(
@@ -266,18 +276,25 @@ class GossipSession(
                 val peerHas = HashSet<String>()
                 val peerNeeds = HashSet<String>()
                 var ourFrames = rbsr.initiate()
+                var capped = false
                 for (round in 0 until com.rumor.mesh.core.sync.MAX_RBSR_ROUNDS) {
                     send(out, GossipPacket.Rbsr(ourFrames.map { it.toWire() }))
                     val incoming = receive(inp) as? GossipPacket.Rbsr
                         ?: return@withTimeout null
                     val r = rbsr.respond(incoming.frames.map { it.toMemory() })
-                    peerHas.addAll(r.peerHas)
-                    peerNeeds.addAll(r.peerNeeds)
                     // O117: stop accreting ids past the session ceiling — the
-                    // remainder syncs on later rounds instead of growing heap.
-                    if (peerHas.size + peerNeeds.size > com.rumor.mesh.core.sync.MAX_RBSR_SESSION_IDS) {
-                        RumorLog.w(TAG, "RBSR session id ceiling hit — deferring remainder to next exchange")
-                        break
+                    // remainder syncs next exchange. O242: keep exchanging frames,
+                    // though: the ceiling is computed locally, so breaking out
+                    // here could leave the peer sending an RBSR frame into our
+                    // REQUEST read. Rounds stay lockstep and bounded by
+                    // MAX_RBSR_ROUNDS.
+                    if (!capped) {
+                        peerHas.addAll(r.peerHas)
+                        peerNeeds.addAll(r.peerNeeds)
+                        if (peerHas.size + peerNeeds.size > com.rumor.mesh.core.sync.MAX_RBSR_SESSION_IDS) {
+                            RumorLog.w(TAG, "RBSR session id ceiling hit — deferring remainder to next exchange")
+                            capped = true
+                        }
                     }
                     if (ourFrames.isEmpty() && incoming.frames.isEmpty()) break
                     ourFrames = r.outgoing
@@ -351,6 +368,12 @@ class GossipSession(
                 received.add(packet.message)
                 packet = receive(inp)
             }
+            // O242: the stream must end with its terminator, and the terminator's
+            // count must match — otherwise frames were lost or injected.
+            if (packet !is GossipPacket.MessagesDone || packet.count != received.size) {
+                RumorLog.w(TAG, "Message stream from ${hello.userId.take(16)}… ended badly — aborting")
+                return@withTimeout null
+            }
 
             // Phase 4b–6: send our whole tail without waiting, then read theirs.
             // Neither side ever blocks on a frame the peer hasn't already committed
@@ -359,9 +382,11 @@ class GossipSession(
             send(out, GossipPacket.OnlineStatus.withAges(recentOnlineUsers, System.currentTimeMillis()))
             send(out, GossipPacket.Bye())
 
-            val ackedByPeer = (receive(inp) as? GossipPacket.Ack)?.acceptedIds ?: emptyList()
+            val ackedByPeer = (receive(inp) as? GossipPacket.Ack)?.acceptedIds
+                ?: run { RumorLog.w(TAG, "Expected ACK — aborting"); return@withTimeout null }
             val theirOnline = (receive(inp) as? GossipPacket.OnlineStatus)
-                ?.recentUsersOnLocalClock(System.currentTimeMillis()) ?: emptyMap()
+                ?.recentUsersOnLocalClock(System.currentTimeMillis())
+                ?: run { RumorLog.w(TAG, "Expected ONLINE_STATUS — aborting"); return@withTimeout null }
 
             val duration = System.currentTimeMillis() - startMs
 
