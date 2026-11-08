@@ -3,7 +3,7 @@
 bodies, docs/COMPLETED_GAPS.md archive) changed together, by one tool.
 
   scripts/backlog.py next-id                 next free O / G (fetches origin/main first)
-  scripts/backlog.py file --tier 4 --title T --body B   file a new O row (index + body)
+  scripts/backlog.py file --tier 4 --tag TODO/CODE --title T --body B   file a new O row
   scripts/backlog.py close O123 --title T --notes N      close a row as the next G
   scripts/backlog.py close O123 --title T --notes N --remaining-title T2 --remaining-body B2
                                              close half a row; O123 stays open, retitled
@@ -33,6 +33,7 @@ COUNTS_BEGIN, COUNTS_END = "<!-- counts:begin -->", "<!-- counts:end -->"
 
 
 def read(p): return p.read_text(encoding="utf-8")
+def tags(t): return " ".join(f"`[{x.strip()}]`" for x in t.split(","))
 def write(p, s): p.write_text(s, encoding="utf-8", newline="\n")
 
 
@@ -148,10 +149,11 @@ def main():
     sub.add_parser("next-id").add_argument("--no-fetch", action="store_true")
     f = sub.add_parser("file")
     f.add_argument("--tier", type=int, required=True); f.add_argument("--title", required=True); f.add_argument("--body", required=True)
+    f.add_argument("--tag", required=True, help="status tag(s) without backticks, e.g. 'TODO/CODE' or 'STRUCT,TODO/CODE'")
     f.add_argument("--number", help="use this O number (default: next-id)")
     c = sub.add_parser("close")
     c.add_argument("o"); c.add_argument("--title", required=True); c.add_argument("--notes", required=True)
-    c.add_argument("--remaining-title"); c.add_argument("--remaining-body")
+    c.add_argument("--remaining-title"); c.add_argument("--remaining-body"); c.add_argument("--remaining-tag", default="PART")
     sub.add_parser("counts"); sub.add_parser("check")
     a = ap.parse_args()
 
@@ -163,14 +165,16 @@ def main():
         regen_counts(); return 0
     if a.cmd == "file":
         o = a.number or f"O{next_ids()[0]}"
-        write(INDEX, insert_index_row(read(INDEX), a.tier, f"| {o} | **{a.title}** |"))
-        write(BODIES, insert_index_row(read(BODIES), a.tier, f"| {o} | **{a.title}** | {a.body} |"))
+        head = f"**{tags(a.tag)}** {a.title}"
+        write(INDEX, insert_index_row(read(INDEX), a.tier, f"| {o} | {head} |"))
+        write(BODIES, insert_index_row(read(BODIES), a.tier, f"| {o} | {head} | {a.body} |"))
         regen_counts(); print(o); return 0
     if a.cmd == "close":
         g = next_ids()[1]
         if a.remaining_title:
-            write(INDEX, replace_row(read(INDEX), a.o, f"| {a.o} | **{a.remaining_title}** |"))
-            write(BODIES, replace_row(read(BODIES), a.o, f"| {a.o} | **{a.remaining_title}** | {a.remaining_body} |"))
+            head = f"**{tags(a.remaining_tag)}** {a.remaining_title}"
+            write(INDEX, replace_row(read(INDEX), a.o, f"| {a.o} | {head} |"))
+            write(BODIES, replace_row(read(BODIES), a.o, f"| {a.o} | {head} | {a.remaining_body} |"))
         else:
             write(INDEX, replace_row(read(INDEX), a.o, None))
             write(BODIES, replace_row(read(BODIES), a.o, None))

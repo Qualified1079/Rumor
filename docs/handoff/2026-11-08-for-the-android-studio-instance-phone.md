@@ -34,6 +34,27 @@ never shows "Done" is the symptom.
    start; peer-nearby signal sticks), **O237** (auto-mode flaps STATIC↔FREE on
    screen on/off, restarting BLE each time) — both easiest to confirm in logcat.
 
+## Repo tooling changed today — use it
+
+- **Backlog edits go through `scripts/backlog.py`** (`next-id`, `file`, `close`, `counts`,
+  `check`). It needs Python; if this machine has none, edit by hand — but
+  `BacklogConsistencyTest` in `:core` now fails the suite on index/body drift, so
+  you'll find out. Push a new row number *before* the work it describes.
+- **Handoffs are one file per session** under `docs/handoff/`; add yours there and
+  one line at the top of `handoff.md`'s list.
+- `CLAUDE.md` is now a true index (62 KB → ~41 KB); bug history, bridges and
+  dependency policy moved to `docs/BUG_HISTORY.md`, `docs/BRIDGING.md`,
+  `docs/DECISIONS.md`.
+
+## Refactors deliberately left for you (you can build `:app`; the cloud can't)
+
+- **O250** split `GossipEngine.kt` by concern, keeping its public API stable across
+  each move; one concern per commit.
+- **O141** strip session provenance from code comments; `:app` and `:core` in
+  separate commits.
+- Do these *after* the phone work above, not before — they touch every file the
+  Rooms work touches.
+
 ## Coordination
 
 A cloud session (`rumor-38`) did this week's work. Follow
