@@ -70,7 +70,7 @@ Reserved here so that no other purpose claims the name.
 
 The first real artifact that benefits from project signing is the
 default keyword filter lists from O67. Per the design conversation
-recorded in HANDOFF.md, the v1 default is to ship NO bundled lists —
+recorded in `docs/handoff/2026-07-13-overnight-research-audit-session.md`, the v1 default is to ship NO bundled lists —
 users opt in to community-published lists or author their own. Until
 there is a list to sign, generating a key now (especially one that
 would touch CI in any form) just creates surface area for accidental

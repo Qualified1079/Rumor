@@ -33,7 +33,7 @@ Key invariants:
 - Coined project terms are defined in `docs/GLOSSARY.md`; wire history in `docs/RENAMED_FIELDS_NEVER_REUSE.md`.
 - Room schema changes: bump `RumorDatabase.version` AND commit the newly exported `app/schemas/…/<version>.json` in the same commit (O116). Uses `fallbackToDestructiveMigration()` in dev only; release needs a real `Migration` per bump once shipped. Current version: **12** (see the version history KDoc in `RumorDatabase.kt`).
 - **Git (user directive 2026-07-19): commit and push directly to `main` — do NOT create a feature branch.** This overrides the default "branch first on the default branch" reflex. Force-push stays denied. *Exception, per-request:* for unattended/away-mode work the user may ask for a review branch instead; merge it promptly (fetch and compare first — `docs/MULTI_INSTANCE_COORDINATION.md`).
-- **Session state lives in `handoff.md`, newest section at the TOP** (§0 is the permanent canary note). Read the top section before starting work: it carries the blocking user decisions, the container gotchas (JDK/locale/SDK), and which tests are environmentally flaky.
+- **Session state lives in `docs/handoff/`, one file per session; `handoff.md` lists them newest first** (§0 is the permanent canary note, §1 the orientation). Read the newest file before starting work: it carries the blocking user decisions and what's in flight. Container gotchas (JDK/locale/SDK/Maven mirror) and environmentally flaky tests live in §1.
 
 ## DI (Koin) wiring
 
