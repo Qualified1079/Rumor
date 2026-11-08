@@ -6,6 +6,7 @@ import com.rumor.mesh.core.data.memory.InMemoryScheduledMessageRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -127,5 +128,64 @@ class MessageSchedulerTest {
         assertNotNull(repo.getById(id))
         scheduler.cancel(id)
         assertNull(repo.getById(id))
+    }
+
+    /**
+     * O240 — a recurring row whose count is 0 (the model default) or any negative
+     * other than -1 must fire once and end, not wrap to "unlimited". Inserted into
+     * the repo directly, as a stored row would be, so the compose-side check below
+     * can't be what makes it pass.
+     */
+    @Test
+    fun `a recurring row with no remaining fires ends instead of recurring forever`() = runBlocking<Unit> {
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        try {
+            val node = SimNode(0, scope)
+            val repo = InMemoryScheduledMessageRepository()
+            val scheduler = MessageScheduler(
+                scheduledRepo = repo,
+                gossipEngine = node.gossipEngine,
+                contactRepo = InMemoryContactRepository(),
+                scope = scope,
+            )
+            for ((id, remaining) in listOf("zero" to 0, "neg" to -5)) {
+                repo.upsert(com.rumor.mesh.core.model.ScheduledMessage(
+                    id = id,
+                    type = com.rumor.mesh.core.model.MessageType.BROADCAST,
+                    contentText = "once-$id",
+                    fireAtMs = 1000L,
+                    intervalMs = 100L,
+                    remainingFires = remaining,
+                ))
+            }
+            scheduler.fireDue(1000L)
+            assertNull("remainingFires=0 must end after firing, not become unlimited", repo.getById("zero"))
+            assertNull("a negative count other than -1 must end too", repo.getById("neg"))
+            node.flushSchedulerToRepo()
+            assertTrue(
+                "it still fires the once it was due",
+                node.knownMessages().any { it.payload?.content == "once-zero" },
+            )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `scheduling a recurring broadcast with count 0 is refused`() = runBlocking<Unit> {
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        try {
+            val scheduler = MessageScheduler(
+                scheduledRepo = InMemoryScheduledMessageRepository(),
+                gossipEngine = SimNode(0, scope).gossipEngine,
+                contactRepo = InMemoryContactRepository(),
+                scope = scope,
+            )
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { scheduler.scheduleRecurringBroadcast("x", 1000L, 100L, count = 0) }
+            }
+        } finally {
+            scope.cancel()
+        }
     }
 }

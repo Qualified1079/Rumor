@@ -90,6 +90,7 @@ class MessageScheduler(
         count: Int = -1,
     ): String {
         require(intervalMs > 0) { "intervalMs must be positive" }
+        require(count > 0 || count == -1) { "count must be positive, or -1 for unlimited" }
         val id = Uuid.random()
         scheduledRepo.upsert(ScheduledMessage(
             id = id,
@@ -155,8 +156,12 @@ class MessageScheduler(
             scheduledRepo.delete(s.id)
             return
         }
-        val newRemaining = if (s.remainingFires < 0) -1 else s.remainingFires - 1
-        if (newRemaining == 0) {
+        // O240: only -1 means unlimited. Any other count that has run out (0 is the
+        // model's default) ends the schedule here — it used to wrap to -1 and fire
+        // forever.
+        val unlimited = s.remainingFires == -1
+        val newRemaining = if (unlimited) -1 else s.remainingFires - 1
+        if (!unlimited && newRemaining <= 0) {
             scheduledRepo.delete(s.id)
         } else {
             // Skip past any fireAt values that are already in the past so a
