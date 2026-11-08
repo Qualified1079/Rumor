@@ -2,7 +2,7 @@
 
 > Extracted verbatim from `CLAUDE.md` "Design decisions recorded" (2026-07-18 size
 > pare-down). This is the full design record for DM bridging (O5). The compact
-> invariants + the six O5a security constraints remain in `CLAUDE.md`; read this
+> invariants stay in `CLAUDE.md`; the six O5a security constraints live here (below); read this
 > file before designing any bridge DM work.
 
 **Two architectures, pick one before designing O5.**
@@ -69,3 +69,10 @@ These are duplicated as a compact list in `CLAUDE.md` (load-bearing review crite
 6. **Trust model unchanged from existing plugins.** A user-enabled plugin already has full access to broadcast plaintext via `observeIncoming`. Adding DM handling raises the leakage surface only for users who enable a malicious bridge plugin — same gate (PluginCatalog toggle) as today. The framework does NOT widen the trust boundary; it just gives well-behaved bridges a way to preserve E2E that they previously didn't have.
 
 If any of these six constraints can't be honored by a proposed envelope, fall back to Architecture A for that bridge.
+
+## Implemented bridges (moved from `CLAUDE.md` 2026-11-08)
+
+| # | Plugin | Files | Status |
+|---|--------|-------|--------|
+| S1 | **Meshtastic bridge** | `app/…/plugin/meshtastic/{MeshtasticBridge,MeshtasticBleClient,MeshtasticMessages,MeshtasticProtobuf}.kt` | v0.1.0. Hand-rolled minimal protobuf codec (no protoc dep). BLE only — auto-scans, prompts bonding via `createBond()`. Reads plaintext from `MeshPacket.decoded` (radio decrypts); drops encrypted packets the radio can't decode. Only `TEXT_MESSAGE_APP` (port 1) BROADCASTs are bridged. Outbound uses primary channel (idx 0). Bridge traffic → `BRIDGE_UNSIGNED` → BRIDGED trust → never re-relayed. Field numbers verified against meshtastic/protobufs master: `MeshPacket.id=6`, `hop_limit=9`, `FromRadio.packet=2` (an earlier draft used 8/10/11 which silently broke all inbound text). **Not done**: USB serial, DM bridging via PKC, multi-channel selection UI, device picker for multi-radio setups. |
+| S2 | **MeshCore bridge** | `app/…/plugin/meshcore/{MeshCoreBridge,MeshCoreBleClient,MeshCoreFrames}.kt` | v0.1.0. BLE NUS only (`6E400001-…`). Auto-scans, no bonding. Opcodes verified against the v3 BLE protocol spec (zjs81/meshcore-open BLE_PROTOCOL.md): RESP_CODE_CONTACTS_START=0x02, RESP_CODE_NO_MORE_MESSAGES=0x0A, RESP_CODE_CONTACT_MSG_RECV=0x10, RESP_CODE_CHANNEL_MSG_RECV=0x11. v3 channel-recv layout is `[opcode][snr][res×2][channel][path_len][txt_type][ts×4][sender ": " text]`. Synthetic sender userId = `meshcore:<FNV-1a of name>`. **Not done**: USB CDC framer, DM bridging via X25519, multi-channel, device picker, v1/v2 firmware fallback. |

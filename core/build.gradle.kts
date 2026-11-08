@@ -62,4 +62,9 @@ dependencies {
 // nicely with it.
 tasks.test {
     useJUnitPlatform()
+    // BacklogConsistencyTest and SentAtMsLintTest read files outside this module;
+    // without declaring them, Gradle reuses a stale pass after those files change.
+    inputs.files(rootProject.files("CLAUDE.md", "docs/OPEN_BACKLOG.md", "docs/COMPLETED_GAPS.md"))
+    inputs.dir(rootProject.file("app/src/main"))
+    inputs.dir(rootProject.file("simulator/src/main"))
 }
