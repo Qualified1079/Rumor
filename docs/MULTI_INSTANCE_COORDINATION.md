@@ -42,12 +42,21 @@ While working:
    between your last fetch and your push, pull and resolve before
    pushing. Fast-forward only.
 
-When closing a row:
+When filing or closing a row — **use `scripts/backlog.py`, not hand edits**:
 
-7. The row-close commit owns the `CLAUDE.md` edits for that row. Move
-   the row from "Open items" to "Completed gaps" as a `G##`; update the
-   header counts (`X PART · Y DECISION · Z TODO`); reference the new
-   `G##` from anywhere the old `O##` was cited.
+7. A row lives in three files (the `CLAUDE.md` one-line index, the body in
+   `docs/OPEN_BACKLOG.md`, the closed record in `docs/COMPLETED_GAPS.md`).
+   `scripts/backlog.py file|close` edits all three and regenerates the counts
+   block; `scripts/backlog.py check` (and `BacklogConsistencyTest` in `:core`)
+   catch drift. Reference the new `G##` from anywhere the old `O##` was cited.
+7a. **Claiming a number.** `scripts/backlog.py next-id` fetches `origin/main`
+   and returns the next free O/G across every backlog file, *including numbers
+   merely mentioned in prose*. Commit and push the new row **before** starting
+   the work it describes — a filed-but-unpushed number is invisible to the other
+   instance. Two instances that file in the same push window both append rows at
+   the same spot, so the second push conflicts: re-run `next-id`, renumber, push.
+   (2026-10-11: two sessions both used O208–O210 and G52–G57 because each filed
+   at the end of its work; the renumbering cost a merge session.)
 8. **Commit message lists the row number explicitly.** Format:
    `O67 → PART: keyword filter substrate (model + matcher + 12 tests)`.
    The other instance can grep `git log --oneline` for the row number
@@ -128,7 +137,7 @@ own current state.
 - [ ] `git fetch && git log --oneline HEAD..origin/<branch>` — clean?
 - [ ] If new commits exist, `git pull --ff-only` and re-read the new
       commit messages to confirm no row conflicts with yours.
-- [ ] Row close: `CLAUDE.md` row moved to "Completed gaps", header counts
-      updated, all `O##` references rewritten to `G##`.
+- [ ] Row file/close via `scripts/backlog.py`; `scripts/backlog.py check` clean.
+- [ ] New row numbers pushed before the work they describe.
 - [ ] Commit message includes row number prefix (`O67 → PART:`).
 - [ ] Push immediately; don't accumulate.
