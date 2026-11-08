@@ -27,7 +27,7 @@ class TrustGraphTest {
     }
 
     @Test
-    fun `sybils enter ONLY through an attack edge — the SybilLimit bound`() {
+    fun `sybils enter ONLY through an attack edge - the SybilLimit bound`() {
         // 'traitor' is a real person 'me' vouched for; the traitor was fooled
         // into vouching for a swarm of sybils. Separately, a disconnected sybil
         // ring vouches for itself with NO path from 'me'.
@@ -82,7 +82,7 @@ class TrustGraphTest {
     }
 
     @Test
-    fun `Advogato-inoculation — depth is structural, a fooled node cannot shortcut its vouchees shallower`() {
+    fun `Advogato-inoculation - depth is structural, a fooled node cannot shortcut its vouchees shallower`() {
         // A chain: me -> a -> b -> c. With hops=2, c (depth 3) must NOT be
         // admitted no matter how 'b' vouches — b cannot grant c its own
         // (shallower) reach. Depth is computed from the seed, never inherited.

@@ -28,7 +28,7 @@ class HelloChallengeV2Test {
         assertFalse(v1.contentEquals(v2))
     }
 
-    @Test fun `v2 byte format pin — empty advertisements`() {
+    @Test fun `v2 byte format pin - empty advertisements`() {
         val bytes = helloChallengeBytesV2(
             nonceBase64 = "abc",
             protocolVersion = 1,
@@ -39,7 +39,7 @@ class HelloChallengeV2Test {
         assertEquals("rumor-hello-v2:abc|1|1|route-adv-v1|", bytes)
     }
 
-    @Test fun `v2 byte format pin — populated advertisements sorted`() {
+    @Test fun `v2 byte format pin - populated advertisements sorted`() {
         val bytes = helloChallengeBytesV2(
             nonceBase64 = "abc",
             protocolVersion = 1,

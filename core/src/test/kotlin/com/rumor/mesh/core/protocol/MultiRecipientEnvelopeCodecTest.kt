@@ -46,7 +46,7 @@ class MultiRecipientEnvelopeCodecTest {
         assertTrue(decrypted.contentEquals(plaintext))
     }
 
-    @Test fun `multi-recipient round-trip — every member can decrypt`() {
+    @Test fun `multi-recipient round-trip - every member can decrypt`() {
         val alice = newIdentity()
         val recipients = (1..5).map { newIdentity() }
         val plaintext = "broadcast to 5".encodeToByteArray()
@@ -176,7 +176,7 @@ class MultiRecipientEnvelopeCodecTest {
         )
     }
 
-    @Test fun `forward secrecy — same plaintext + same recipients produces different ciphertext on each call`() {
+    @Test fun `forward secrecy - same plaintext + same recipients produces different ciphertext on each call`() {
         // Each envelope uses fresh ephemeral + fresh content key, so the
         // ciphertext bytes must differ even when inputs are identical. This
         // proves the per-envelope randomness is real (and that we're not

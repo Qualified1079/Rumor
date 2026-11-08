@@ -28,7 +28,7 @@ class RbsrTest {
     }
 
     @Test
-    fun `one side has extra item — reconciles in one round under threshold`() {
+    fun `one side has extra item - reconciles in one round under threshold`() {
         val aliceItems = items(1L to "a", 2L to "b", 3L to "c")
         val bobItems = items(1L to "a", 2L to "b", 3L to "c", 4L to "d")
 

@@ -41,7 +41,7 @@ class RoomEndToEndIntegrationTest {
 
     // ── OPEN room end-to-end ──────────────────────────────────────────────────
 
-    @Test fun `OPEN room — sender tags, receiver matches, plaintext visible`() {
+    @Test fun `OPEN room - sender tags, receiver matches, plaintext visible`() {
         val roomId = "neighborhood-watch"
         val plaintext = "Stove fire on 3rd ave, please be careful"
 
@@ -70,7 +70,7 @@ class RoomEndToEndIntegrationTest {
         val _whatGetsDisplayed = plaintext
     }
 
-    @Test fun `OPEN room — non-subscribed receiver drops the message`() {
+    @Test fun `OPEN room - non-subscribed receiver drops the message`() {
         val tag = RoomRoutingTag.openRoomTag("private-room")
         val result = RoomTagMatcher.match(
             inboundTag = tag,
@@ -83,7 +83,7 @@ class RoomEndToEndIntegrationTest {
 
     // ── ENCRYPTED room end-to-end ─────────────────────────────────────────────
 
-    @Test fun `ENCRYPTED room — sender encrypts to 3 recipients, each can decrypt + match tag`() {
+    @Test fun `ENCRYPTED room - sender encrypts to 3 recipients, each can decrypt + match tag`() {
         val alice = newIdentity()
         val bob = newIdentity()
         val charlie = newIdentity()
@@ -141,7 +141,7 @@ class RoomEndToEndIntegrationTest {
         assertEquals(null, daveTry, "non-addressed recipient must get null")
     }
 
-    @Test fun `ENCRYPTED room — wrong-room receiver matches no tag and never tries to decrypt`() {
+    @Test fun `ENCRYPTED room - wrong-room receiver matches no tag and never tries to decrypt`() {
         // Mallory is subscribed to a DIFFERENT room; her routing key is
         // unrelated to alice's room's routing key.
         val alice = newIdentity()
@@ -178,7 +178,7 @@ class RoomEndToEndIntegrationTest {
             "mallory's room key produces a different tag; matcher correctly drops")
     }
 
-    @Test fun `ENCRYPTED room — relay tampering content ciphertext is rejected at recipient sig check`() {
+    @Test fun `ENCRYPTED room - relay tampering content ciphertext is rejected at recipient sig check`() {
         val alice = newIdentity()
         val bob = newIdentity()
         val roomSeed = ByteArray(64) { it.toByte() }

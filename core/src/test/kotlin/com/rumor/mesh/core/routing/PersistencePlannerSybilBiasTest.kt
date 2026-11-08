@@ -134,7 +134,7 @@ class PersistencePlannerSybilBiasTest {
     }
 
     @Test
-    fun `a sybil anchor does not out-rank an honest anchor — it dilutes it`() {
+    fun `a sybil anchor does not out-rank an honest anchor - it dilutes it`() {
         // The realistic shape: one honest anchor (anchors are the only nodes
         // reliably in the view at all — see the population caveat) plus a sybil
         // also declaring FREE, over the same ring of recently-pulsed phones.
@@ -194,7 +194,7 @@ class PersistencePlannerSybilBiasTest {
     }
 
     @Test
-    fun `an unreciprocated adjacency claim is enough — the sybil need never have met anyone`() {
+    fun `an unreciprocated adjacency claim is enough - the sybil need never have met anyone`() {
         // MeshViewTracker.assembleView keeps edge (x -> n) whenever n is a known
         // node; it never checks that n also named x. So "I am adjacent to all 20 of
         // you" is accepted from a node that has never been in radio range of any of

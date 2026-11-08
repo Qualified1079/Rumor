@@ -23,7 +23,7 @@ class EdgeCreditScenarioTest {
     private val honestPath = listOf("victim", "honestFriend", "goodPerson")
 
     @Test
-    fun `Ostra localizes the damage — the attack edge exhausts, honest edges keep delivering`() {
+    fun `Ostra localizes the damage - the attack edge exhausts, honest edges keep delivering`() {
         val ledger = EdgeCreditLedger(initialCredit = CREDIT)
 
         // The victim marks sybil spam as it arrives. Each mark debits the shared

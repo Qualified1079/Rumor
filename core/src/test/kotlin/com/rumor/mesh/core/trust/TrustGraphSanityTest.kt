@@ -25,7 +25,7 @@ class TrustGraphSanityTest {
     )
 
     @Test
-    fun `the block test is not vacuous — WITHOUT a block the sybils really are present`() {
+    fun `the block test is not vacuous - WITHOUT a block the sybils really are present`() {
         // The companion "block-the-signer" assertion is only meaningful if the
         // sybils were admitted in the first place. Pin that they are.
         val noBlock = TrustGraph.frontier("me", vouches, hops = 3)

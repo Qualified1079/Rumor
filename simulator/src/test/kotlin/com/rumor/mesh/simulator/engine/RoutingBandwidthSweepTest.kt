@@ -255,7 +255,7 @@ class RoutingBandwidthSweepTest {
     }
 
     @Test
-    fun `chain sweep — bandwidth win grows with bystanders, naive stays broken`() {
+    fun `chain sweep - bandwidth win grows with bystanders, naive stays broken`() {
         println("== chain-with-bypass (mid relay killed), ideal crumbs ==")
         println("hops lv | " + schemes.joinToString("") { it.name.padEnd(11) })
         for (hops in listOf(6, 12, 24)) for (leaves in listOf(1, 3)) {

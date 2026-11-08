@@ -85,7 +85,7 @@ class RoomTagMatcherTest {
 
     // ── Mixed and edge cases ──────────────────────────────────────────────────
 
-    @Test fun `mixed subscriptions — OPEN match wins on cheaper path first`() {
+    @Test fun `mixed subscriptions - OPEN match wins on cheaper path first`() {
         // Sanity: OPEN check runs before ENCRYPTED, so an inbound
         // tag that happens to match an OPEN sub gets reported as
         // OPEN even if an encrypted sub coincidentally exists.
@@ -122,7 +122,7 @@ class RoomTagMatcherTest {
         assertNull(result)
     }
 
-    @Test fun `multiple open subscriptions — only the matching one wins`() {
+    @Test fun `multiple open subscriptions - only the matching one wins`() {
         val tag = RoomRoutingTag.openRoomTag("room-c")
         val result = RoomTagMatcher.match(
             inboundTag = tag,
@@ -134,7 +134,7 @@ class RoomTagMatcherTest {
         assertEquals("room-c", result.roomId)
     }
 
-    @Test fun `multiple encrypted subscriptions — only the matching one wins`() {
+    @Test fun `multiple encrypted subscriptions - only the matching one wins`() {
         val subs = listOf("a", "b", "c", "d").map { encryptedSub(it) }
         val target = subs[2]  // 'c'
         val tag = RoomRoutingTag.encryptedRoomTag(target.routingKey, "msg-7")

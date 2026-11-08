@@ -59,7 +59,7 @@ class RoomRoutingTagExtTest {
         assertNull(m.ext)
     }
 
-    @Test fun `wire format pin — rt is a JsonPrimitive string in ext`() {
+    @Test fun `wire format pin - rt is a JsonPrimitive string in ext`() {
         val m = blank().withRoomRoutingTag("foo")
         val raw = m.ext?.get("rt")
         assertTrue(raw is JsonPrimitive, "rt must be a JSON string primitive on the wire")

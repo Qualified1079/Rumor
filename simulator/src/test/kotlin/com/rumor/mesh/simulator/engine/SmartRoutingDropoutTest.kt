@@ -63,7 +63,7 @@ class SmartRoutingDropoutTest {
     private data class Arm(val delivered: Boolean, val touched: Int)
 
     @Test
-    fun `mid-path dropout — flood and crumb-diverse routing deliver, a single stale crumb strands`() = runBlocking<Unit> {
+    fun `mid-path dropout - flood and crumb-diverse routing deliver, a single stale crumb strands`() = runBlocking<Unit> {
         val flood = run(Crumbs.NONE)
         val single = run(Crumbs.SINGLE)
         val diverse = run(Crumbs.DIVERSE)

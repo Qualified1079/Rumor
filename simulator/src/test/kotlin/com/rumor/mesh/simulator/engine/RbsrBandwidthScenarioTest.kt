@@ -101,7 +101,7 @@ class RbsrBandwidthScenarioTest {
     }
 
     @Test
-    fun `crossover sweep — informational, picks the adaptive threshold`() = runBlocking {
+    fun `crossover sweep - informational, picks the adaptive threshold`() = runBlocking {
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         val rng = Random(99)
         println("O42 crossover sweep (small delta, bloom@0.01% FP):")

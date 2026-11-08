@@ -44,7 +44,7 @@ import kotlin.test.assertTrue
 class Ed25519AsX25519RoundtripTest {
 
     @Test
-    fun `primitive gap — raw Ed25519 bytes through x25519Agreement do NOT round-trip`() {
+    fun `primitive gap - raw Ed25519 bytes through x25519Agreement do NOT round-trip`() {
         // Pinning the underlying primitive's curve-specific behaviour. This is
         // not a bug in `x25519Agreement` — it's working as specified, treating
         // every input as a Montgomery x-coordinate. The pin protects against a
@@ -71,7 +71,7 @@ class Ed25519AsX25519RoundtripTest {
     }
 
     @Test
-    fun `wired fix — Ed25519 identities round-trip through the conversion wrappers`() {
+    fun `wired fix - Ed25519 identities round-trip through the conversion wrappers`() {
         // The compose-side and decrypt-side paths in production go through these
         // two wrappers. Verifying they produce matching shared secrets at the
         // CryptoManager level proves the DM path will decrypt for real Ed25519
@@ -107,7 +107,7 @@ class Ed25519AsX25519RoundtripTest {
     }
 
     @Test
-    fun `same-curve sanity — two X25519 identities round-trip cleanly`() {
+    fun `same-curve sanity - two X25519 identities round-trip cleanly`() {
         // Control test: when both sides use genuine X25519 keypairs (not
         // Ed25519 bytes misinterpreted), the DH agreement matches and AEAD
         // round-trips. Confirms the primitive itself isn't broken.

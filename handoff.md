@@ -102,29 +102,29 @@ and re-making mistakes this project has already paid for.*
   suite *and* my own teeth checks, because the tests only probed the gates I had
   thought of.
 
-### Build in a cloud container (none of this is in the repo)
+### Build in a cloud container → `scripts/cloud-build.sh`
 
-The older handoffs' `JAVA_HOME=/home/user/jdk17` does not exist here.
+```
+scripts/cloud-build.sh :core:test :node:test :simulator:test --continue
+```
 
-- **No JDK 17 and no Android SDK preinstalled.** Fetch Temurin 17 to the session
-  scratchpad. **`:app` cannot be compiled or tested in these containers at all**
-  — hand-review it and say so; CI is the gate.
-- `gradle.properties` sets `file.encoding` but **not `sun.jnu.encoding`**, and
-  `RbsrBandwidthScenarioTest` has an **em-dash in a test method name**, so its
-  class-file path is unwritable under a POSIX locale and the whole `:simulator`
-  test compile dies with `InvalidPathException`. Needs `LANG=C.utf8` (that exact
-  spelling) **plus** `-Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8
-  -Dsun.jnu.encoding=UTF-8"`, and `-Dkotlin.compiler.execution.strategy=in-process`.
-- Maven Central intermittently **429s** the shared proxy IP (2026-11-06: `curl`
-  429'd too — Google's mirror `maven-central.storage-download.googleapis.com/maven2`
-  answered; add it via a scratchpad `--init-script` as below). Older note: `curl` to the
-  same URL returned 200. Work around by curl-prefetching into `~/.m2` behind a
-  scoped `--init-script` adding `mavenLocal()` to
-  `dependencyResolutionManagement` (the project sets `FAIL_ON_PROJECT_REPOS`, so
-  a project-level `repositories {}` block is rejected).
-- **`LanLivenessValidationTest` / `LanMeshHarnessTest` are load-flaky** (real
-  sockets, 12–52 s each). Failing under the full suite but passing in isolation
-  is the known signature, not a regression — see O208.
+It fetches Temurin 17 (the toolchain pins 17; containers ship 21), forces a UTF-8
+locale, resolves through Google's Maven Central mirror (Central returns HTTP 429 to
+the shared egress IP, even for `curl`) via a throwaway init script, and finishes
+with `scripts/junit-summary.py`: per-module totals plus skipped tests and classes
+that ran zero tests — read that, not just `BUILD SUCCESSFUL`.
+
+- **`:app` cannot be compiled or tested in these containers** (no Android SDK) —
+  hand-review it and say so.
+- The POSIX-locale compile failure is fixed at the source (2026-11-08): test names
+  used em dashes, which ended up in class-file names nothing could write under
+  `LANG=C`. They're ASCII now and `AsciiTestNamesTest` keeps them that way. (An
+  attempted `sun.jnu.encoding` JVM flag did NOT fix it — Gradle's own file hashing
+  still failed.)
+- **Load-flaky under the full parallel `:simulator` suite:** `LanLivenessValidationTest`,
+  `LanMeshHarnessTest` (real sockets, 12–52 s each) and once
+  `TransferAssemblerHardeningTest`. Red under the full suite but green alone is the
+  known signature, not a regression — see O208.
 
 ### Build + device testing on the user's Windows machine (2026-10-11)
 

@@ -77,7 +77,7 @@ class SchedulerTest {
     }
 
     @Test
-    fun `drr interleaves senders — bob not starved by alice`() {
+    fun `drr interleaves senders - bob not starved by alice`() {
         // 100 large alice messages vs 1 bob message; bob should be served before
         // all alice messages are exhausted.
         val s = Scheduler(quantumBytes = 1_000)
@@ -108,7 +108,7 @@ class SchedulerTest {
     }
 
     @Test
-    fun `deficit carries across rounds — large message gets through eventually`() {
+    fun `deficit carries across rounds - large message gets through eventually`() {
         // One quantum = 1000 bytes. Large message is 3000 bytes — needs 3 rounds.
         // Pair it with tiny messages from same sender.
         val s = Scheduler(quantumBytes = 1_000)

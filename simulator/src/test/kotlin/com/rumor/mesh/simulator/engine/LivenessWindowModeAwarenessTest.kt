@@ -83,7 +83,7 @@ class LivenessWindowModeAwarenessTest {
     }
 
     @Test
-    fun `the window VALUE is what drives the outcome — pinning the pre-O205 30s re-breaks it`() = runBlocking<Unit> {
+    fun `the window VALUE is what drives the outcome - pinning the pre-O205 30s re-breaks it`() = runBlocking<Unit> {
         // Negative control for the test above. MOBILE-vs-FREE differ in more than the
         // window (gossip cadence, scan power, storage boost…), so "MOBILE doesn't
         // flood" alone does not prove the WINDOW is the cause. Here the mode is held
