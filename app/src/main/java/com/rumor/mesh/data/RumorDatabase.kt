@@ -42,6 +42,8 @@ import com.rumor.mesh.BuildConfig
         FilterSubscriptionEntity::class,
         ScheduledMessageEntity::class,
         RoomSubscriptionEntity::class,
+        RoomEntity::class,
+        RoomRosterEntity::class,
     ],
     // v5: added RouteEntity.failureCount for O3 reliability-aware ranking.
     // v6: added KeywordFilterListEntity + FilterSubscriptionEntity for O67
@@ -61,8 +63,10 @@ import com.rumor.mesh.BuildConfig
     // v12: added MessageEntity.trustLevel (O162) — it is derived at receive and
     //      unrecoverable after reload; without the column every stored message
     //      came back VERIFIED, so a BRIDGED message became re-relayable.
+    // v13: added RoomEntity + RoomRosterEntity (O187) — room metadata and the
+    //      moderator/member/ban roster RoomAuthorityResolver reads.
     // Dev uses fallbackToDestructiveMigration so no migration code needed.
-    version = 12,
+    version = 13,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -80,6 +84,7 @@ abstract class RumorDatabase : RoomDatabase() {
     abstract fun filterSubscriptionDao(): FilterSubscriptionDao
     abstract fun scheduledMessageDao(): ScheduledMessageDao
     abstract fun roomSubscriptionDao(): RoomSubscriptionDao
+    abstract fun roomDao(): RoomDao
 
     companion object {
         private const val DB_NAME = "rumor.db"

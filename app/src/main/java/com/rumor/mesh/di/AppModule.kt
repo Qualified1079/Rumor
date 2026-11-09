@@ -152,6 +152,11 @@ val appModule = module {
     single<com.rumor.mesh.core.data.RoomSubscriptionRepository> {
         com.rumor.mesh.data.adapter.RoomSubscriptionRepositoryAdapter(get())
     }
+    // O187 room metadata + roster, and the O89 authority provider that reads it.
+    // The resolver's per-message runBlocking reads are O185's to replace.
+    single { get<RumorDatabase>().roomDao() }
+    single<com.rumor.mesh.core.data.RoomRepository> { com.rumor.mesh.data.adapter.RoomRepositoryAdapter(get()) }
+    single<GossipEngine.RoomAuthorityProvider> { com.rumor.mesh.core.protocol.RoomAuthorityResolver(get()) }
 
     // O79 room-subscription provider — bridges the persistent
     // RoomSubscriptionRepository to the synchronous
@@ -189,7 +194,7 @@ val appModule = module {
     }
     // O98 MeshView substrate — populated from inbound SELF_PRESENCE beacons; feeds the persistence planner.
     single { com.rumor.mesh.core.routing.MeshViewTracker() }
-    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), canaryMetrics = get(), dmEnvelopeRegistry = get(), roomSubscriptionProvider = get<GossipEngine.RoomSubscriptionProvider>(), meshView = get<com.rumor.mesh.core.routing.MeshViewTracker>(), modeState = get<ModeState>()) }
+    single { GossipEngine(get(), get(), get<IdentityProvider>(), get(), get(), get(), get(), get(), get(), breadcrumbs = get<BreadcrumbCache>(), canaryMetrics = get(), dmEnvelopeRegistry = get(), roomSubscriptionProvider = get<GossipEngine.RoomSubscriptionProvider>(), meshView = get<com.rumor.mesh.core.routing.MeshViewTracker>(), modeState = get<ModeState>(), roomAuthorityProvider = get<GossipEngine.RoomAuthorityProvider>(), roomRepo = get<com.rumor.mesh.core.data.RoomRepository>()) }
 
     // ── Transfer layer ────────────────────────────────────────────────────────
     single { TransferAssembler(get(), get(), get()) }
