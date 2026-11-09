@@ -23,9 +23,11 @@ import com.rumor.mesh.core.platform.ConcurrentMap
  */
 class BreadcrumbCache(
     private val breadcrumbRepo: BreadcrumbRepository,
+    // Injected so the owner (MeshGraph) controls the lifetime; the default is
+    // process-lived, which is only right for a single app-lifetime instance.
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
 ) {
     private val TAG = "BreadcrumbCache"
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /**
      * In-memory mirror of the persistent breadcrumb store, keyed by target

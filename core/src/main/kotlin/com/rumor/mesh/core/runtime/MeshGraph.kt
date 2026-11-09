@@ -35,6 +35,7 @@ import com.rumor.mesh.core.transfer.TransferSender
 import com.rumor.mesh.plugin.DmEnvelopeRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 
 /** O252 — the storage a host supplies to [MeshGraph]: Room on Android, in-memory elsewhere. */
@@ -78,24 +79,26 @@ class MeshGraph(
     relayBatchMinWindowMs: Long = RelayBatcher.MIN_WINDOW_MS,
     relayBatchSpreadMs: Long = RelayBatcher.SPREAD_MS,
 ) {
+    // Every collaborator's background work (prune loops, async upserts, transfer
+    // watchdogs) runs in a child of the host's scope, so cancelling that scope
+    // stops the whole graph. IO dispatcher kept from when each class owned a
+    // process-lived scope of its own — and could therefore never be stopped.
+    private val ioScope = CoroutineScope(scope.coroutineContext + Dispatchers.IO + SupervisorJob(scope.coroutineContext[Job]))
+
     val duplicateFilter = DuplicateFilter()
     val messageStore = MessageStore(repos.messages, repos.contacts, duplicateFilter, modeState, clock)
     val onlineStatusTracker = OnlineStatusTracker(clock)
-    val topologyTracker = TopologyTracker(repos.routes, neighborStore)
-    val breadcrumbs = BreadcrumbCache(repos.breadcrumbs)
+    val topologyTracker = TopologyTracker(repos.routes, neighborStore, ioScope)
+    val breadcrumbs = BreadcrumbCache(repos.breadcrumbs, ioScope)
     val meshView = MeshViewTracker(clock = clock)
     val scheduler = Scheduler(modeState = modeState)
-    // Capture the provider, not `this`: BlockManager runs on its own never-
-    // cancelled scope (O229), so a lambda over the graph pinned every engine
-    // and message store ever built — the sweep scenarios OOM'd on it.
-    val blockManager = identityProvider.let { ip ->
-        BlockManager(
-            repos.blockEntries,
-            repos.subscribedBlocklists,
-            repos.blocklistEntries,
-            localUserId = { ip.identity.value?.userId },
-        )
-    }
+    val blockManager = BlockManager(
+        repos.blockEntries,
+        repos.subscribedBlocklists,
+        repos.blocklistEntries,
+        localUserId = { identityProvider.identity.value?.userId },
+        scope = ioScope,
+    )
     val roomSubscriptionProvider = RepoRoomSubscriptionProvider(repos.roomSubscriptions, identityProvider)
     val roomAuthority = RoomAuthorityResolver(repos.rooms)
     val canaryMetrics = CanaryMetrics()
@@ -124,6 +127,6 @@ class MeshGraph(
         modeState = modeState,
     )
 
-    val transferSender = TransferSender(gossipEngine, identityProvider, repos.transfers, repos.chunks)
-    val transferAssembler = TransferAssembler(gossipEngine, repos.transfers, repos.chunks)
+    val transferSender = TransferSender(gossipEngine, identityProvider, repos.transfers, repos.chunks, ioScope)
+    val transferAssembler = TransferAssembler(gossipEngine, repos.transfers, repos.chunks, ioScope)
 }

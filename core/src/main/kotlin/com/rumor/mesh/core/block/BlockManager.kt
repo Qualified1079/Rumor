@@ -36,9 +36,11 @@ class BlockManager(
      * unknown (simulator/tests) — a null provider disables the guard harmlessly.
      */
     private val localUserId: () -> String? = { null },
+    // Injected so the owner (MeshGraph) controls the lifetime; the default is
+    // process-lived, which is only right for a single app-lifetime instance.
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
 ) {
     private val TAG = "BlockManager"
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     @kotlin.concurrent.Volatile private var blockedSet: Set<String> = emptySet()
 

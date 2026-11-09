@@ -46,8 +46,10 @@ private val STALE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000L
 class TopologyTracker(
     private val routeRepo: RouteRepository,
     private val neighborStore: NeighborStore = NeighborStore(),
+    // Injected so the owner (MeshGraph) controls the lifetime; the default is
+    // process-lived, which is only right for a single app-lifetime instance.
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /**
      * Record a completed exchange.
