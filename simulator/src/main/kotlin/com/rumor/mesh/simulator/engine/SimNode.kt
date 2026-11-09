@@ -1,18 +1,8 @@
 package com.rumor.mesh.simulator.engine
 
-import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.policy.PermissiveInboxFilter
-import com.rumor.mesh.core.protocol.DuplicateFilter
-import com.rumor.mesh.core.protocol.GossipEngine
-import com.rumor.mesh.core.protocol.MessageStore
 import com.rumor.mesh.core.protocol.PeerExchangeResult
-import com.rumor.mesh.core.routing.BreadcrumbCache
-import com.rumor.mesh.core.routing.OnlineStatusTracker
-import com.rumor.mesh.core.routing.TopologyTracker
-import com.rumor.mesh.core.scheduler.Scheduler
 import com.rumor.mesh.core.transfer.AssembledTransfer
-import com.rumor.mesh.core.transfer.TransferAssembler
-import com.rumor.mesh.core.transfer.TransferSender
 import com.rumor.mesh.core.data.memory.InMemoryBlockEntryRepository
 import com.rumor.mesh.core.data.memory.InMemoryBlocklistEntryRepository
 import com.rumor.mesh.core.data.memory.InMemoryBreadcrumbRepository
@@ -22,6 +12,10 @@ import com.rumor.mesh.core.data.memory.InMemoryMessageRepository
 import com.rumor.mesh.core.data.memory.InMemoryRouteRepository
 import com.rumor.mesh.core.data.memory.InMemorySubscribedBlocklistRepository
 import com.rumor.mesh.core.data.memory.InMemoryTransferRepository
+import com.rumor.mesh.core.data.memory.InMemoryRoomRepository
+import com.rumor.mesh.core.data.memory.InMemoryRoomSubscriptionRepository
+import com.rumor.mesh.core.runtime.MeshGraph
+import com.rumor.mesh.core.runtime.MeshRepositories
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -94,76 +88,51 @@ class SimNode(
 
     val contactRepo             = InMemoryContactRepository()
     internal val messageRepo    = InMemoryMessageRepository()
-    private val routeRepo       = InMemoryRouteRepository()
-    private val breadcrumbRepo  = InMemoryBreadcrumbRepository()
     /** Internal (not private) so transfer-layer scenarios can assert on receiver state. */
     internal val transferRepo   = InMemoryTransferRepository()
     internal val chunkRepo      = InMemoryChunkRepository()
-    private val blockEntryRepo  = InMemoryBlockEntryRepository()
     /** O79 — per-node room-subscription store, in-memory. Exposed so scenarios can add subscriptions. */
-    val roomSubscriptionRepo    = com.rumor.mesh.core.data.memory.InMemoryRoomSubscriptionRepository()
-    private val subscribedRepo  = InMemorySubscribedBlocklistRepository()
-    private val blocklistRepo   = InMemoryBlocklistEntryRepository()
+    val roomSubscriptionRepo    = InMemoryRoomSubscriptionRepository()
+    /** O187 — room metadata + roster, as on the phone (O252: same graph everywhere). */
+    val roomRepo                = InMemoryRoomRepository()
 
-    private val duplicateFilter = DuplicateFilter()
-    private val messageStore    = MessageStore(messageRepo, contactRepo, duplicateFilter, clock = clock)
-    internal val onlineTracker  = OnlineStatusTracker()
-    private val topoTracker     = TopologyTracker(routeRepo)
-    internal val breadcrumbs    = BreadcrumbCache(breadcrumbRepo)
-    /** O98 MeshView substrate — populated from inbound SELF_PRESENCE beacons. */
-    val meshView               = com.rumor.mesh.core.routing.MeshViewTracker(clock = clock)
-    private val scheduler       = Scheduler()
-    private val blockManager    = BlockManager(blockEntryRepo, subscribedRepo, blocklistRepo)
-    private val inboxFilter     = inboxFilterOverride ?: PermissiveInboxFilter()
-
-    /**
-     * O79 receive-side subscription provider for ROOM_MESSAGE dispatch.
-     * Reads from [roomSubscriptionRepo] on every inbound room message;
-     * O91 (closed): localX25519StaticPrivate now derives the X25519 static
-     * from the sim identity's Ed25519 seed so ENCRYPTED rooms decrypt
-     * end-to-end in scenarios. Engine zeros the returned bytes after use.
-     */
-    private val roomSubscriptionProvider = object : GossipEngine.RoomSubscriptionProvider {
-        override fun openRoomIds(): List<String> = kotlinx.coroutines.runBlocking {
-            roomSubscriptionRepo.getAll()
-                .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.OPEN }
-                .map { it.roomId }
-        }
-        override fun encryptedRoomSubscriptions(): List<com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription> = kotlinx.coroutines.runBlocking {
-            roomSubscriptionRepo.getAll()
-                .filter { it.mode == com.rumor.mesh.core.data.RoomSubscriptionMode.ENCRYPTED }
-                .map { com.rumor.mesh.core.protocol.RoomTagMatcher.EncryptedRoomSubscription(it.roomId, it.routingKey) }
-        }
-        override fun localX25519StaticPrivate(): ByteArray? {
-            val seed = identityProvider.identity.value?.privateKeyBytes ?: return null
-            return com.rumor.mesh.core.crypto.CryptoManager.ed25519ToX25519PrivateSeed(seed)
-        }
-    }
-
-    val gossipEngine = GossipEngine(
-        messageStore    = messageStore,
-        duplicateFilter = duplicateFilter,
+    // O252: the graph is built by :core's MeshGraph, exactly as on the phone and :node.
+    private val graph = MeshGraph(
+        repos = MeshRepositories(
+            messages = messageRepo,
+            contacts = contactRepo,
+            routes = InMemoryRouteRepository(),
+            breadcrumbs = InMemoryBreadcrumbRepository(),
+            transfers = transferRepo,
+            chunks = chunkRepo,
+            blockEntries = InMemoryBlockEntryRepository(),
+            subscribedBlocklists = InMemorySubscribedBlocklistRepository(),
+            blocklistEntries = InMemoryBlocklistEntryRepository(),
+            roomSubscriptions = roomSubscriptionRepo,
+            rooms = roomRepo,
+        ),
         identityProvider = identityProvider,
-        onlineStatusTracker = onlineTracker,
-        topologyTracker = topoTracker,
-        contactRepo     = contactRepo,
-        blockManager    = blockManager,
-        scheduler       = scheduler,
-        inboxFilter     = inboxFilter,
-        breadcrumbs     = if (useBreadcrumbs) breadcrumbs else null,
-        scope           = scope,
+        modeState = modeState,
+        inboxFilter = inboxFilterOverride ?: PermissiveInboxFilter(),
+        scope = scope,
+        clock = clock,
+        breadcrumbRouting = useBreadcrumbs,
         // Flush relayed messages immediately — real wall-clock delay (100–500 ms)
         // would equal 1–5 sim-seconds at speedMult=10, breaking multi-hop propagation.
         relayBatchMinWindowMs = 1L,
-        relayBatchSpreadMs    = 1L,
-        clock           = clock,
-        roomSubscriptionProvider = roomSubscriptionProvider,
-        meshView        = meshView,
-        modeState       = modeState,
+        relayBatchSpreadMs = 1L,
     )
 
-    val transferSender = TransferSender(gossipEngine, identityProvider, transferRepo, chunkRepo)
-    val transferAssembler = TransferAssembler(gossipEngine, transferRepo, chunkRepo)
+    private val duplicateFilter = graph.duplicateFilter
+    internal val onlineTracker  = graph.onlineStatusTracker
+    internal val breadcrumbs    = graph.breadcrumbs
+    /** O98 MeshView substrate — populated from inbound SELF_PRESENCE beacons. */
+    val meshView                = graph.meshView
+    private val scheduler       = graph.scheduler
+
+    val gossipEngine = graph.gossipEngine
+    val transferSender = graph.transferSender
+    val transferAssembler = graph.transferAssembler
 
     /** Count of fully-reassembled inbound transfers, for chunked-delivery assertions. */
     private val _reassembledTransfers = MutableStateFlow(0L)

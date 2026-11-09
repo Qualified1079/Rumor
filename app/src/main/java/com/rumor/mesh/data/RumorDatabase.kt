@@ -14,7 +14,7 @@ import com.rumor.mesh.BuildConfig
  *
  * `:simulator` parallels this surface with `InMemoryRepos.kt`; both target the
  * same `core/data/…Repository` contracts. When a repository contract gains a
- * method, both impls move together — see CLAUDE.md §DI wiring.
+ * method, both impls move together — see CLAUDE.md §Host wiring.
  *
  * **Versioning policy.** Every entity-shape change bumps [version] and gets a
  * one-line history note above. Debug builds use `fallbackToDestructiveMigration`

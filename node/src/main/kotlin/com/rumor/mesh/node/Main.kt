@@ -1,6 +1,5 @@
 package com.rumor.mesh.node
 
-import com.rumor.mesh.core.block.BlockManager
 import com.rumor.mesh.core.crypto.CryptoManager
 import com.rumor.mesh.core.data.memory.InMemoryBlockEntryRepository
 import com.rumor.mesh.core.data.memory.InMemoryBlocklistEntryRepository
@@ -8,23 +7,18 @@ import com.rumor.mesh.core.data.memory.InMemoryBreadcrumbRepository
 import com.rumor.mesh.core.data.memory.InMemoryChunkRepository
 import com.rumor.mesh.core.data.memory.InMemoryContactRepository
 import com.rumor.mesh.core.data.memory.InMemoryMessageRepository
+import com.rumor.mesh.core.data.memory.InMemoryRoomRepository
+import com.rumor.mesh.core.data.memory.InMemoryRoomSubscriptionRepository
 import com.rumor.mesh.core.data.memory.InMemoryRouteRepository
 import com.rumor.mesh.core.data.memory.InMemorySubscribedBlocklistRepository
 import com.rumor.mesh.core.data.memory.InMemoryTransferRepository
 import com.rumor.mesh.core.logging.RumorLog
+import com.rumor.mesh.core.mode.FixedModeState
 import com.rumor.mesh.core.model.UserMode
 import com.rumor.mesh.core.policy.PermissiveInboxFilter
-import com.rumor.mesh.core.protocol.DuplicateFilter
-import com.rumor.mesh.core.protocol.GossipEngine
-import com.rumor.mesh.core.protocol.MessageStore
-import com.rumor.mesh.core.routing.BreadcrumbCache
-import com.rumor.mesh.core.routing.MeshViewTracker
-import com.rumor.mesh.core.routing.OnlineStatusTracker
-import com.rumor.mesh.core.routing.TopologyTracker
+import com.rumor.mesh.core.runtime.MeshGraph
+import com.rumor.mesh.core.runtime.MeshRepositories
 import com.rumor.mesh.core.runtime.MeshRuntime
-import com.rumor.mesh.core.scheduler.Scheduler
-import com.rumor.mesh.core.transfer.TransferAssembler
-import com.rumor.mesh.core.transfer.TransferSender
 import com.rumor.mesh.core.transport.lan.LanTransport
 import java.io.File
 import java.net.Inet4Address
@@ -65,38 +59,36 @@ fun main(args: Array<String>) {
     val identity = identityProvider.identity.value ?: error("identity init failed")
     println("rumor:node — userId ${identity.userId}")
 
-    // ── Engine graph (mirror of SimNode, wall-clock, real relay windows) ─────
+    // ── Engine graph — O252: built by :core's MeshGraph, same as the phone ────
     val contactRepo = InMemoryContactRepository()
     val messageRepo = InMemoryMessageRepository()
-    val duplicateFilter = DuplicateFilter()
-    val messageStore = MessageStore(messageRepo, contactRepo, duplicateFilter)
-    val onlineTracker = OnlineStatusTracker()
-    val meshView = MeshViewTracker()
+    val roomSubscriptionRepo = InMemoryRoomSubscriptionRepository()
+    val roomRepo = InMemoryRoomRepository()
     val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-
-    val gossipEngine = GossipEngine(
-        messageStore = messageStore,
-        duplicateFilter = duplicateFilter,
-        identityProvider = identityProvider,
-        onlineStatusTracker = onlineTracker,
-        topologyTracker = TopologyTracker(InMemoryRouteRepository()),
-        contactRepo = contactRepo,
-        blockManager = BlockManager(
-            InMemoryBlockEntryRepository(),
-            InMemorySubscribedBlocklistRepository(),
-            InMemoryBlocklistEntryRepository(),
+    // A wall-powered laptop is a static anchor.
+    val modeState = FixedModeState(UserMode.STATIC)
+    val graph = MeshGraph(
+        repos = MeshRepositories(
+            messages = messageRepo,
+            contacts = contactRepo,
+            routes = InMemoryRouteRepository(),
+            breadcrumbs = InMemoryBreadcrumbRepository(),
+            transfers = InMemoryTransferRepository(),
+            chunks = InMemoryChunkRepository(),
+            blockEntries = InMemoryBlockEntryRepository(),
+            subscribedBlocklists = InMemorySubscribedBlocklistRepository(),
+            blocklistEntries = InMemoryBlocklistEntryRepository(),
+            roomSubscriptions = roomSubscriptionRepo,
+            rooms = roomRepo,
         ),
-        scheduler = Scheduler(),
+        identityProvider = identityProvider,
+        modeState = modeState,
         inboxFilter = PermissiveInboxFilter(),
-        breadcrumbs = BreadcrumbCache(InMemoryBreadcrumbRepository()),
         scope = scope,
-        meshView = meshView,
     )
-    // Full peer for chunked transfers: sender + assembler (ctor subscribes).
-    val transferRepo = InMemoryTransferRepository()
-    val chunkRepo = InMemoryChunkRepository()
-    TransferSender(gossipEngine, identityProvider, transferRepo, chunkRepo)
-    TransferAssembler(gossipEngine, transferRepo, chunkRepo)
+    val gossipEngine = graph.gossipEngine
+    val onlineTracker = graph.onlineStatusTracker
+    val meshView = graph.meshView
 
     // ── LAN transport (the node's only transport) ────────────────────────────
     val bindAddress = opts.bind?.let { InetAddress.getByName(it) } ?: pickLanAddress()
@@ -135,8 +127,8 @@ fun main(args: Array<String>) {
         contactRepo = contactRepo,
         messageRepo = messageRepo,
         meshView = meshView,
-        // A wall-powered laptop is a static anchor.
-        modeProvider = { UserMode.STATIC },
+        modeProvider = { modeState.mode.value },
+        beaconIntervalMsProvider = { modeState.envelope.presenceBeaconIntervalMs },
         hlcStore = FileHlcStore(dataDir),
         incomingSink = { msg ->
             status.record("RECV ${msg.type} from ${msg.senderId.take(12)}…")

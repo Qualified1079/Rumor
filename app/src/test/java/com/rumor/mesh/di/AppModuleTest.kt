@@ -1,7 +1,6 @@
 package com.rumor.mesh.di
 
 import android.content.Context
-import com.rumor.mesh.core.protocol.CanaryMetrics
 import kotlinx.coroutines.CoroutineScope
 import org.junit.Test
 import org.koin.core.annotation.KoinExperimentalAPI
@@ -18,8 +17,7 @@ import org.koin.test.verify.verify
  * [extraTypes] lists types that Koin can't see: those supplied via
  * Android-specific helpers like `androidContext()` (Context), plus constructor
  * params that have Kotlin default values the DI graph deliberately doesn't
- * override (GossipEngine's CanaryMetrics, CoroutineScope, and the two Long
- * relay-batch windows). verify() doesn't model default params, so we declare
+ * override (MeshGraph's scope, relay-batch windows and breadcrumbRouting). verify() doesn't model default params, so we declare
  * them here rather than binding scopes/primitives into Koin.
  */
 class AppModuleTest {
@@ -30,17 +28,14 @@ class AppModuleTest {
         appModule.verify(
             extraTypes = listOf(
                 Context::class,
-                CanaryMetrics::class,
+                // MeshGraph's defaulted host knobs (scope, relay windows,
+                // breadcrumbRouting) — deliberately not bound into Koin.
                 CoroutineScope::class,
                 Long::class,
-                // BlockManager's localUserId provider — supplied inside the
-                // single{} lambda from IdentityProvider, not resolved from graph.
+                Boolean::class,
+                // Defaulted Function0 params (e.g. OnlineStatusTracker's) that
+                // verify() inspects even though MeshGraph constructs the class.
                 Function0::class,
-                // Left at their null defaults until O187's Android half adds a
-                // Room-backed RoomRepository + RoomAuthorityResolver; null =
-                // ungoverned feed, lifecycle messages relayed but not tracked.
-                com.rumor.mesh.core.protocol.GossipEngine.RoomAuthorityProvider::class,
-                com.rumor.mesh.core.data.RoomRepository::class,
             ),
         )
     }

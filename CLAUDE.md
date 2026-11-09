@@ -35,17 +35,33 @@ Key invariants:
 - **Git (user directive 2026-07-19): commit and push directly to `main` — do NOT create a feature branch.** This overrides the default "branch first on the default branch" reflex. Force-push stays denied. *Exception, per-request:* for unattended/away-mode work the user may ask for a review branch instead; merge it promptly (fetch and compare first — `docs/MULTI_INSTANCE_COORDINATION.md`).
 - **Session state lives in `docs/handoff/`, one file per session; `handoff.md` lists them newest first** (§0 is the permanent canary note, §1 the orientation). Read the newest file before starting work: it carries the blocking user decisions and what's in flight. In a cloud container build with `scripts/cloud-build.sh` (JDK 17, Maven mirror, vacuous-suite summary); flaky tests are listed in §1.
 
-## DI (Koin) wiring
+## Host wiring — one engine graph, three hosts (O252)
 
-Single source of truth: `app/src/main/java/com/rumor/mesh/di/AppModule.kt`.
-Simulator uses constructor injection with in-memory repos (`simulator/…/data/InMemoryRepos.kt`).
+The engine graph (GossipEngine, MessageStore, Scheduler, BlockManager, trackers,
+transfer, room authority + subscriptions) is built in exactly one place:
+**`core/…/runtime/MeshGraph.kt`**. The three hosts — `AppModule` (Android/Koin),
+`SimNode` (simulator), `node/…/Main.kt` (headless) — construct a `MeshGraph` and
+nothing below it. They supply only:
+- **storage** — a `MeshRepositories` bundle (Room adapters on Android, `core/…/data/memory/InMemoryRepos.kt` elsewhere);
+- **platform hooks** — identity provider, `ModeState`, inbox filter, clock, scope, and the shared `NeighborStore`/`DmEnvelopeRegistry`;
+- **sim-only knobs** named for why they exist (relay windows, `breadcrumbRouting` for O29 A/B runs).
 
-When adding a new core class that needs to reach the app:
-1. Add `single { … }` to AppModule.
-2. Add an in-memory stub to `InMemoryRepos.kt` if the simulator needs it.
-3. If it's a new `ContactRepository`/`RouteRepository` method, update all four impls:
-   - `ContactRepositoryAdapter` / `RouteRepositoryAdapter` (Room)
-   - `InMemoryContactRepository` / `InMemoryRouteRepository` (simulator)
+Rules:
+1. **New engine dependency → add it to `MeshGraph`, never to a host.** If it needs
+   storage, add the repo to `MeshRepositories`; the compiler then forces all three
+   hosts to supply it — that's the point. Android exposes graph parts to ViewModels
+   as `single { get<MeshGraph>().x }`.
+2. **A host never calls an engine-graph constructor.** Building an engine by hand
+   in a host is how they drifted (self-block guard, mode boosts and all room
+   wiring were missing from sim/`:node` with nothing failing). Deliberately bare
+   engines are fine in *tests* and attack tools (`SybilDriver`) — they probe a
+   configuration, they don't stand for a host.
+3. **Host loops go through `MeshRuntime`** (presence, HLC, persistence, exchange
+   handling); a host adds only transports and its own UI.
+4. New repository method → update the Room adapter AND the in-memory impl in the
+   same commit (Room-only semantics need an `androidTest` parity test, like
+   `RoomRepositoryParityTest` — run it with `am instrument`, not
+   `connectedAndroidTest`, which uninstalls the app and its identity).
 
 ---
 

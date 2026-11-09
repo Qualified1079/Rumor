@@ -40,7 +40,7 @@ interface KeywordFilterListRepository {
  * immutable signed bytes); the two together form the publish/subscribe
  * stack for O67 keyword filtering. Three impls behind the contract:
  * Room adapter, simulator in-memory stub, and the test fakes — same shape
- * as every other repository (see CLAUDE.md §DI wiring).
+ * as every other repository (see CLAUDE.md §Host wiring).
  */
 interface FilterSubscriptionRepository {
     suspend fun upsert(sub: FilterSubscription)
