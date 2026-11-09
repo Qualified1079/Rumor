@@ -110,6 +110,8 @@ fun main(args: Array<String>) {
         )
     )
 
+    val nodeRooms = NodeRooms(gossipEngine, roomRepo, roomSubscriptionRepo, identity.userId)
+
     // ── Status page (localhost) ──────────────────────────────────────────────
     val status = StatusServer(
         port = opts.httpPort,
@@ -118,6 +120,7 @@ fun main(args: Array<String>) {
         peerCount = { lan.peerCount.value },
         storedMessages = { messageRepo.snapshot() },
         sendBroadcast = { text -> gossipEngine.composeBroadcast(text) != null },
+        rooms = nodeRooms,
     )
 
     // ── Host-agnostic runtime (the same one MeshService hosts) ───────────────
@@ -133,6 +136,7 @@ fun main(args: Array<String>) {
         incomingSink = { msg ->
             status.record("RECV ${msg.type} from ${msg.senderId.take(12)}…")
             status.tally(msg.id, msg.type.name, msg.senderId.take(8))
+            nodeRooms.onInbound(msg)
         },
         // LAN-only host: no P2P group to realize.
         backboneRealizer = {},
@@ -145,7 +149,7 @@ fun main(args: Array<String>) {
             runtime.onExchange(r, feedsCoordinator = false)
             status.record(
                 "EXCHANGE peer=${r.peerUserId.take(12)}… sent=${r.messagesSent} " +
-                    "recv=${r.messagesReceived} bytes=${r.bytesTransferred} ${r.durationMs}ms",
+                    "recv=${r.messagesReceived.size} bytes=${r.bytesTransferred} ${r.durationMs}ms",
             )
         }
     }

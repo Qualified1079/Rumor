@@ -19,6 +19,8 @@ import java.util.concurrent.ConcurrentLinkedDeque
  * GET  /        HTML status page (auto-refreshing)
  * GET  /status  plain-text one-liner (scriptable)
  * POST /send    form or raw body → composeBroadcast
+ * POST /act/<n> form fields → rooms action n (create/join/invite/post/act); plain-text reply
+ * GET  /rooms   plain-text room state (scriptable)
  */
 class StatusServer(
     private val port: Int,
@@ -27,6 +29,7 @@ class StatusServer(
     private val peerCount: () -> Int,
     private val storedMessages: () -> List<RumorMessage>,
     private val sendBroadcast: (String) -> Boolean,
+    private val rooms: NodeRooms,
 ) {
     /** Rolling operational event log (exchanges, inbox arrivals) — newest first. */
     val events = ConcurrentLinkedDeque<String>()
@@ -88,6 +91,32 @@ class StatusServer(
             ex.sendResponseHeaders(303, -1)
             ex.close()
         }
+        s.createContext("/act/") { ex ->
+            if (ex.requestMethod != "POST") {
+                ex.sendResponseHeaders(405, -1); return@createContext
+            }
+            val name = ex.requestURI.path.removePrefix("/act/")
+            val form = ex.requestBody.readBytes().decodeToString().split('&').filter { '=' in it }
+                .associate { kv -> kv.substringBefore('=') to URLDecoder.decode(kv.substringAfter('='), "UTF-8") }
+            val action = rooms.actions[name]
+            val reply = if (action == null) "unknown action $name" else
+                runCatching { kotlinx.coroutines.runBlocking { action(form) } }.getOrElse { "error: ${it.message}" }
+            record("ROOM $reply")
+            // Browsers (form posts) go back to the page; scripts get the reply.
+            if (ex.requestHeaders.getFirst("Accept")?.contains("text/html") == true) {
+                ex.responseHeaders.add("Location", "/")
+                ex.sendResponseHeaders(303, -1); ex.close()
+            } else {
+                val body = (reply + System.lineSeparator()).toByteArray()
+                ex.sendResponseHeaders(200, body.size.toLong())
+                ex.responseBody.use { it.write(body) }
+            }
+        }
+        s.createContext("/rooms") { ex ->
+            val body = kotlinx.coroutines.runBlocking { rooms.stateText() }.toByteArray()
+            ex.sendResponseHeaders(200, body.size.toLong())
+            ex.responseBody.use { it.write(body) }
+        }
         s.start()
         server = s
     }
@@ -128,6 +157,7 @@ class StatusServer(
 <div class=mono>id ${userId.take(16)}… &nbsp;|&nbsp; ${escape(lanInfo())} &nbsp;|&nbsp; peers: <b>${peerCount()}</b> &nbsp;|&nbsp; stored: ${storedMessages().size}</div>
 <h2>send broadcast</h2>
 <form method="post" action="/send"><input type="text" name="text" autofocus> <button>send</button></form>
+${kotlinx.coroutines.runBlocking { rooms.html(::escape) }}
 <h2>messages (newest 50)</h2>
 <table><tr><th>sent</th><th>sender</th><th>type</th><th>text</th></tr>
 $msgRows
