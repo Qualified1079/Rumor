@@ -51,14 +51,14 @@ interface MessageDao {
     """)
     fun observeAllDirect(userId: String, limit: Int = 500): Flow<List<MessageEntity>>
 
-    /** O92 reseed source: offer-eligible content only, freshest first. */
+    /** O92 reseed source: offer-eligible content only, freshest first. [types] is core's OFFERABLE_TYPES. */
     @Query("""
         SELECT * FROM messages
-        WHERE type IN ('BROADCAST', 'DIRECT', 'DIRECT_ACK') AND ttl > 0
+        WHERE type IN (:types) AND ttl > 0
         ORDER BY sentAtMs DESC
         LIMIT :limit
     """)
-    suspend fun offerable(limit: Int): List<MessageEntity>
+    suspend fun offerable(types: List<String>, limit: Int): List<MessageEntity>
 
     /** O92 dedup reseed source: recent ids across all types. */
     @Query("SELECT id FROM messages ORDER BY receivedAtMs DESC LIMIT :limit")

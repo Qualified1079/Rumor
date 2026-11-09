@@ -48,9 +48,8 @@ interface MessageRepository {
     suspend fun deleteByType(type: MessageType)
 
     /**
-     * Offer-eligible content for gossip reseed (O92): BROADCAST/DIRECT with
-     * hops left, freshest first. Excludes control/transfer/presence traffic —
-     * those are time-sensitive and re-offering a stale one would mislead peers.
+     * Offer-eligible content for gossip reseed (O92): [OFFERABLE_TYPES] with
+     * hops left, freshest first. Every store implements exactly that set.
      */
     suspend fun offerable(limit: Int): List<RumorMessage>
 
@@ -73,3 +72,26 @@ interface MessageRepository {
     fun observeUnread(userId: String): Flow<List<RumorMessage>>
     fun observeAllDirect(userId: String, limit: Int = 500): Flow<List<RumorMessage>>
 }
+
+/**
+ * Types the store re-offers to peers once the volatile scheduler has been drained
+ * (O92 backfill). One list for every store — the Room DAO takes it as a query
+ * parameter — so the two can't drift.
+ *
+ * Room lifecycle and room posts belong here: the scheduler's take() is
+ * destructive, so on a node with two peers whichever session ran first drained
+ * the relayed copy, and a type missing from this set then never reached the
+ * other peer (field-hit 2026-11-08: a ROOM_CREATE stopped one hop out on a
+ * three-node line while broadcasts crossed it). A roster change must reach
+ * members who were offline (O187). Presence, transfer and other control traffic
+ * stay out: time-sensitive, and a stale re-offer misleads.
+ */
+val OFFERABLE_TYPES: Set<com.rumor.mesh.core.model.MessageType> = setOf(
+    com.rumor.mesh.core.model.MessageType.BROADCAST,
+    com.rumor.mesh.core.model.MessageType.DIRECT,
+    com.rumor.mesh.core.model.MessageType.DIRECT_ACK,
+    com.rumor.mesh.core.model.MessageType.ROOM_CREATE,
+    com.rumor.mesh.core.model.MessageType.ROOM_INVITE,
+    com.rumor.mesh.core.model.MessageType.ROOM_ACTION,
+    com.rumor.mesh.core.model.MessageType.ROOM_MESSAGE,
+)

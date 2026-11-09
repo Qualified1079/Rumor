@@ -27,7 +27,7 @@ class MessageRepositoryAdapter(private val dao: MessageDao) : MessageRepository 
     override suspend fun deleteByType(type: MessageType) = dao.deleteByType(type)
 
     override suspend fun offerable(limit: Int): List<RumorMessage> =
-        dao.offerable(limit).map(MessageEntity::toMessage)
+        dao.offerable(com.rumor.mesh.core.data.OFFERABLE_TYPES.map { it.name }, limit).map(MessageEntity::toMessage)
     override suspend fun knownIds(limit: Int): List<String> = dao.knownIds(limit)
     override suspend fun rbsrItems(limit: Int): List<RbsrItem> =
         dao.rbsrItems(limit).map { RbsrItem(it.sentAtMs, it.id) }
