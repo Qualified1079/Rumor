@@ -7,6 +7,9 @@ bodies, docs/COMPLETED_GAPS.md archive) changed together, by one tool.
   scripts/backlog.py close O123 --title T --notes N      close a row as the next G
   scripts/backlog.py close O123 --title T --notes N --remaining-title T2 --remaining-body B2
                                              close half a row; O123 stays open, retitled
+  scripts/backlog.py sweep [--dry-run] [--resolution R]
+                                             close every index row ticked `| O123 [x] |`
+  scripts/backlog.py boxes                   add `[ ]` to any open non-decision index row lacking one
   scripts/backlog.py counts                  regenerate the counts block in CLAUDE.md
   scripts/backlog.py check                   consistency check (also run by BacklogConsistencyTest)
 
@@ -32,9 +35,18 @@ GROW = re.compile(r"^\| G(\d+) \|")
 COUNTS_BEGIN, COUNTS_END = "<!-- counts:begin -->", "<!-- counts:end -->"
 
 
-def read(p): return p.read_text(encoding="utf-8")
+BOX = re.compile(r"^\| (O\d+) \[([ xX])\] \|")
+EOL = {}
+
+
+def read(p):
+    raw = p.read_bytes().decode("utf-8")
+    EOL[p] = "\r\n" if "\r\n" in raw else "\n"
+    return raw.replace("\r\n", "\n")
+
+
+def write(p, s): p.write_bytes(s.replace("\n", EOL.get(p, "\n")).encode("utf-8"))
 def tags(t): return " ".join(f"`[{x.strip()}]`" for x in t.split(","))
-def write(p, s): p.write_text(s, encoding="utf-8", newline="\n")
 
 
 def tier_rows(text):
@@ -143,6 +155,48 @@ def check():
     return 1 if problems else 0
 
 
+def close(o, title, notes, remaining_title=None, remaining_body=None, remaining_tag="PART", g=None):
+    g = g or next_ids()[1]
+    if remaining_title:
+        head = f"**{tags(remaining_tag)}** {remaining_title}"
+        write(INDEX, replace_row(read(INDEX), o, f"| {o} [ ] | {head} |"))
+        write(BODIES, replace_row(read(BODIES), o, f"| {o} | {head} | {remaining_body} |"))
+    else:
+        write(INDEX, replace_row(read(INDEX), o, None))
+        write(BODIES, replace_row(read(BODIES), o, None))
+    write(GAPS, add_gap(read(GAPS), g, title, notes))
+    regen_counts(); print(f"closed {o} as G{g}: {title}")
+    return g
+
+
+def add_boxes(text):
+    """Tick box on every open tier row except decision rows (nothing to complete)."""
+    rows = tier_rows(text)
+    for o, (_, line) in rows.items():
+        if BOX.match(line) or re.search(r"\*\*`\[(DECISION|DECIDED)", line): continue
+        text = text.replace(line, f"| {o} [ ]" + line[len(o) + 2:], 1)
+    return text
+
+
+def sweep(dry_run, resolution):
+    import datetime
+    bodies = tier_rows(read(BODIES))
+    ticked = [(o, line) for o, (_, line) in tier_rows(read(INDEX)).items()
+              if (m := BOX.match(line)) and m.group(2) in "xX"]
+    if not ticked: print("nothing ticked"); return 0
+    g = next_ids()[1]
+    stamp = f"Closed via tick-box sweep {datetime.date.today().isoformat()}"
+    for o, line in ticked:
+        title = re.sub(r"^\*\*`\[[^*]*\]`\*\*\s*", "", line.split("|", 2)[2].rsplit("|", 1)[0].strip())
+        m = re.match(r"^\| O\d+[^|]*\| .*?\*\*.*? \| (.*) \|\s*$", bodies.get(o, (0, ""))[1])
+        body = m.group(1).strip() if m else ""
+        notes = f"{stamp}" + (f": {resolution}" if resolution else "") + (f". Last row body: {body}" if body else ".")
+        if dry_run: print(f"would close {o} as G{g}: {title}")
+        else: close(o, title, notes, g=g)
+        g += 1
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -154,7 +208,8 @@ def main():
     c = sub.add_parser("close")
     c.add_argument("o"); c.add_argument("--title", required=True); c.add_argument("--notes", required=True)
     c.add_argument("--remaining-title"); c.add_argument("--remaining-body"); c.add_argument("--remaining-tag", default="PART")
-    sub.add_parser("counts"); sub.add_parser("check")
+    sw = sub.add_parser("sweep"); sw.add_argument("--dry-run", action="store_true"); sw.add_argument("--resolution")
+    sub.add_parser("boxes"); sub.add_parser("counts"); sub.add_parser("check")
     a = ap.parse_args()
 
     if a.cmd == "next-id":
@@ -166,21 +221,16 @@ def main():
     if a.cmd == "file":
         o = a.number or f"O{next_ids()[0]}"
         head = f"**{tags(a.tag)}** {a.title}"
-        write(INDEX, insert_index_row(read(INDEX), a.tier, f"| {o} | {head} |"))
+        box = "" if re.search(r"DECISION|DECIDED", a.tag) else " [ ]"
+        write(INDEX, insert_index_row(read(INDEX), a.tier, f"| {o}{box} | {head} |"))
         write(BODIES, insert_index_row(read(BODIES), a.tier, f"| {o} | {head} | {a.body} |"))
         regen_counts(); print(o); return 0
     if a.cmd == "close":
-        g = next_ids()[1]
-        if a.remaining_title:
-            head = f"**{tags(a.remaining_tag)}** {a.remaining_title}"
-            write(INDEX, replace_row(read(INDEX), a.o, f"| {a.o} | {head} |"))
-            write(BODIES, replace_row(read(BODIES), a.o, f"| {a.o} | {head} | {a.remaining_body} |"))
-        else:
-            write(INDEX, replace_row(read(INDEX), a.o, None))
-            write(BODIES, replace_row(read(BODIES), a.o, None))
-        write(GAPS, add_gap(read(GAPS), g, a.title, a.notes))
-        regen_counts(); print(f"closed {a.o} as G{g}"); return 0
-
+        close(a.o, a.title, a.notes, a.remaining_title, a.remaining_body, a.remaining_tag); return 0
+    if a.cmd == "sweep":
+        return sweep(a.dry_run, a.resolution)
+    if a.cmd == "boxes":
+        write(INDEX, add_boxes(read(INDEX))); return 0
 
 if __name__ == "__main__":
     sys.exit(main())
