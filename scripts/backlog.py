@@ -63,7 +63,7 @@ def next_ids(fetch=True):
         texts = []
         p = ROOT / rel
         if p.exists(): texts.append(read(p))
-        r = subprocess.run(["git", "show", f"origin/main:{rel}"], cwd=ROOT, capture_output=True, text=True)
+        r = subprocess.run(["git", "show", f"origin/main:{rel}"], cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
         if r.returncode == 0: texts.append(r.stdout)
         for t in texts:
             o, g = all_numbers(t); os_ |= o; gs |= g
