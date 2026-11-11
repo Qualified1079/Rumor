@@ -30,6 +30,12 @@ class SourceInvariantTest {
             .readText()
     }
 
+    private val directMessaging by lazy {
+        File(findRepoRoot(), "core/src/main/kotlin/com/rumor/mesh/core/protocol/DirectMessaging.kt")
+            .also { check(it.isFile) { "DirectMessaging.kt not at expected path: $it" } }
+            .readText()
+    }
+
     /**
      * **Architecture invariant 1: `TrustLevel.BRIDGED` messages are NEVER re-relayed.**
      *
@@ -179,10 +185,10 @@ class SourceInvariantTest {
     fun `composeDirect zeros ephemeral private and shared key after use`() {
         val privFillPattern = Regex("""ephemeral\.privateKeyBytes\.fill\(\s*0\s*\)""")
         val sharedFillPattern = Regex("""sharedKey\.fill\(\s*0\s*\)""")
-        if (!privFillPattern.containsMatchIn(gossipEngine)) {
+        if (!privFillPattern.containsMatchIn(directMessaging)) {
             fail(
                 """
-                |Could not find `ephemeral.privateKeyBytes.fill(0)` in GossipEngine.kt.
+                |Could not find `ephemeral.privateKeyBytes.fill(0)` in DirectMessaging.kt.
                 |Without this, the ephemeral X25519 private key sits on the heap until
                 |GC after every DM compose — a process-memory dump in that window
                 |recovers it and lets the attacker re-derive every AEAD key for every
@@ -191,10 +197,10 @@ class SourceInvariantTest {
                 |""".trimMargin()
             )
         }
-        if (!sharedFillPattern.containsMatchIn(gossipEngine)) {
+        if (!sharedFillPattern.containsMatchIn(directMessaging)) {
             fail(
                 """
-                |Could not find `sharedKey.fill(0)` in GossipEngine.kt. The derived
+                |Could not find `sharedKey.fill(0)` in DirectMessaging.kt. The derived
                 |AEAD key must be zeroed after the AES-GCM call in composeDirect; see
                 |O39 (G25). Without it the sender-side FS guarantee leaks until GC.
                 |""".trimMargin()
@@ -220,10 +226,10 @@ class SourceInvariantTest {
     @Test
     fun `composeDirect zeros sealed-sender tagKey after use`() {
         val tagKeyFillPattern = Regex("""tagKey\.fill\(\s*0\s*\)""")
-        if (!tagKeyFillPattern.containsMatchIn(gossipEngine)) {
+        if (!tagKeyFillPattern.containsMatchIn(directMessaging)) {
             fail(
                 """
-                |Could not find `tagKey.fill(0)` in GossipEngine.kt. The per-contact
+                |Could not find `tagKey.fill(0)` in DirectMessaging.kt. The per-contact
                 |sealed-sender tag key (O53) is derived from the X25519 ECDH of two
                 |long-term Ed25519 identities and would otherwise outlive every
                 |composeDirect call on the heap. The finally block in composeDirect
