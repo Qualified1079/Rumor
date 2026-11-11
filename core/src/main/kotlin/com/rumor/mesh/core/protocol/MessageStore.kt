@@ -297,7 +297,10 @@ class MessageStore(
     suspend fun markRelayed(id: String) = messageRepo.markRelayed(id)
 
     /** O92 reseed sources: offer-eligible content, and recent ids for dedup. */
-    suspend fun offerable(limit: Int): List<RumorMessage> = messageRepo.offerable(limit)
+    suspend fun offerable(
+        limit: Int,
+        types: Set<com.rumor.mesh.core.model.MessageType> = com.rumor.mesh.core.data.OFFERABLE_TYPES,
+    ): List<RumorMessage> = messageRepo.offerable(limit, types)
     suspend fun knownIds(limit: Int): List<String> = messageRepo.knownIds(limit)
     /** O42 RBSR snapshot — whole-store (sentAtMs, id), mirrors dedup-summary semantics. */
     suspend fun rbsrItems(limit: Int): List<com.rumor.mesh.core.sync.RbsrItem> =

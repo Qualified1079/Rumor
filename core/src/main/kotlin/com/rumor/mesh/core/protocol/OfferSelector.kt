@@ -28,6 +28,8 @@ private const val TAG = "GossipEngine"
 private const val DEFAULT_LIVENESS_WINDOW_MS = 30_000L
 /** Bound on the first-hand-exchange map so a sybil id-flood can't grow it unboundedly. */
 private const val LIVENESS_MAX_PEERS = 512
+/** Routed messages (DMs, receipts) may take up to 1/ROUTED_SHARE of a store-backfilled offer. */
+private const val ROUTED_SHARE = 4
 
 internal class OfferSelector(
     private val topologyTracker: TopologyTracker,
@@ -119,7 +121,13 @@ internal class OfferSelector(
         val head = scheduler.take(cap)
         val batch = if (head.size >= cap) head else {
             val seen = head.mapTo(HashSet()) { it.id }
-            head + messageStore.offerable(cap).filter { it.id !in seen }.take(cap - head.size)
+            // Routed messages get their own slice. Ranked with everything else
+            // by sender clock, a carried DM dropped out of the window as soon as
+            // the store held a batch of fresher broadcasts (a flood, or just a
+            // sender whose clock runs slow) and was never offered again.
+            val routed = messageStore.offerable(cap / ROUTED_SHARE, com.rumor.mesh.core.data.ROUTED_OFFERABLE_TYPES)
+            val flooded = messageStore.offerable(cap, com.rumor.mesh.core.data.FLOODED_OFFERABLE_TYPES)
+            head + (routed + flooded).filter { it.id !in seen }.take(cap - head.size)
         }
 
         // O29 per-peer routing filter. A relayed DM marked with intendedPeers

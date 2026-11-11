@@ -120,7 +120,12 @@ class LivenessWindowModeAwarenessTest {
             n.forEach { it.mode = mode; it.gossipEngine.livenessWindowOverrideMs = windowOverrideMs }
             registerContact(n[A], n[B])
 
-            val allEdges = listOf(A to m1, m1 to m2, m2 to m3, m3 to B, m1 to r, r to m3)
+            // Order is load-bearing: m1 meets the bypass `r` BEFORE it meets m2 in each
+            // beat, so when m1 decides whether to offer the DM to `r`, its last contact
+            // with m2 is one full beat old. With m2 first, the same beat's exchange had
+            // just refreshed it and whether the flood fired depended on which coroutine
+            // ran first, which is how this test went red on a busy machine.
+            val allEdges = listOf(A to m1, m1 to r, m1 to m2, m2 to m3, m3 to B, r to m3)
             val edges = if (m2Alive) allEdges
             else allEdges.filterNot { it.first == m2 || it.second == m2 }
 
@@ -139,7 +144,6 @@ class LivenessWindowModeAwarenessTest {
             repeat(3) {
                 clock.nowMs += beatMs
                 for ((x, y) in edges) { touch(n[x], n[y]); touch(n[y], n[x]) }
-                delay(5)
             }
 
             val dmId = n[A].gossipEngine.composeDirect(
@@ -151,9 +155,7 @@ class LivenessWindowModeAwarenessTest {
             repeat(20) {
                 clock.nowMs += beatMs
                 for ((x, y) in edges) { realExchange(n[x], n[y]); realExchange(n[y], n[x]) }
-                delay(5)
             }
-            delay(40)
             return Outcome(
                 bypassSawDm = n[r].messageRepo.getById(dmId) != null,
                 delivered = n[B].messageRepo.getById(dmId) != null,
@@ -164,7 +166,7 @@ class LivenessWindowModeAwarenessTest {
     }
 
     /** A round where the peers meet but neither has anything new — HELLO only. */
-    private fun touch(src: SimNode, dst: SimNode) = deliver(src, dst, emptyList())
+    private suspend fun touch(src: SimNode, dst: SimNode) = deliver(src, dst, emptyList())
 
     /**
      * Unlike [SmartRoutingLivenessTest]'s helper this delivers the exchange even when
@@ -181,7 +183,14 @@ class LivenessWindowModeAwarenessTest {
         deliver(src, dst, offer)
     }
 
-    private fun deliver(src: SimNode, dst: SimNode, offer: List<RumorMessage>) {
+    /**
+     * Hands the exchange to [dst] and waits until it has been processed. `onExchange`
+     * only launches the work, so without the wait the next exchange in the beat
+     * raced it: the liveness record and the relay decision landed in whatever order
+     * the scheduler chose.
+     */
+    private suspend fun deliver(src: SimNode, dst: SimNode, offer: List<RumorMessage>) {
+        val before = dst.gossipEngine.canaryMetrics.flow.value.exchangeSuccesses
         dst.deliverExchange(
             PeerExchangeResult(
                 peerUserId = src.userId,
@@ -191,6 +200,10 @@ class LivenessWindowModeAwarenessTest {
                 durationMs = 0,
             )
         )
+        awaitUntil(what = "the exchange is counted and its messages are ingested") {
+            dst.gossipEngine.canaryMetrics.flow.value.exchangeSuccesses > before &&
+                offer.all { it.id in dst.knownIds() }
+        }
     }
 
     private suspend fun registerContact(host: SimNode, other: SimNode) {

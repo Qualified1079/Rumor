@@ -48,10 +48,10 @@ interface MessageRepository {
     suspend fun deleteByType(type: MessageType)
 
     /**
-     * Offer-eligible content for gossip reseed (O92): [OFFERABLE_TYPES] with
-     * hops left, freshest first. Every store implements exactly that set.
+     * Offer-eligible content for gossip reseed (O92): messages of [types] with
+     * hops left, freshest first. [types] is [OFFERABLE_TYPES] or a subset of it.
      */
-    suspend fun offerable(limit: Int): List<RumorMessage>
+    suspend fun offerable(limit: Int, types: Set<MessageType> = OFFERABLE_TYPES): List<RumorMessage>
 
     /**
      * Recent message ids for dedup reseed (O92). The DuplicateFilter is volatile,
@@ -96,6 +96,9 @@ val OFFERABLE_TYPES: Set<com.rumor.mesh.core.model.MessageType> = setOf(
     com.rumor.mesh.core.model.MessageType.ROOM_MESSAGE,
 )
 
-/** [OFFERABLE_TYPES] that go to every peer; DMs and their receipts are routed per peer instead. */
-val FLOODED_OFFERABLE_TYPES: Set<com.rumor.mesh.core.model.MessageType> =
-    OFFERABLE_TYPES - setOf(com.rumor.mesh.core.model.MessageType.DIRECT, com.rumor.mesh.core.model.MessageType.DIRECT_ACK)
+/** [OFFERABLE_TYPES] that are routed per peer rather than sent to everyone. */
+val ROUTED_OFFERABLE_TYPES: Set<com.rumor.mesh.core.model.MessageType> =
+    setOf(com.rumor.mesh.core.model.MessageType.DIRECT, com.rumor.mesh.core.model.MessageType.DIRECT_ACK)
+
+/** [OFFERABLE_TYPES] that go to every peer. */
+val FLOODED_OFFERABLE_TYPES: Set<com.rumor.mesh.core.model.MessageType> = OFFERABLE_TYPES - ROUTED_OFFERABLE_TYPES

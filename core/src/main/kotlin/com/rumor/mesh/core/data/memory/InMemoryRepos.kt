@@ -61,9 +61,9 @@ class InMemoryMessageRepository : MessageRepository {
         _flow.value = messages.values.toList()
     }
 
-    override suspend fun offerable(limit: Int): List<RumorMessage> =
+    override suspend fun offerable(limit: Int, types: Set<com.rumor.mesh.core.model.MessageType>): List<RumorMessage> =
         messages.values
-            .filter { it.type in com.rumor.mesh.core.data.OFFERABLE_TYPES && it.hopsToLive > 0 }
+            .filter { it.type in types && it.hopsToLive > 0 }
             .sortedByDescending { it.sentAtMs }
             .take(limit)
     override suspend fun knownIds(limit: Int): List<String> =
