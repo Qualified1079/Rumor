@@ -184,6 +184,7 @@ time). **Read the newest one before starting work**; older ones only when a row 
 decision points at them. A new session adds `docs/handoff/YYYY-MM-DD-<slug>.md` and
 a line at the TOP of this list — nothing else in this file changes per session.
 
+- [`2026-11-10-repo-reorg-live-rooms-gossip-catch-up.md`](docs/handoff/2026-11-10-repo-reorg-live-rooms-gossip-catch-up.md) — repo reorganised for agents (backlog one file per row), live three-node Rooms run + phone, gossip catch-up fix (2026-11-10 → 11-11)
 - [`2026-11-08-android-studio-instance-app-build-node-phone.md`](docs/handoff/2026-11-08-android-studio-instance-app-build-node-phone.md) — Android Studio instance: `:app` build verified, PC node ↔ phone over LAN, O251 (2026-11-08)
 - [`2026-11-08-for-the-android-studio-instance-phone.md`](docs/handoff/2026-11-08-for-the-android-studio-instance-phone.md) — for the Android Studio instance: phone work starts here (2026-11-08)
 - [`2026-11-06-implicit-state-machine-audit-away-branch.md`](docs/handoff/2026-11-06-implicit-state-machine-audit-away-branch.md) — implicit-state-machine audit, away-branch merge, four security fixes (2026-11-06)
