@@ -967,6 +967,9 @@ class GossipEngine(
      */
     suspend fun messagesByIds(ids: List<String>): List<RumorMessage> =
         ids.take(MAX_BY_ID_FETCH).mapNotNull { messageStore.getById(it) }
+            // Same refusal as messagesForExchange: this path reads the store
+            // directly and would otherwise hand unsigned bridge traffic to a peer.
+            .filter { it.trustLevel != TrustLevel.BRIDGED }
 
     /**
      * O92: rebuild the volatile outbound state from the durable store on mesh

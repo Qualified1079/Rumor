@@ -71,4 +71,25 @@ class BridgedNotServedTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `BRIDGED messages are not served when a peer asks for them by id`() = runBlocking<Unit> {
+        // The by-id path serves RBSR requests and the session's backfill, and
+        // reads the store directly, so it needs the same refusal as the offer.
+        val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        try {
+            val a = SimNode(0, scope)
+            val verified = a.broadcast("33".repeat(16), TrustLevel.VERIFIED)
+            val bridged = a.broadcast("44".repeat(16), TrustLevel.BRIDGED)
+            a.seedMessage(verified)
+            a.seedMessage(bridged)
+
+            val served = a.gossipEngine.messagesByIds(listOf(verified.id, bridged.id)).map { it.id }.toSet()
+
+            assertTrue("VERIFIED must still be served by id", served.contains(verified.id))
+            assertFalse("BRIDGED must never be served by id", served.contains(bridged.id))
+        } finally {
+            scope.cancel()
+        }
+    }
 }
