@@ -2,7 +2,7 @@ package com.rumor.mesh.core.trust
 
 /**
  * O135(4) — the web-of-trust admission frontier (SSB `hops` semantics ported to
- * Rumor's model; see `sybil_research.md`).
+ * Rumor's model; see `docs/SYBIL_RESEARCH.md`).
  *
  * Given signed vouch edges (voucher → vouchee), a local seed (self), a set of
  * blocked userIds, and a hop budget N, [frontier] returns the set of userIds

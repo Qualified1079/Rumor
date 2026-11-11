@@ -5,7 +5,7 @@ off a stale `main` by a session running concurrently with 2026-10-10's, so at me
 numbers were renumbered (O208/O209/O210 → O219/O220/O221, G52–G57 → G55/G60–G64 —
 already applied in the text below) and its relay-side O186 drop was discarded in favour
 of `main`'s `MessageStore` drop (its `FeedTextOnlyEnforcementTest` was kept). 16 commits.
-Plain-English review doc for the user: `docs/SESSION_ELI5_2026-10-11.md`.
+Plain-English review doc for the user: `docs/handoff/eli5/SESSION_ELI5_2026-10-11.md`.
 
 ## ⭐ TOP PRIORITY FOR NEXT INSTANCE — two user decisions are blocking, don't guess
 

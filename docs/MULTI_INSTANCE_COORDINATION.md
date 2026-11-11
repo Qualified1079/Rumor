@@ -9,13 +9,13 @@ other's way.
 
 Two sessions on the same branch can:
 
-1. Both edit `CLAUDE.md` (especially row counts in the backlog header or
-   row text in the same backlog row) → merge conflict on push.
+1. Both edit `docs/backlog/INDEX.md` (the counts block, or the same
+   index row) → merge conflict on push.
 2. Both claim the same backlog row (O-number) → duplicated work, or worse,
    one session's commit silently overwrites the other's.
 3. Both create a new test file at the same path → file-add conflict.
 4. Push out of order so a later session pushes stale row counts in
-   `CLAUDE.md` over a fresh closure → bookkeeping desyncs from reality.
+   `docs/backlog/INDEX.md` over a fresh closure → bookkeeping desyncs from reality.
 
 ## The protocol
 
@@ -31,9 +31,9 @@ Each instance, before starting work:
 
 While working:
 
-4. **Don't edit `CLAUDE.md` row counts mid-task.** Save the row-count
+4. **Don't edit the `docs/backlog/INDEX.md` counts mid-task.** Save the row-count
    update for the same commit that closes the row. That way "I touched
-   CLAUDE.md" only happens once per closure, not on a planning pass.
+   the index" only happens once per closure, not on a planning pass.
 5. **Commit small and push frequently.** Other instances see your work
    only after you push. A 600-line commit that closes four rows means
    the other instance is working blind for the full duration; four
@@ -44,11 +44,13 @@ While working:
 
 When filing or closing a row — **use `scripts/backlog.py`, not hand edits**:
 
-7. A row lives in three files (the `CLAUDE.md` one-line index, the body in
-   `docs/OPEN_BACKLOG.md`, the closed record in `docs/COMPLETED_GAPS.md`).
-   `scripts/backlog.py file|close` edits all three and regenerates the counts
+7. A row is one line in `docs/backlog/INDEX.md` plus its own file
+   (`docs/backlog/open/O123.md`; closed rows become `docs/backlog/done/G45.md`).
+   `scripts/backlog.py file|close|sweep` edits both and regenerates the counts
    block; `scripts/backlog.py check` (and `BacklogConsistencyTest` in `:core`)
-   catch drift. Reference the new `G##` from anywhere the old `O##` was cited.
+   catch drift. One file per row means two instances only conflict on the
+   index line they both touched. Reference the new `G##` from anywhere the
+   old `O##` was cited.
 7a. **Claiming a number.** `scripts/backlog.py next-id` fetches `origin/main`
    and returns the next free O/G across every backlog file, *including numbers
    merely mentioned in prose*. Commit and push the new row **before** starting
@@ -67,8 +69,8 @@ When two sessions hit each other anyway:
 9. **Pull --ff-only first; if it refuses, fetch and inspect.** Usually
    one of two things has happened:
     - A clean unrelated commit you can merge straight in.
-    - A conflict on `CLAUDE.md`. Resolve by hand — the row text and
-      counts have to reflect the union of what both sessions closed.
+    - A conflict on `docs/backlog/INDEX.md`. Keep both sessions' row
+      changes, then run `scripts/backlog.py counts` and `check`.
 10. **Don't force-push.** Never. Even to fix your own mistake — pile a
     correction commit on top instead, so the other session sees the
     history it expected.

@@ -1,7 +1,7 @@
 # Session ELI5 — 2026-11-08 (cloud-only fixes while the phone setup is pending)
 
 Plain-English after-action report. **Newest work at the bottom.** Same rules as
-`docs/SESSION_ELI5_2026-11-06.md`: one commit per row; `:core`/`:simulator`/`:node`
+`docs/handoff/eli5/SESSION_ELI5_2026-11-06.md`: one commit per row; `:core`/`:simulator`/`:node`
 built and tested in the cloud container (via a scratchpad Maven mirror, since Maven
 Central rate-limits this IP); `:app` not buildable here, so any `:app` line is
 hand-reviewed only; every fix teeth-checked (fix removed → the new test fails).

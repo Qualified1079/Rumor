@@ -2,7 +2,7 @@ package com.rumor.mesh.core.trust
 
 /**
  * O135(2) alternative — Ostra-style per-edge spam credit (Mislove et al., NSDI
- * 2008; see `sybil_research.md` §4). A refinement of the coarse global/LRU
+ * 2008; see `docs/SYBIL_RESEARCH.md` §4). A refinement of the coarse global/LRU
  * aggregate cap: instead of one shared budget everyone competes for, EACH trust
  * edge on the delivery path carries its own credit balance. Marking a message
  * spam debits every edge on its path; when any edge hits zero it can no longer

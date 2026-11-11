@@ -55,7 +55,7 @@ fun injectBridgedDm(
 
 Compose path: `GossipEngine.composeDirect` consults the registry by recipient prefix; falls back to the existing native envelope when none matches. Inbound path: bridge plugin calls `injectBridgedDm` with an opaque blob plus the envelope id; engine routes to the recipient's inbox without ever holding plaintext; the recipient's UI looks up the envelope by id and decrypts at read time.
 
-This is a prerequisite for O5 if we want more than two bridges without forking core every time. Even with just Meshtastic + MeshCore today it is the right shape — two hardcoded branches in `composeDirect` would be the same wrong direction as the original Hilt → Koin "just rewire it where you need it" pattern we already abandoned. Implement O5a first, then O5 for each bridge is a small, isolated addition. (Status: O5a shipped — see G5 in `docs/COMPLETED_GAPS.md`.)
+This is a prerequisite for O5 if we want more than two bridges without forking core every time. Even with just Meshtastic + MeshCore today it is the right shape — two hardcoded branches in `composeDirect` would be the same wrong direction as the original Hilt → Koin "just rewire it where you need it" pattern we already abandoned. Implement O5a first, then O5 for each bridge is a small, isolated addition. (Status: O5a shipped — see G5 in `docs/backlog/`.)
 
 ## Security constraints for O5a (non-negotiable — without these, the framework is a regression)
 

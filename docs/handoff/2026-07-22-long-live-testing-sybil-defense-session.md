@@ -69,7 +69,7 @@ vacuous test, §19/20 residue, UI perf, **O132 broadcast size cap**, feed
 maxLines, **peers-list pollution**, **O135 sybil-resistance design**,
 **O136 friending**, synthetic test fleet, kill-reflash-loop, tampered-builds,
 **O140 unified subscription primitive**, **O141 comment cleanup**). Plus
-`sybil_research.md` (another instance — the SSB/SybilLimit/Advogato port map).
+`docs/SYBIL_RESEARCH.md` (another instance — the SSB/SybilLimit/Advogato port map).
 
 ## Next-session pointers
 - **Sybil WIRE layer is the next foundational piece:** signed `FriendVouch`/

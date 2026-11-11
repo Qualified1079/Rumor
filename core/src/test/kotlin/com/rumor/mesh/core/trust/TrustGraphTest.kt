@@ -7,7 +7,7 @@ import org.junit.Test
 
 /**
  * O135(4) — the web-of-trust frontier's load-bearing properties, per the
- * `sybil_research.md` synthesis (SybilLimit per-attack-edge bound,
+ * `docs/SYBIL_RESEARCH.md` synthesis (SybilLimit per-attack-edge bound,
  * block-the-signer, Advogato-inoculation).
  */
 class TrustGraphTest {

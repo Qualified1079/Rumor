@@ -9,3 +9,5 @@ app/keystore.properties
 app/release.keystore
 *.jks
 simulator/rumor-bundle.zip
+__pycache__/
+.claude/worktrees/

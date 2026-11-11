@@ -5,7 +5,7 @@ import org.junit.Test
 import kotlin.random.Random
 
 /**
- * O135(4) caveat, made empirical (`sybil_research.md` §1, Alvisi et al. 2013):
+ * O135(4) caveat, made empirical (`docs/SYBIL_RESEARCH.md` §1, Alvisi et al. 2013):
  * SybilLimit-style bounds assume the honest social graph is **fast-mixing**.
  * Rumor's realistic graph is a **sparse, geographically-clustered mesh** (a
  * neighbourhood / county / building post-collapse) — closer to a grid than to a

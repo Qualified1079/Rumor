@@ -46,15 +46,17 @@ and re-making mistakes this project has already paid for.*
 
 ### Read in this order
 
-1. **`CLAUDE.md`** — architecture, the key invariants, coding conventions, and
-   the one-line backlog index. The **conventions are not suggestions**: minimal
-   comments (WHY not WHAT), no premature abstractions, no feature flags, and
-   **commit + push straight to `main`** (2026-07-19 user directive — do NOT
+1. **`CLAUDE.md`** — architecture, the key invariants and coding conventions,
+   plus the module file for where you'll work (`core/`, `app/`, `simulator/`,
+   `node/` each have a `CLAUDE.md`). The **conventions are not suggestions**:
+   minimal comments (WHY not WHAT), no premature abstractions, no feature flags,
+   and **commit + push straight to `main`** (2026-07-19 user directive — do NOT
    create a feature branch; force-push stays denied).
-2. **`docs/OPEN_BACKLOG.md`** — full row bodies. `CLAUDE.md`'s tiers are only an
-   index. **Check a row here before believing anything about its status**; rows
-   go stale, and at least one session has built against a row that had shipped
-   months earlier.
+2. **`docs/backlog/INDEX.md`** — one line per open row. Full bodies are one file
+   per row: `python scripts/backlog.py show O123`, or read
+   `docs/backlog/open/O123.md`. **Read the body before believing anything about
+   a row's status**; rows go stale, and at least one session has built against a
+   row that had shipped months earlier.
 3. **`docs/DECISIONS.md`** — narrow recorded positions (O11, O12, O63, O66, O82,
    O86, O104, O125, O146, O147, O150, O155). A "per O12" cross-ref resolves here.
 4. **`docs/SIMULATOR_TESTING.md`** — **mandatory before writing any `:simulator`
@@ -63,8 +65,10 @@ and re-making mistakes this project has already paid for.*
 5. **`docs/RENAMED_FIELDS_NEVER_REUSE.md`** — **mandatory before touching any
    wire format, domain tag, `_ext` key or `MessageType` serial name.** Names and
    tags are reserved FOREVER; a changed canonical-byte layout needs a new tag.
-6. **`docs/COMPLETED_GAPS.md`** — only when closing a row (move the record there,
-   delete the open row). Don't load it during normal work.
+6. **`docs/backlog/done/`** — completed rows, one file per G number. Only
+   `scripts/backlog.py` writes there; don't load it during normal work.
+7. **`docs/README.md`** — a one-line map of every other doc, for when a topic
+   comes up.
 
 ### Practices this project paid for — violating these is how it breaks
 
@@ -128,11 +132,14 @@ that ran zero tests — read that, not just `BUILD SUCCESSFUL`.
 
 ### Build + device testing on the user's Windows machine (2026-10-11)
 
-- Android SDK + adb at `%LOCALAPPDATA%\Android\Sdk` (adb not on PATH); JDK 21/25
-  only. The toolchain wants 17: fetch Temurin 17 to the scratchpad and pass
-  `-Porg.gradle.java.installations.paths=<jdk17>` as a **`-P` Gradle property**
-  (a `-D` system property doesn't reach an already-running daemon; `./gradlew
-  --stop` once). `:app` builds and tests here.
+- Android SDK + adb at `%LOCALAPPDATA%\Android\Sdk` (adb not on PATH). `JAVA_HOME`
+  is JDK 21; the toolchain wants 17, and **Temurin 17 is installed at
+  `~/.jdks/jdk-17.0.21+9`** (2026-11-10), where Gradle finds it without any flag.
+  If it is ever missing, re-fetch it there (Adoptium API `latest/17/ga/windows/x64`)
+  rather than into a scratch folder that a later session cannot see. `:app` builds
+  and tests here.
+- The PC has **no Wi-Fi adapter** (Ethernet only): a phone must join the PC's LAN
+  subnet for the `:node` ↔ phone path, and Wi-Fi Direct to the PC is impossible.
 - Git Bash mangles device paths: `export MSYS_NO_PATHCONV=1` before `adb shell`.
 - Fleet: Moto `ZY22KP7F59`, OnePlus `ec5b0707`, S10e `R58M30FSJKE`, passphrase
   `passphrase1`. Clocks: Moto ~10 min behind, OnePlus ~3 MONTHS behind, S10e ~7
@@ -146,29 +153,26 @@ that ran zero tests — read that, not just `BUILD SUCCESSFUL`.
   down politely. Use a sealed Faraday cage several metres away (verify by
   calling the phone) for a real no-goodbye loss.
 
-### State of play, 2026-10-11
+### Standing state (rewritten 2026-11-10; anything dated lives in the newest handoff file)
 
-- **Rooms SHIP in v1** (O210, user decision). O89 write authority and O187's
-  wire/repo/authority layer are done; **O214 records the settled design** —
+- **Rooms SHIP in v1** (O210, user decision); **O214 records the settled design** —
   plaintext default, optional encryption mode, invite-chain gated, amnesiac
-  timers, hard crypto stays in DMs.
+  timers, hard crypto stays in DMs. Wire, repository, authority resolver and
+  Android persistence (schema v13) are shipped (O187 is `[PART]`: UI and
+  membership enforcement are open).
 - **The next Rooms work is O216/O217/O218**, and O216 is the load-bearing one:
   **there is no join path at all**, so `RoomMembershipPolicy` is stored and
   never consulted.
-- **Nothing of Rooms reaches the phone** — O187 is `[PART]`, no Room DAO, no
-  schema bump, no UI. That half needs a device.
-- **CI has no verdict on `main`** (O208) — its last runs were *cancelled*, not
-  red. Do not read silence as green. Proof it mattered: `:core`'s test sources
-  did not even COMPILE on `main` (stale room tests after `87633ed`), found and
-  fixed 2026-10-11.
-- **The 3-phone fleet runs `main` as of `3c89609`** and forms one group. O98's
-  field round is G57; presence is G58; `:app` rows G59; follow-ups O222–O227. Next device work is
-  in `docs/handoff/2026-10-11-first-on-device-run-of-the.md`.
-- **The `away/2026-10-11-overnight` branch was MERGED 2026-11-06.** Its rows
-  were renumbered (O208/O209/O210 → O219/O220/O221; G52–G57 → G55, G60–G64) and its
-  duplicate O186 relay-side drop was discarded for `main`'s `MessageStore` one. Two
-  user decisions it raised are still pending: O173 sybil capture, O205 window values.
-  `main`'s next free numbers are O249 / G65.
+- **CI reports on `main` again** (about 10 minutes a run). Check `gh run list`
+  for the commit you are building on; do not read silence as green. It once went
+  four commits with every run cancelled, and `:core`'s test sources did not even
+  compile on `main` during that window.
+- **User decisions still pending:** O173 (sybil capture of the backbone) and
+  O253 (liveness window values).
+- **Row numbers were renumbered once:** the `away/2026-10-11-overnight` branch
+  merged 2026-11-06 with O208/O209/O210 → O219/O220/O221 and G52–G57 → G55,
+  G60–G64. Older handoffs written on that branch use the old numbers. Get free
+  numbers from `scripts/backlog.py next-id`, never from a document.
 
 ---
 

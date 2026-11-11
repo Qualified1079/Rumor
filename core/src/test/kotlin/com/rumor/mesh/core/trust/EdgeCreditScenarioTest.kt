@@ -7,7 +7,7 @@ import org.junit.Test
  * O135(2) — Ostra per-edge credit vs a global spam bucket, under the canonical
  * attack: one honest "traitor" the victim friended, with a swarm of sybils
  * behind that single attack edge, all spamming. The question the research posed
- * (`sybil_research.md` §4): does the finer-grained per-edge model localize the
+ * (`docs/SYBIL_RESEARCH.md` §4): does the finer-grained per-edge model localize the
  * damage better than the coarse global bucket?
  *
  * Delivery paths are receiver-anchored trust chains:

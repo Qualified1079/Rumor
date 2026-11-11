@@ -1,7 +1,7 @@
 # Handoff — implicit-state-machine audit, away-branch merge, four security fixes (2026-11-06)
 
 **Interactive session on `main`, everything pushed, one commit per row.** Plain-English
-after-action report for the user: `docs/SESSION_ELI5_2026-11-06.md` (read that first if
+after-action report for the user: `docs/handoff/eli5/SESSION_ELI5_2026-11-06.md` (read that first if
 reviewing what changed).
 
 ## What happened

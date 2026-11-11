@@ -54,6 +54,6 @@ pattern.
   relay-eviction until defaults are set.
 
 ## Where the prose lives
-- Plain-English ELI5 of the whole session (for the user): `docs/SESSION_ELI5_2026-08-02.md`.
+- Plain-English ELI5 of the whole session (for the user): `docs/handoff/eli5/SESSION_ELI5_2026-08-02.md`.
 - Sim numbers + methodology: `docs/SIM_HARNESS_RESULTS.md` (O160/O204 section).
 - Backlog rows: O202/O203/O204 (+ indexed in CLAUDE.md Tier 4); O158/O160/O171/O176/O177 marked DONE.

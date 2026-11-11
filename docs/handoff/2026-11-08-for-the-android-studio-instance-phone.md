@@ -2,7 +2,7 @@
 
 **You can do what the last three cloud sessions could not: build `:app` and reach
 the phones.** Everything below is pushed to `main`. Plain-English reports:
-`docs/SESSION_ELI5_2026-11-06.md` and `docs/SESSION_ELI5_2026-11-08.md`.
+`docs/handoff/eli5/SESSION_ELI5_2026-11-06.md` and `docs/handoff/eli5/SESSION_ELI5_2026-11-08.md`.
 
 ## First: build + verify the `:app` lines no one has compiled
 
