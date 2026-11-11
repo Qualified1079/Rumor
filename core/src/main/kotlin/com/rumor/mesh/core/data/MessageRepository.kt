@@ -95,3 +95,7 @@ val OFFERABLE_TYPES: Set<com.rumor.mesh.core.model.MessageType> = setOf(
     com.rumor.mesh.core.model.MessageType.ROOM_ACTION,
     com.rumor.mesh.core.model.MessageType.ROOM_MESSAGE,
 )
+
+/** [OFFERABLE_TYPES] that go to every peer; DMs and their receipts are routed per peer instead. */
+val FLOODED_OFFERABLE_TYPES: Set<com.rumor.mesh.core.model.MessageType> =
+    OFFERABLE_TYPES - setOf(com.rumor.mesh.core.model.MessageType.DIRECT, com.rumor.mesh.core.model.MessageType.DIRECT_ACK)

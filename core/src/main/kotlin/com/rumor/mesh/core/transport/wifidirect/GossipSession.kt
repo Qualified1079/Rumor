@@ -105,6 +105,10 @@ class GossipSession(
         const val LOCAL_PROTOCOL_VERSION: Int = 1
         /** Highest wire-format version this build can parse. Session uses `min(mine, theirs)`. */
         const val LOCAL_MAX_PROTOCOL_VERSION: Int = 1
+
+        /** Most messages one side sends in a session: the engine's largest offer. */
+        const val MAX_BATCH = 200
+        const val MAX_BACKFILL = 100
         /** Range-Based Set Reconciliation capability flag (O42). */
         const val RBSR_FEATURE: String = "rbsr-v1"
         /**
@@ -331,7 +335,8 @@ class GossipSession(
                 }
                 overlapFraction = if (messagesToOffer.isEmpty()) 0f
                 else messagesToOffer.count { peerKnows(it.id) }.toFloat() / messagesToOffer.size
-                theyNeed = messagesToOffer.filter { msg -> !peerKnows(msg.id) }
+                val fromOffer = messagesToOffer.filter { msg -> !peerKnows(msg.id) }
+                theyNeed = fromOffer + backfillBeyondOffer(messagesToOffer, fromOffer.size, peerKnows)
                 weNeedIds = emptyList()
             }
 
@@ -431,6 +436,35 @@ class GossipSession(
         val bytes = ByteArray(len)
         inp.readFully(bytes)
         return json.decodeFromString(String(bytes, Charsets.UTF_8))
+    }
+
+    /**
+     * The offer is capped before the peer's summary is known and keeps the
+     * freshest by sender clock, so by itself it never carries anything older:
+     * a late joiner stopped at one batch, and a slow sender clock or a flood
+     * stamped in the future kept a message out of the window for good. Spend
+     * what is left of the batch on stored messages the peer lacks. Flooded
+     * types only: a DM is offered per peer by the engine's routing filter, and
+     * serving it from here would hand it to peers that filter excluded. Picked at
+     * random, because a set the peer keeps refusing (its ingest rate limit does
+     * not mark them seen) would otherwise fill the room every round.
+     */
+    private suspend fun backfillBeyondOffer(
+        offer: List<RumorMessage>,
+        neededFromOffer: Int,
+        peerKnows: (String) -> Boolean,
+    ): List<RumorMessage> {
+        val items = rbsrItemsProvider ?: return emptyList()
+        val byIds = messagesByIds ?: return emptyList()
+        val room = (MAX_BATCH - neededFromOffer).coerceAtMost(MAX_BACKFILL)
+        if (room <= 0) return emptyList()
+        val offered = offer.mapTo(HashSet()) { it.id }
+        val lacking = items().map { it.id }.filter { it !in offered && !peerKnows(it) }
+        if (lacking.isEmpty()) return emptyList()
+        // Over-fetch: some ids are stored types that are not backfilled.
+        return byIds(lacking.shuffled().take(room * 2))
+            .filter { it.type in com.rumor.mesh.core.data.FLOODED_OFFERABLE_TYPES && it.hopsToLive > 0 }
+            .take(room)
     }
 
     /**

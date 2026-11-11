@@ -50,7 +50,7 @@ class LanMeshHarness(
                 signer = { bytes -> node.identityProvider.identity.value?.let { CryptoManager.sign(bytes, it.privateKeyBytes) } },
                 // A hostile relay absorbs but offers nothing onward.
                 messageProvider = if (i in hostile) { _ -> emptyList() } else node.gossipEngine::messagesForExchange,
-                messagesByIds = node.gossipEngine::messagesByIds,
+                messagesByIds = if (i in hostile) { _ -> emptyList() } else node.gossipEngine::messagesByIds,
                 knownIdsProvider = node.gossipEngine::knownMessageIds,
                 onlineUsersProvider = node.onlineTracker::currentSnapshot,
                 onExchangeFailed = node.gossipEngine::onExchangeFailed,

@@ -47,7 +47,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
-val realWireTests = listOf("**/LanLivenessValidationTest*", "**/LanMeshHarnessTest*")
+val realWireTests = listOf("**/LanLivenessValidationTest*", "**/LanMeshHarnessTest*", "**/LanCatchUpTest*")
 
 // Each SimNode is a full engine graph (scopes, flows). Many heavy scenario
 // classes in one JVM accrete live nodes and OOM the default heap under the
