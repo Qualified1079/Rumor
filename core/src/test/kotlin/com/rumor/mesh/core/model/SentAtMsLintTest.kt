@@ -46,6 +46,10 @@ class SentAtMsLintTest {
         // Compose-time stamps via clock.now() + the RBSR rbsrItems mapping
         "core/src/main/kotlin/com/rumor/mesh/core/protocol/GossipEngine.kt",
         "core/src/main/kotlin/com/rumor/mesh/core/protocol/OutboundComposer.kt",
+        // Replay order for one room's signed history (invite before the ban that
+        // answers it). An ordering key over ops whose authors are already checked
+        // as moderators; a moderator who misdates an op only reorders its own.
+        "core/src/main/kotlin/com/rumor/mesh/core/protocol/RoomMessaging.kt",
         // Ed25519 signable bytes — value is signed so receivers detect tampering
         "core/src/main/kotlin/com/rumor/mesh/core/protocol/MessageStore.kt",
         // Test fixture constructing a RumorMessage to assert the emitted

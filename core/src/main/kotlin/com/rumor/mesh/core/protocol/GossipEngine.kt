@@ -437,7 +437,7 @@ class GossipEngine(
 
             val autoRelayIds = contactRepo.getAutoRelayContacts().map { it.userId }.toSet()
 
-            for (msg in result.messagesReceived) {
+            for (msg in rooms.historyFirst(result.messagesReceived)) {
                 val adjusted = msg.copy(receivedAtMs = clock.now())
                 processIncoming(adjusted, MessageSource.PEER, autoRelayIds, fromPeerId = result.peerUserId)
             }
@@ -860,6 +860,7 @@ class GossipEngine(
         postingPolicy: com.rumor.mesh.core.model.RoomPostingPolicy,
         allowMedia: Boolean,
     ): RumorMessage? = rooms.composeRoomCreate(nonce, name, membershipPolicy, postingPolicy, allowMedia)
+        ?.also { messageStore.ingestOwn(it) }
 
     suspend fun composeRoomInvite(
         roomId: String,
@@ -867,6 +868,7 @@ class GossipEngine(
         encryptedRoomKey: String,
         expiresAtMs: Long,
     ): RumorMessage? = rooms.composeRoomInvite(roomId, invitedUserId, encryptedRoomKey, expiresAtMs)
+        ?.also { messageStore.ingestOwn(it) }
 
     suspend fun composeRoomAction(
         roomId: String,
@@ -874,6 +876,7 @@ class GossipEngine(
         target: String,
         reason: String? = null,
     ): RumorMessage? = rooms.composeRoomAction(roomId, kind, target, reason)
+        ?.also { messageStore.ingestOwn(it) }
 
     fun composeRoomMessage(
         routingTag: ByteArray,
@@ -883,6 +886,7 @@ class GossipEngine(
         mentions: List<String> = emptyList(),
         postingCert: com.rumor.mesh.core.model.RoomPostingCert? = null,
     ): RumorMessage? = rooms.composeRoomMessage(routingTag, plaintext, recipients, replyTo, mentions, postingCert)
+        ?.also { scope.launch { messageStore.ingestOwn(it) } }
 
     fun composeSelfPresence(
         mode: UserMode,

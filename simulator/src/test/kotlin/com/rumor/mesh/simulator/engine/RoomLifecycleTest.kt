@@ -224,7 +224,16 @@ class RoomLifecycleTest {
 
         // A re-invite must not silently launder the ban away — un-banning is an
         // explicit, auditable action (O152), not a side effect of an invite.
-        val reInvite = creator.engine.composeRoomInvite(roomId, alice, "k2", Long.MAX_VALUE / 2)!!
+        // The creator's own engine now refuses to compose this, so the receive
+        // side is driven by a second engine holding the same moderator key that
+        // never saw the ban — what a stale or hostile client would send.
+        assertTrue("compose must refuse to invite a banned user",
+            creator.engine.composeRoomInvite(roomId, alice, "k2", Long.MAX_VALUE / 2) == null)
+        val staleMod = node(modIdentity)
+        staleMod.engine.composeRoomCreate(
+            nonce, "Alpha", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MOD_APPROVED, false,
+        )!!
+        val reInvite = staleMod.engine.composeRoomInvite(roomId, alice, "k2", Long.MAX_VALUE / 2)!!
         deliver(peer, reInvite)
         assertFalse("a ban must outrank a later invite", peer.rooms.isMember(roomId, alice))
     }

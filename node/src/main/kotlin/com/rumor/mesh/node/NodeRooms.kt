@@ -62,7 +62,7 @@ class NodeRooms(
         "join" to { p -> val id = p.getValue("room"); subscribe(id); "joined $id".also(::note) },
         "invite" to { p ->
             val m = engine.composeRoomInvite(p.getValue("room"), p.getValue("user"), "", System.currentTimeMillis() + 7 * 86_400_000L)
-            (if (m != null) "invited ${p.getValue("user").take(8)}" else "invite refused (not a moderator?)").also(::note)
+            (if (m != null) "invited ${p.getValue("user").take(8)}" else "invite refused (not a moderator, or the user is banned)").also(::note)
         },
         "post" to { p ->
             val m = engine.composeRoomMessage(RoomRoutingTag.openRoomTag(p.getValue("room")), p.getValue("text"))

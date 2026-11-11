@@ -26,6 +26,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.encodeToString
 
 private const val TAG = "GossipEngine"
+private const val MAX_HELD_ROOMS = 32
+private const val MAX_HELD_OPS_PER_ROOM = 64
+private val LIFECYCLE_TYPES = setOf(MessageType.ROOM_CREATE, MessageType.ROOM_INVITE, MessageType.ROOM_ACTION)
 
 internal class RoomMessaging(
     private val identityProvider: IdentityProvider,
@@ -129,6 +132,13 @@ internal class RoomMessaging(
         val identity = identityProvider.identity.value ?: return null
         if (roomRepo?.isModerator(roomId, identity.userId) == false) {
             RumorLog.w(TAG, "Refusing to compose ROOM_INVITE: not a moderator of ${roomId.take(8)}…")
+            return null
+        }
+        // Receivers drop an invite for a banned user. Composing one anyway added the
+        // user to this moderator's roster alone, so the moderator and the rest of
+        // the room disagreed about who was a member.
+        if (roomRepo?.isBanned(roomId, invitedUserId) == true) {
+            RumorLog.w(TAG, "Refusing to compose ROOM_INVITE: ${invitedUserId.take(8)}… is banned — unban first")
             return null
         }
         val signed = roomInviteSignableBytes(roomId, invitedUserId, encryptedRoomKey, expiresAtMs, identity.userId)
@@ -296,6 +306,65 @@ internal class RoomMessaging(
      */
     suspend fun handleRoomLifecycle(msg: RumorMessage) {
         val repo = roomRepo ?: return
+        if (msg.type == MessageType.ROOM_CREATE) {
+            applyRoomLifecycle(repo, msg)
+            replayHeldOps(repo)
+            return
+        }
+        val roomId = lifecycleRoomId(msg) ?: return
+        if (repo.get(roomId) == null) {
+            holdUntilCreated(roomId, msg)
+            // The CREATE may have landed between the lookup and the hold.
+            if (repo.get(roomId) != null) replayHeldOps(repo)
+            return
+        }
+        applyRoomLifecycle(repo, msg)
+    }
+
+    private fun lifecycleRoomId(msg: RumorMessage): String? {
+        val json = msg.payload?.content ?: return null
+        return when (msg.type) {
+            MessageType.ROOM_INVITE -> runCatching { WireJson.decodeFromString<RoomInvite>(json) }.getOrNull()?.roomId
+            MessageType.ROOM_ACTION -> runCatching { WireJson.decodeFromString<RoomAction>(json) }.getOrNull()?.roomId
+            else -> null
+        }
+    }
+
+    // An op for a room this node has not seen created cannot be judged yet: there
+    // is no moderator set to check it against. Dropping it loses it for good,
+    // because dedup has already marked it seen (O213). Held ops are unverified
+    // and go through the full checks when the CREATE arrives. Bounded, because
+    // anyone can sign an op for a room that will never exist.
+    private val heldOps = LinkedHashMap<String, MutableList<RumorMessage>>()
+
+    private fun holdUntilCreated(roomId: String, msg: RumorMessage) = synchronized(heldOps) {
+        val ops = heldOps.getOrPut(roomId) { mutableListOf() }
+        if (ops.size < MAX_HELD_OPS_PER_ROOM) ops += msg
+        while (heldOps.size > MAX_HELD_ROOMS) heldOps.remove(heldOps.keys.first())
+    }
+
+    private suspend fun replayHeldOps(repo: com.rumor.mesh.core.data.RoomRepository) {
+        val ready = synchronized(heldOps) { heldOps.keys.toList() }.filter { repo.get(it) != null }
+        for (roomId in ready) {
+            val ops = synchronized(heldOps) { heldOps.remove(roomId) } ?: continue
+            for (op in ops.sortedBy { it.sentAtMs }) applyRoomLifecycle(repo, op)
+        }
+    }
+
+    /**
+     * Room history in the order it was signed, ahead of the rest of the batch.
+     * The store backfill offers freshest-first, which hands a late joiner the ban
+     * before the invite it answers and both before the CREATE; applied in that
+     * order the roster comes out different from the one the moderator has.
+     * `sentAtMs` is covered by the outer signature, so a relay cannot reorder.
+     */
+    fun historyFirst(batch: List<RumorMessage>): List<RumorMessage> {
+        val (history, rest) = batch.partition { it.type in LIFECYCLE_TYPES }
+        if (history.size < 2) return batch
+        return history.sortedWith(compareBy({ it.type != MessageType.ROOM_CREATE }, { it.sentAtMs })) + rest
+    }
+
+    private suspend fun applyRoomLifecycle(repo: com.rumor.mesh.core.data.RoomRepository, msg: RumorMessage) {
         val json = msg.payload?.content ?: return
         val pubKey = runCatching { msg.senderPublicKey.fromBase64() }.getOrNull() ?: return
 
