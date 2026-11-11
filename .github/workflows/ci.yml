@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Runs take about 10 minutes. A kill at this limit reports as a timeout, not a bare "cancelled".
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -20,7 +22,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v3
 
       - name: Run unit tests
-        run: ./gradlew :core:test :app:testDebugUnitTest :simulator:test --no-daemon --stacktrace
+        run: ./gradlew :core:test :node:test :app:testDebugUnitTest :simulator:test --no-daemon --stacktrace --continue
+
+      # Informational: a green run can be vacuous (skipped tests, classes that ran nothing).
+      - name: Test totals per module
+        if: always()
+        run: python3 scripts/junit-summary.py core node simulator || true
 
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
