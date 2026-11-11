@@ -15,6 +15,6 @@ Sim proves the bound at scale; the headless `:node` proves the real path enforce
 ## Reading results
 
 - A green suite can be vacuous. Run `python scripts/junit-summary.py` and check skipped is 0 and no class ran zero tests, then teeth-check: disable the guard, confirm exactly the claiming test fails, restore. Confirm you disabled the line you meant to.
-- **Load-flaky under the full parallel suite** (red in the full run, green alone): `LanLivenessValidationTest`, `LanMeshHarnessTest`, `LivenessWindowModeAwarenessTest`, once `TransferAssemblerHardeningTest`. These use real sockets, 12–52 s each (O208).
-- `LanLivenessValidationTest`'s liveness-ON arm fails deterministically on Windows, even alone (O251).
+- **Real-socket scenarios run separately:** `LanLivenessValidationTest` and `LanMeshHarnessTest` are excluded from `:simulator:test` and run alone and serially as `:simulator:realWireTest` (its own non-gating CI job). They went red under the load of the full suite, which left CI without a trustworthy verdict (O208). A red `realWireTest` now means the test itself.
+- Still load-flaky inside `:simulator:test`: `LivenessWindowModeAwarenessTest`, once `TransferAssemblerHardeningTest` (red in the full run, green alone).
 - Sim-only knobs on `MeshGraph` are named for why they exist (relay windows, `breadcrumbRouting` for O29 A/B runs); don't add one without that reason.

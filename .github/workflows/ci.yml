@@ -31,3 +31,23 @@ jobs:
 
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
+
+  # Real-socket scenarios, alone and serial, so a red result means the test and
+  # not the load of the rest of the suite. Not gating until it has a green
+  # history (O208): its result shows on the run without failing it.
+  real-wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v3
+
+      - name: Run real-wire LAN scenarios
+        run: ./gradlew :simulator:realWireTest --no-daemon --stacktrace

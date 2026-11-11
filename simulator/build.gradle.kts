@@ -47,6 +47,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
+val realWireTests = listOf("**/LanLivenessValidationTest*", "**/LanMeshHarnessTest*")
+
 // Each SimNode is a full engine graph (scopes, flows). Many heavy scenario
 // classes in one JVM accrete live nodes and OOM the default heap under the
 // parallel run (see docs/SIMULATOR_TESTING.md §4). Give the test JVM room and
@@ -54,6 +56,21 @@ dependencies {
 tasks.test {
     maxHeapSize = "2g"
     forkEvery = 15
+    exclude(realWireTests)
+}
+
+// Real-socket scenarios take 12-52 s each and go red under the load of the rest
+// of the suite, which left CI with no trustworthy verdict (O208). They run on
+// their own, one class at a time, so a failure here means the test, not the load.
+tasks.register<Test>("realWireTest") {
+    group = "verification"
+    description = "Real-socket LAN scenarios, run alone and serially."
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    include(realWireTests)
+    maxHeapSize = "2g"
+    maxParallelForks = 1
+    forkEvery = 1
 }
 
 // Fat jar so `java -jar simulator.jar` just works with no classpath setup.
