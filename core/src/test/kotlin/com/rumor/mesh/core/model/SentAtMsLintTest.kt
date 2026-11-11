@@ -45,6 +45,7 @@ class SentAtMsLintTest {
         "core/src/main/kotlin/com/rumor/mesh/core/model/Message.kt",
         // Compose-time stamps via clock.now() + the RBSR rbsrItems mapping
         "core/src/main/kotlin/com/rumor/mesh/core/protocol/GossipEngine.kt",
+        "core/src/main/kotlin/com/rumor/mesh/core/protocol/OutboundComposer.kt",
         // Ed25519 signable bytes — value is signed so receivers detect tampering
         "core/src/main/kotlin/com/rumor/mesh/core/protocol/MessageStore.kt",
         // Test fixture constructing a RumorMessage to assert the emitted

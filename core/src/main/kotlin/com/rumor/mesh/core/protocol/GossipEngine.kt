@@ -10,7 +10,6 @@ import com.rumor.mesh.core.model.SelfPresencePayload
 import com.rumor.mesh.core.model.UserMode
 import com.rumor.mesh.core.data.ContactRepository
 import com.rumor.mesh.core.identity.IdentityProvider
-import com.rumor.mesh.core.identity.LocalIdentity
 import com.rumor.mesh.core.logging.RumorLog
 import com.rumor.mesh.core.model.ChunkRequest
 import com.rumor.mesh.core.model.ContentType
@@ -49,24 +48,14 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import com.rumor.mesh.core.platform.Uuid
 import com.rumor.mesh.core.platform.ConcurrentMap
-import com.rumor.mesh.core.platform.AtomicCounter
 import com.rumor.mesh.core.wire.WireJson
 import com.rumor.mesh.core.wire.hlcTimestamp
-import com.rumor.mesh.core.wire.withHlc
 import com.rumor.mesh.core.wire.withCompressionMetadata
-import com.rumor.mesh.core.wire.withMentions
-import com.rumor.mesh.core.wire.withReplyTo
 import com.rumor.mesh.core.wire.roomPostingCert
 import com.rumor.mesh.core.wire.roomRoutingTag
-import com.rumor.mesh.core.wire.withRoomPostingCert
-import com.rumor.mesh.core.wire.withRoomRoutingTag
 import com.rumor.mesh.core.wire.withSealedSenderTag
 
 private const val TAG = "GossipEngine"
-private const val DEFAULT_BROADCAST_HOPS = 7
-private const val DEFAULT_DIRECT_HOPS = 15
-private const val MAX_BROADCAST_HOPS = DEFAULT_BROADCAST_HOPS
-private const val MAX_DIRECT_HOPS = DEFAULT_DIRECT_HOPS
 /** O92 reseed bounds. Offer set is capped near the scheduler's own backlog cap;
  *  dedup seed is wider so our summary reflects everything we hold, not just what's offerable. */
 private const val OFFER_RESEED_LIMIT = 4_000
@@ -323,7 +312,18 @@ class GossipEngine(
          */
         fun localX25519StaticPrivate(): ByteArray?
     }
-    private val sequenceCounter = AtomicCounter(clock.now())
+    /**
+     * O95 — the node's Hybrid Logical Clock. Stamped into `_ext.hlc` on every
+     * compose, folded on every verified receive. Public so the host can wire
+     * persistence (restore at start, onAdvance → durable store) — HLC state
+     * must survive restart or a behind-clock node composes below its own
+     * pre-restart stamps.
+     */
+    val hlc = com.rumor.mesh.core.time.HlcClock { clock.now() }
+
+    private val outbound = OutboundComposer(
+        messageStore, identityProvider, scheduler, canaryMetrics, clock, hlc,
+    )
 
     /**
      * Plaintext for outbound DMs keyed by message ID. The ephemeral X25519 private
@@ -560,27 +560,17 @@ class GossipEngine(
             RumorLog.w(TAG, "Refusing broadcast: ${text.length}B exceeds ${com.rumor.mesh.core.model.MAX_BROADCAST_CONTENT_BYTES}B cap")
             return null
         }
-        val base = buildMessage(
+        val base = outbound.buildMessage(
             identity = identity,
             type = MessageType.BROADCAST,
             hopsToLive = DEFAULT_BROADCAST_HOPS,
             payload = MessagePayload(ContentType.TEXT, text),
         )
         val msg = base.applyThreadAndMentionExt(replyTo, mentions)
-        enqueueImmediate(msg)
+        outbound.enqueueImmediate(msg)
         _userSendQueued.tryEmit(Unit)
         scope.launch { messageStore.ingestOwn(msg) }
         return msg
-    }
-
-    private fun RumorMessage.applyThreadAndMentionExt(
-        replyTo: String?,
-        mentions: List<String>,
-    ): RumorMessage {
-        var result = this
-        if (replyTo != null) result = result.withReplyTo(replyTo)
-        if (mentions.isNotEmpty()) result = result.withMentions(mentions)
-        return result
     }
 
     /**
@@ -644,7 +634,7 @@ class GossipEngine(
             ephemeral.privateKeyBytes.fill(0)
             sharedKey.fill(0)
         }
-        val baseMsg = buildMessage(
+        val baseMsg = outbound.buildMessage(
             identity = identity,
             type = MessageType.DIRECT,
             hopsToLive = (hopsToLive ?: DEFAULT_DIRECT_HOPS).coerceIn(1, MAX_DIRECT_HOPS),
@@ -684,7 +674,7 @@ class GossipEngine(
                 _outboundBridgedDm.emit(BridgedDmOutbound(recipientId, envelope.envelopeId, rawCiphertext))
             }
         } else {
-            enqueueImmediate(msg)
+            outbound.enqueueImmediate(msg)
             _userSendQueued.tryEmit(Unit)
             scope.launch { messageStore.ingestOwn(msg) }
         }
@@ -699,7 +689,7 @@ class GossipEngine(
         // guard is meaningful even after a reload.
         if (msg.trustLevel == TrustLevel.BRIDGED) return
         RumorLog.i(TAG, "Manual relay of ${msg.id.take(8)}")
-        enqueueImmediate(messageStore.boostHopsForManualRelay(msg))
+        outbound.enqueueImmediate(messageStore.boostHopsForManualRelay(msg))
         _userSendQueued.tryEmit(Unit)
         scope.launch { messageStore.markRelayed(msg.id) }
     }
@@ -717,14 +707,14 @@ class GossipEngine(
         ackedMessageId: String,
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
-        val msg = buildMessage(
+        val msg = outbound.buildMessage(
             identity = identity,
             type = MessageType.DIRECT_ACK,
             hopsToLive = DEFAULT_DIRECT_HOPS,
             payload = MessagePayload(ContentType.CONTROL, ackedMessageId),
             recipientId = originalSenderId,
         )
-        enqueueImmediate(msg)
+        outbound.enqueueImmediate(msg)
         return msg
     }
 
@@ -735,14 +725,14 @@ class GossipEngine(
     ): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
         val body = WireJson.encodeToString(ChunkRequest(transferId, missingIndices))
-        val msg = buildMessage(
+        val msg = outbound.buildMessage(
             identity = identity,
             type = MessageType.CHUNK_REQUEST,
             hopsToLive = DEFAULT_DIRECT_HOPS,
             payload = MessagePayload(ContentType.CONTROL, body),
             recipientId = originalSenderId,
         )
-        enqueueImmediate(msg)
+        outbound.enqueueImmediate(msg)
         return msg
     }
 
@@ -759,14 +749,14 @@ class GossipEngine(
         val body = WireJson.encodeToString(
             com.rumor.mesh.core.model.TransferCancel(transferId = transferId)
         )
-        val msg = buildMessage(
+        val msg = outbound.buildMessage(
             identity = identity,
             type = MessageType.TRANSFER_CANCEL,
             hopsToLive = DEFAULT_DIRECT_HOPS,
             payload = MessagePayload(ContentType.CONTROL, body),
             recipientId = originalSenderId,
         )
-        enqueueImmediate(msg)
+        outbound.enqueueImmediate(msg)
         return msg
     }
 
@@ -774,23 +764,7 @@ class GossipEngine(
         type: MessageType,
         payload: MessagePayload,
         recipientId: String? = null,
-    ): RumorMessage? {
-        val identity = identityProvider.identity.value ?: return null
-        val hopsToLive = if (type == MessageType.BROADCAST || recipientId == null) {
-            DEFAULT_BROADCAST_HOPS
-        } else {
-            DEFAULT_DIRECT_HOPS
-        }
-        val msg = buildMessage(
-            identity = identity,
-            type = type,
-            hopsToLive = hopsToLive,
-            payload = payload,
-            recipientId = recipientId,
-        )
-        enqueueImmediate(msg)
-        return msg
-    }
+    ): RumorMessage? = outbound.composeOutbound(type, payload, recipientId)
 
     /**
      * Request a mutual priority (persistent) link with [recipientId].
@@ -799,7 +773,7 @@ class GossipEngine(
      */
     fun composePriorityLinkRequest(recipientId: String): RumorMessage? {
         val identity = identityProvider.identity.value ?: return null
-        val msg = buildMessage(
+        val msg = outbound.buildMessage(
             identity = identity,
             type = MessageType.PRIORITY_LINK_REQUEST,
             hopsToLive = DEFAULT_DIRECT_HOPS,
@@ -807,7 +781,7 @@ class GossipEngine(
             recipientId = recipientId,
         )
         outstandingPriorityRequests.put(recipientId, clock.now())
-        enqueueImmediate(msg)
+        outbound.enqueueImmediate(msg)
         return msg
     }
 
@@ -824,14 +798,14 @@ class GossipEngine(
             RumorLog.i(TAG, "Accepted priority link from ${request.senderId.take(8)}…")
         }
         val identity = identityProvider.identity.value ?: return
-        val reply = buildMessage(
+        val reply = outbound.buildMessage(
             identity = identity,
             type = MessageType.PRIORITY_LINK_ACCEPT,
             hopsToLive = DEFAULT_DIRECT_HOPS,
             payload = MessagePayload(ContentType.CONTROL, ""),
             recipientId = request.senderId,
         )
-        enqueueImmediate(reply)
+        outbound.enqueueImmediate(reply)
     }
 
     /**
@@ -871,7 +845,7 @@ class GossipEngine(
             issuerPublicKey = issuerPubKeyB64,
             signature = com.rumor.mesh.core.platform.Base64Codec.encode(sigBytes),
         )
-        val msg = buildMessage(
+        val msg = outbound.buildMessage(
             identity = identity,
             type = MessageType.MESSAGE_DELETE,
             hopsToLive = DEFAULT_BROADCAST_HOPS,
@@ -880,7 +854,7 @@ class GossipEngine(
         // Purge locally first — the relayed broadcast will purge it
         // everywhere else as it propagates.
         messageStore.deleteById(messageId)
-        enqueueImmediate(msg)
+        outbound.enqueueImmediate(msg)
         return msg
     }
 
@@ -1051,7 +1025,7 @@ class GossipEngine(
         val tagBase64 = Base64Codec.encode(routingTag)
         val baseMsg: RumorMessage = if (recipients.isEmpty()) {
             // OPEN room — signed plaintext broadcast.
-            buildMessage(
+            outbound.buildMessage(
                 identity = identity,
                 type = MessageType.ROOM_MESSAGE,
                 hopsToLive = DEFAULT_BROADCAST_HOPS,
@@ -1069,7 +1043,7 @@ class GossipEngine(
                 recipients = recipients,
                 roomRoutingTag = tagBase64,
             )
-            buildMessage(
+            outbound.buildMessage(
                 identity = identity,
                 type = MessageType.ROOM_MESSAGE,
                 hopsToLive = DEFAULT_BROADCAST_HOPS,
@@ -1083,7 +1057,7 @@ class GossipEngine(
         // Only the unsigned O90 thread/mention metadata is applied here.
         val routedMsg = baseMsg.applyThreadAndMentionExt(replyTo, mentions)
 
-        enqueueImmediate(routedMsg)
+        outbound.enqueueImmediate(routedMsg)
         _userSendQueued.tryEmit(Unit)
         return routedMsg
     }
@@ -1098,13 +1072,13 @@ class GossipEngine(
             authorizedAtMs = clock.now(),
             recentlyExchangedWith = recentlyExchangedWith,
         )
-        val msg = buildMessage(
+        val msg = outbound.buildMessage(
             identity = identity,
             type = MessageType.SELF_PRESENCE,
             hopsToLive = DEFAULT_BROADCAST_HOPS,
             payload = MessagePayload(ContentType.CONTROL, WireJson.encodeToString(payload)),
         )
-        enqueueImmediate(msg)
+        outbound.enqueueImmediate(msg)
         return msg
     }
 
@@ -1139,13 +1113,13 @@ class GossipEngine(
             payload = payload,
             receivedAtMs = receivedAtMs,
         )
-        val msg = buildMessage(
+        val msg = outbound.buildMessage(
             identity = identity,
             type = MessageType.BRIDGE_VOUCHED,
             hopsToLive = DEFAULT_BROADCAST_HOPS,
             payload = MessagePayload(originContentType, WireJson.encodeToString(body)),
         )
-        enqueueImmediate(msg)
+        outbound.enqueueImmediate(msg)
         return msg
     }
 
@@ -1792,15 +1766,6 @@ class GossipEngine(
     val prekeyCache: PrekeyCache = PrekeyCache()
 
     /**
-     * O95 — the node's Hybrid Logical Clock. Stamped into `_ext.hlc` on every
-     * compose, folded on every verified receive. Public so the host can wire
-     * persistence (restore at start, onAdvance → durable store) — HLC state
-     * must survive restart or a behind-clock node composes below its own
-     * pre-restart stamps.
-     */
-    val hlc = com.rumor.mesh.core.time.HlcClock { clock.now() }
-
-    /**
      * O124 — host-wired on-demand pulse (composes a SELF_PRESENCE with the
      * host's current mode + adjacency). Null disables solicited replies.
      * Self-echoes never reach [handleSelfPresence] (dropped upstream) and
@@ -2021,56 +1986,18 @@ class GossipEngine(
         return if (msg.hopsToLive > ceiling) msg.copy(hopsToLive = ceiling) else msg
     }
 
-    /** Locally-composed messages bypass the batcher — no jitter for the sender. */
-    private fun enqueueImmediate(msg: RumorMessage) {
-        scheduler.enqueue(msg)
-        canaryMetrics.publish(scheduler.queueDepth)
-    }
-
     /** Relayed messages go through the batcher for timing correlation resistance. */
     private fun enqueueRelayed(msg: RumorMessage) {
         relayBatcher.add(msg)
         canaryMetrics.recordRelay()
     }
 
-    private fun buildMessage(
-        identity: LocalIdentity,
-        type: MessageType,
-        hopsToLive: Int,
-        payload: MessagePayload? = null,
-        encryptedPayload: String? = null,
-        recipientId: String? = null,
-        roomRoutingTag: String? = null,
-        roomPostingCert: com.rumor.mesh.core.model.RoomPostingCert? = null,
-    ): RumorMessage {
-        val base = RumorMessage(
-            id = Uuid.randomHex32(),
-            senderId = identity.userId,
-            senderPublicKey = identity.publicKeyBytes.toBase64(),
-            sequenceNumber = sequenceCounter.getAndIncrement(),
-            sentAtMs = clock.now(),
-            type = type,
-            hopsToLive = hopsToLive,
-            payload = payload,
-            encryptedPayload = encryptedPayload,
-            recipientId = recipientId,
-            signature = "",
-        )
-        // O157: the room routing tag must be present BEFORE signing so
-        // signableBytes covers it (it rides _ext.rt, which is otherwise
-        // stamped post-sign and thus forgeable). Everything else in _ext
-        // (HLC, thread/mention) stays unsigned and is applied after.
-        // O89 rides here for the same reason as O157's tag: both are covered by
-        // the rumor-msg-v3 transcript, so both must be present before signing.
-        val tagged = if (roomRoutingTag != null) base.withRoomRoutingTag(roomRoutingTag) else base
-        val unsigned = if (roomPostingCert != null) tagged.withRoomPostingCert(roomPostingCert) else tagged
-        val sig = CryptoManager.sign(messageStore.signableBytes(unsigned), identity.privateKeyBytes).toBase64()
-        // O95: HLC stamp rides _ext (unsigned, like every _ext field) so it can
-        // be applied after signing without invalidating the sig.
-        return unsigned.copy(signature = sig).withHlc(hlc.tick())
-    }
-
     companion object {
+        internal const val DEFAULT_BROADCAST_HOPS = 7
+        internal const val DEFAULT_DIRECT_HOPS = 15
+        internal const val MAX_BROADCAST_HOPS = DEFAULT_BROADCAST_HOPS
+        internal const val MAX_DIRECT_HOPS = DEFAULT_DIRECT_HOPS
+
         /**
          * Sentinel placed in [RumorMessage.signature] by bridge plugins for
          * messages carried in from a non-Rumor network. Honored only when the
