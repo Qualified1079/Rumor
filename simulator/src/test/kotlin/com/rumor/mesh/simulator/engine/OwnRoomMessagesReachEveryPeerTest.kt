@@ -68,6 +68,12 @@ class OwnRoomMessagesReachEveryPeerTest {
     }
 
     @Test
+    fun aDeliveryReceiptIsOfferedToTheSecondPeer() {
+        val (_, second) = twoPeerOffer { it.gossipEngine.composeDirectAck("d".repeat(64), "e".repeat(32))!! }
+        assertTrue("own DIRECT_ACK was offered to the first peer only", second)
+    }
+
+    @Test
     fun aRoomCreateIsOfferedToTheSecondPeer() {
         val (_, second) = twoPeerOffer { n ->
             n.gossipEngine.composeRoomCreate("create-test", "lab", RoomMembershipPolicy.INVITE, RoomPostingPolicy.MEMBER_ONLY, false)!!

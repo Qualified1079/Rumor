@@ -164,6 +164,9 @@ internal class DirectMessaging(
             recipientId = originalSenderId,
         )
         outbound.enqueueImmediate(msg)
+        // Without a stored copy the receipt exists only in the scheduler, which
+        // hands it to the first peer to open a session and to nobody after.
+        scope.launch { messageStore.ingestOwn(msg) }
         return msg
     }
 }
